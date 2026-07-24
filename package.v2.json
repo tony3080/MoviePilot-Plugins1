@@ -1,0 +1,14 @@
+{
+  "DoubanSubscribe": {
+    "name": "豆瓣订阅助手",
+    "description": "匹配豆瓣条目与 TMDB 作品及季度，并创建准确的 MoviePilot 订阅。",
+    "labels": "订阅",
+    "version": "0.1.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
+    "author": "tony3080",
+    "level": 2,
+    "history": {
+      "v0.1.0": "创建符合 MoviePilot V2 规范的插件仓库骨架"
+    }
+  }
+}

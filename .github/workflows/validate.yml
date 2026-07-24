@@ -1,0 +1,33 @@
+name: Validate MoviePilot plugin
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate JSON indexes
+        run: python -m json.tool package.json >/dev/null && python -m json.tool package.v2.json >/dev/null
+
+      - name: Compile plugin source
+        run: python -m compileall -q plugins.v2
+
+      - name: Validate repository contract
+        run: python -m unittest discover -s tests -v
