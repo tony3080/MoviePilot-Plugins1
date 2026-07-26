@@ -14,6 +14,29 @@ from xml.etree import ElementTree
 DOUBAN_SUBJECT_RE = re.compile(r"(?:movie\.)?douban\.com/subject/(\d+)", re.IGNORECASE)
 YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 IMAGE_RE = re.compile(r"<img[^>]+src=[\"']([^\"']+)[\"']", re.IGNORECASE)
+MATCH_ACCEPT_SCORE = 80
+MATCH_MIN_LEAD = 15
+
+MEDIA_CATEGORY_LABELS = {
+    "domestic": "国产剧",
+    "western": "欧美剧",
+    "japan_korea": "日韩剧",
+    "other": "其他地区",
+}
+DOMESTIC_COUNTRIES = {
+    "中国", "中国大陆", "大陆", "中国香港", "香港", "中国台湾", "台湾",
+    "中国澳门", "澳门",
+}
+JAPAN_KOREA_COUNTRIES = {
+    "日本", "韩国", "南韩", "朝鲜", "北朝鲜",
+}
+WESTERN_COUNTRIES = {
+    "美国", "英国", "法国", "德国", "意大利", "西班牙", "葡萄牙", "加拿大",
+    "澳大利亚", "新西兰", "爱尔兰", "奥地利", "瑞士", "比利时", "荷兰",
+    "丹麦", "瑞典", "挪威", "芬兰", "冰岛", "波兰", "捷克", "匈牙利",
+    "希腊", "俄罗斯", "乌克兰", "墨西哥", "巴西", "阿根廷", "智利",
+    "南非",
+}
 
 
 @dataclass(frozen=True)
@@ -97,6 +120,16 @@ class MatchDecision:
     reason: str
     winner: Optional[ScoredCandidate] = None
     alternatives: Tuple[ScoredCandidate, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ConfirmationDecision:
+    """Database values to apply after a delayed Douban total recheck."""
+
+    changed: bool
+    total_episode: int
+    lack_episode: int
+    manual_review: bool
 
 
 def _local_name(tag: str) -> str:
@@ -410,6 +443,58 @@ def extract_total_episode(douban_info: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def classify_media_region(douban_info: Dict[str, Any]) -> str:
+    """Classify a Douban television entry by its first recognized production country."""
+    info = douban_info or {}
+    countries = info.get("countries") or []
+    if isinstance(countries, str):
+        countries = re.split(r"[/,，、\s]+", countries)
+    normalized_countries = [
+        str(country.get("name") if isinstance(country, dict) else country).strip()
+        for country in countries
+    ]
+    if not any(normalized_countries):
+        normalized_countries = re.split(
+            r"[/,，、\s]+",
+            str(info.get("card_subtitle") or ""),
+        )
+    for country in normalized_countries:
+        if country in DOMESTIC_COUNTRIES:
+            return "domestic"
+        if country in JAPAN_KOREA_COUNTRIES:
+            return "japan_korea"
+        if country in WESTERN_COUNTRIES:
+            return "western"
+    return "other"
+
+
+def decide_confirmation(
+    expected_total: int,
+    douban_total: int,
+    current_lack: int = 0,
+    manual_total: int = 100,
+) -> ConfirmationDecision:
+    """Decide whether to resume a changed subscription or hand an unchanged one to the user."""
+    expected = _positive_int(expected_total) or 0
+    actual = _positive_int(douban_total) or 0
+    missing = max(int(current_lack or 0), 0)
+    if actual and actual != expected:
+        return ConfirmationDecision(
+            changed=True,
+            total_episode=actual,
+            lack_episode=max(missing + actual - expected, 0),
+            manual_review=False,
+        )
+    completed = max(expected - missing, 0)
+    fallback = _positive_int(manual_total) or 100
+    return ConfirmationDecision(
+        changed=False,
+        total_episode=fallback,
+        lack_episode=max(fallback - completed, 0),
+        manual_review=True,
+    )
+
+
 def person_names(items: Sequence[Any]) -> Tuple[str, ...]:
     """Normalize person dictionaries or strings into unique names."""
     result = []
@@ -526,10 +611,8 @@ def score_candidate(source: Dict[str, Any], candidate: TmdbCandidate) -> ScoredC
 
 def choose_match(
     scored_candidates: Sequence[ScoredCandidate],
-    minimum_score: int = 80,
-    minimum_margin: int = 15,
 ) -> MatchDecision:
-    """Select a candidate only when both score and lead are sufficient."""
+    """Select a candidate only when its internal evidence score is safely ahead."""
     best_by_key: Dict[Tuple[int, int], ScoredCandidate] = {}
     for scored in scored_candidates:
         key = (scored.candidate.tmdb_id, scored.candidate.season)
@@ -541,20 +624,29 @@ def choose_match(
         return MatchDecision(False, "no_candidate", "未找到 TMDB 候选")
     winner = ordered[0]
     alternatives = tuple(ordered[1:6])
-    if winner.score < minimum_score:
+    if winner.score < MATCH_ACCEPT_SCORE:
         return MatchDecision(
             False,
             "low_score",
-            f"最高候选得分 {winner.score}，低于阈值 {minimum_score}",
+            f"最高候选内部匹配分 {winner.score}，低于固定可信线 {MATCH_ACCEPT_SCORE}",
             winner,
             alternatives,
         )
-    if alternatives and winner.score - alternatives[0].score < minimum_margin:
+    if alternatives and winner.score - alternatives[0].score < MATCH_MIN_LEAD:
         return MatchDecision(
             False,
             "ambiguous",
-            f"前两名分差 {winner.score - alternatives[0].score}，低于阈值 {minimum_margin}",
+            (
+                f"前两名内部匹配分仅相差 {winner.score - alternatives[0].score}，"
+                f"低于固定领先线 {MATCH_MIN_LEAD}"
+            ),
             winner,
             alternatives,
         )
-    return MatchDecision(True, "matched", "匹配证据满足自动订阅阈值", winner, alternatives)
+    return MatchDecision(
+        True,
+        "matched",
+        "内部匹配证据达到固定可信线",
+        winner,
+        alternatives,
+    )

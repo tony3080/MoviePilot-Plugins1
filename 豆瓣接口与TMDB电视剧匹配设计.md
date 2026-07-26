@@ -776,9 +776,9 @@ def match_douban_to_tmdb(douban_item):
     scored = score_identity_and_structure(candidates, normalized)
 
     winner, runner_up = choose_top_two(scored)
-    if winner.score < AUTO_ACCEPT_SCORE:
+    if winner.score < MATCH_ACCEPT_SCORE:
         return unresolved(scored)
-    if runner_up and winner.score - runner_up.score < MINIMUM_MARGIN:
+    if runner_up and winner.score - runner_up.score < MATCH_MIN_LEAD:
         return needs_review(scored)
 
     return build_match_result(winner, scored)

@@ -1,8 +1,8 @@
 # MoviePilot 豆瓣订阅插件
 
-面向 MoviePilot V2 的第三方插件仓库。插件从用户配置的 RSS 获取电视剧，读取豆瓣声明的总集数，匹配 TMDB 作品与季度，再创建锁定总集数的 MoviePilot 订阅。
+面向 MoviePilot V2 的第三方插件仓库。插件从用户配置的 RSS 获取电视剧，按国家或地区过滤，读取豆瓣声明的总集数并匹配 TMDB；受管订阅完成后会保留卡片、暂停并延迟复查豆瓣总集数。
 
-当前版本：`0.2.1`，要求 MoviePilot `2.15.0` 或更高版本。
+当前版本：`0.3.0`，要求 MoviePilot `2.15.0` 或更高版本。
 
 后续开发请先阅读 [开发交接文档](./开发交接文档.md)，其中记录了当前实现、MoviePilot 调用契约、测试状态、已知限制和推荐开发顺序。
 
@@ -17,7 +17,10 @@
 │       ├── __init__.py                  # 插件入口，类名必须为 DoubanSubscribe
 │       ├── core.py                      # RSS 解析、季度假设与候选评分
 │       └── README.md                    # 插件说明
-├── tests/                               # 不依赖 MoviePilot 宿主的逻辑与仓库校验
+├── tests/
+│   ├── test_core.py                     # 纯解析、分类、匹配和复查决策
+│   ├── test_lifecycle.py                # 模拟宿主订阅完成、复查和人工接管状态
+│   └── test_repository.py               # 仓库结构和 MoviePilot 调用契约
 └── 豆瓣接口与TMDB电视剧匹配设计.md       # 匹配方案设计文档
 ```
 
@@ -31,7 +34,7 @@ python -m unittest discover -s tests -v
 git diff --check
 ```
 
-完整的豆瓣、TMDB 与订阅联调需要将仓库接入 MoviePilot V2 宿主；仓库测试覆盖 RSS 解析、标题与季度拆分、匹配评分及订阅锁定调用契约。
+完整的豆瓣、TMDB 与订阅联调需要将仓库接入 MoviePilot V2 宿主；仓库测试覆盖 RSS 解析、地区分类、标题与季度拆分、匹配评分、完成复查决策及订阅锁定调用契约。
 
 ## 接入 MoviePilot
 

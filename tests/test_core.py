@@ -97,6 +97,65 @@ class DoubanEpisodeTest(unittest.TestCase):
         self.assertIsNone(core.extract_total_episode({"last_episode_number": 12}))
 
 
+class MediaRegionTest(unittest.TestCase):
+    def test_classifies_supported_regions_from_douban_countries(self) -> None:
+        cases = {
+            "domestic": {"countries": ["中国大陆"]},
+            "western": {"countries": ["英国", "美国"]},
+            "japan_korea": {"countries": ["韩国"]},
+            "other": {"countries": ["泰国"]},
+        }
+        for expected, info in cases.items():
+            with self.subTest(expected=expected):
+                self.assertEqual(core.classify_media_region(info), expected)
+
+    def test_first_recognized_country_controls_mixed_production(self) -> None:
+        self.assertEqual(
+            core.classify_media_region({"countries": ["美国", "日本"]}),
+            "western",
+        )
+
+    def test_card_subtitle_is_used_when_country_list_is_missing(self) -> None:
+        self.assertEqual(
+            core.classify_media_region({"card_subtitle": "2026 / 日本 / 剧情"}),
+            "japan_korea",
+        )
+
+
+class CompletionConfirmationTest(unittest.TestCase):
+    def test_increased_douban_total_resumes_only_new_missing_episodes(self) -> None:
+        decision = core.decide_confirmation(
+            expected_total=40,
+            douban_total=44,
+            current_lack=0,
+        )
+        self.assertTrue(decision.changed)
+        self.assertEqual(decision.total_episode, 44)
+        self.assertEqual(decision.lack_episode, 4)
+        self.assertFalse(decision.manual_review)
+
+    def test_unchanged_total_switches_to_manual_review_target(self) -> None:
+        decision = core.decide_confirmation(
+            expected_total=40,
+            douban_total=40,
+            current_lack=0,
+        )
+        self.assertFalse(decision.changed)
+        self.assertEqual(decision.total_episode, 100)
+        self.assertEqual(decision.lack_episode, 60)
+        self.assertTrue(decision.manual_review)
+
+    def test_decreased_total_never_creates_negative_missing_count(self) -> None:
+        decision = core.decide_confirmation(
+            expected_total=40,
+            douban_total=36,
+            current_lack=0,
+        )
+        self.assertTrue(decision.changed)
+        self.assertEqual(decision.total_episode, 36)
+        self.assertEqual(decision.lack_episode, 0)
+
+
 class CandidateScoringTest(unittest.TestCase):
     def setUp(self) -> None:
         self.source = {
@@ -108,6 +167,10 @@ class CandidateScoringTest(unittest.TestCase):
             "actors": ["黄景瑜", "王传君"],
             "directors": ["天毅"],
         }
+
+    def test_internal_match_thresholds_are_fixed(self) -> None:
+        self.assertEqual(core.MATCH_ACCEPT_SCORE, 80)
+        self.assertEqual(core.MATCH_MIN_LEAD, 15)
 
     def test_parent_season_beats_duplicate_standalone_entry(self) -> None:
         parent = core.TmdbCandidate(
@@ -154,6 +217,25 @@ class CandidateScoringTest(unittest.TestCase):
         decision = core.choose_match([core.score_candidate(self.source, candidate)])
         self.assertFalse(decision.accepted)
         self.assertEqual(decision.status, "low_score")
+
+    def test_close_top_candidates_are_not_accepted(self) -> None:
+        candidates = [
+            core.TmdbCandidate(
+                tmdb_id=tmdb_id,
+                title="罚罪2",
+                year="2025",
+                season=1,
+                actors=("黄景瑜", "王传君"),
+                directors=("天毅",),
+            )
+            for tmdb_id in (3, 4)
+        ]
+        decision = core.choose_match([
+            core.score_candidate(self.source, candidate)
+            for candidate in candidates
+        ])
+        self.assertFalse(decision.accepted)
+        self.assertEqual(decision.status, "ambiguous")
 
     def test_malformed_year_does_not_abort_scoring(self) -> None:
         candidate = core.TmdbCandidate(

@@ -103,6 +103,21 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIsInstance(keywords["lack_episode"], ast.Name)
         self.assertEqual(keywords["lack_episode"].id, "total_episode")
 
+    def test_completion_takeover_and_settings_contract(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertIn("ChainEventType.SubscribeCompletionCheck", source)
+        self.assertIn('== PLUGIN_USERNAME', source)
+        self.assertIn('"state": "S"', source)
+        self.assertIn('"model": "confirmation_days"', source)
+        self.assertIn('"model": "media_categories"', source)
+        self.assertNotIn('"model": "minimum_score"', source)
+        self.assertNotIn('"model": "minimum_margin"', source)
+
+    def test_detail_page_uses_supported_virtual_tables(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertIn('"component": "VDataTableVirtual"', source)
+        self.assertNotIn('"component": "VDataTable"', source)
+
 
 if __name__ == "__main__":
     unittest.main()
