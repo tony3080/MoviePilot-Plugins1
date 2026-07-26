@@ -3,6 +3,7 @@
 import importlib.util
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 
 
@@ -96,6 +97,17 @@ class DoubanEpisodeTest(unittest.TestCase):
         self.assertEqual(core.extract_total_episode({"episodes_info": "全36集"}), 36)
         self.assertIsNone(core.extract_total_episode({"last_episode_number": 12}))
 
+    def test_detects_started_airing_without_treating_progress_as_total(self) -> None:
+        today = date(2026, 7, 26)
+        self.assertTrue(core.has_started_airing({"is_released": True}, today))
+        self.assertTrue(core.has_started_airing({"last_episode_number": 3}, today))
+        self.assertTrue(core.has_started_airing({"episodes_info": "更新至第 5 集"}, today))
+        self.assertTrue(core.has_started_airing({"pubdate": ["2026-07-20(中国大陆)"]}, today))
+        self.assertFalse(core.has_started_airing({"is_released": False}, today))
+        self.assertFalse(core.has_started_airing({"is_released": "false"}, today))
+        self.assertFalse(core.has_started_airing({"pubdate": ["2026-08-01"]}, today))
+        self.assertIsNone(core.extract_total_episode({"last_episode_number": 3}))
+
 
 class MediaRegionTest(unittest.TestCase):
     def test_classifies_supported_regions_from_douban_countries(self) -> None:
@@ -120,40 +132,6 @@ class MediaRegionTest(unittest.TestCase):
             core.classify_media_region({"card_subtitle": "2026 / 日本 / 剧情"}),
             "japan_korea",
         )
-
-
-class CompletionConfirmationTest(unittest.TestCase):
-    def test_increased_douban_total_resumes_only_new_missing_episodes(self) -> None:
-        decision = core.decide_confirmation(
-            expected_total=40,
-            douban_total=44,
-            current_lack=0,
-        )
-        self.assertTrue(decision.changed)
-        self.assertEqual(decision.total_episode, 44)
-        self.assertEqual(decision.lack_episode, 4)
-        self.assertFalse(decision.manual_review)
-
-    def test_unchanged_total_switches_to_manual_review_target(self) -> None:
-        decision = core.decide_confirmation(
-            expected_total=40,
-            douban_total=40,
-            current_lack=0,
-        )
-        self.assertFalse(decision.changed)
-        self.assertEqual(decision.total_episode, 100)
-        self.assertEqual(decision.lack_episode, 60)
-        self.assertTrue(decision.manual_review)
-
-    def test_decreased_total_never_creates_negative_missing_count(self) -> None:
-        decision = core.decide_confirmation(
-            expected_total=40,
-            douban_total=36,
-            current_lack=0,
-        )
-        self.assertTrue(decision.changed)
-        self.assertEqual(decision.total_episode, 36)
-        self.assertEqual(decision.lack_episode, 0)
 
 
 class CandidateScoringTest(unittest.TestCase):

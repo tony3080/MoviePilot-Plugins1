@@ -118,6 +118,20 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn('"component": "VDataTableVirtual"', source)
         self.assertNotIn('"component": "VDataTable"', source)
 
+    def test_history_search_and_durable_dedup_contract(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertIn('"path": "/history/search"', source)
+        self.assertIn("RECENT_HISTORY_LIMIT = 50", source)
+        self.assertIn('self.save_data("processed_items"', source)
+        self.assertNotIn("history[-500:]", source)
+
+    def test_unknown_total_periodic_resolution_contract(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertIn("UNKNOWN_TOTAL_EPISODE = 100", source)
+        self.assertIn('"status": "awaiting_douban_total"', source)
+        self.assertIn("def _process_pending_totals", source)
+        self.assertIn('"total_pending": False', source)
+
 
 if __name__ == "__main__":
     unittest.main()

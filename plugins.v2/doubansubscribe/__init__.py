@@ -31,8 +31,8 @@ from .core import (
     build_title_hypotheses,
     classify_media_region,
     choose_match,
-    decide_confirmation,
     extract_total_episode,
+    has_started_airing,
     parse_feed,
     person_names,
     score_candidate,
@@ -45,19 +45,20 @@ PLUGIN_USERNAME = "豆瓣订阅助手"
 SUCCESS_STATUSES = {"subscribed", "existing"}
 SKIPPED_STATUSES = {"category_skipped"}
 DEFAULT_MEDIA_CATEGORIES = tuple(MEDIA_CATEGORY_LABELS)
-MANUAL_REVIEW_TOTAL = 100
+RECENT_HISTORY_LIMIT = 50
+UNKNOWN_TOTAL_EPISODE = 100
 
 
 class DoubanSubscribe(_PluginBase):
     """Create locked MoviePilot subscriptions from user-provided RSS feeds."""
 
     plugin_name = "豆瓣订阅助手"
-    plugin_desc = "按地区筛选 RSS 剧集，锁定豆瓣总集数，并在完成后暂停复查。"
+    plugin_desc = "按地区筛选 RSS 剧集，追踪豆瓣总集数，并在完成后延迟复核。"
     plugin_icon = (
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.3.0"
+    plugin_version = "0.3.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -147,7 +148,14 @@ class DoubanSubscribe(_PluginBase):
                 "endpoint": self.api_history,
                 "methods": ["GET"],
                 "auth": "bear",
-                "summary": "查询处理历史",
+                "summary": "查询最近处理历史",
+            },
+            {
+                "path": "/history/search",
+                "endpoint": self.api_search_history,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "搜索全部处理历史",
             },
         ]
 
@@ -158,12 +166,58 @@ class DoubanSubscribe(_PluginBase):
         return {"success": True, "message": "RSS 处理已启动"}
 
     def api_history(self) -> Dict[str, Any]:
+        history = list(reversed(self.get_data("history") or []))
         return {
             "success": True,
             "last_run": self.get_data("last_run") or {},
-            "items": list(reversed(self.get_data("history") or [])),
+            "total": len(history),
+            "items": history[:RECENT_HISTORY_LIMIT],
             "managed": self._managed_records(),
         }
+
+    def api_search_history(
+        self,
+        keyword: str = "",
+        status: str = "",
+        category: str = "",
+        offset: int = 0,
+        limit: int = RECENT_HISTORY_LIMIT,
+    ) -> Dict[str, Any]:
+        """Search the complete, untrimmed RSS processing history."""
+        safe_offset = self._bounded_int(offset, 0, 0, 1_000_000_000)
+        safe_limit = self._bounded_int(limit, RECENT_HISTORY_LIMIT, 1, 200)
+        keyword = str(keyword or "").strip().casefold()
+        status = str(status or "").strip()
+        category = str(category or "").strip()
+        records = list(reversed(self.get_data("history") or []))
+        matches = [
+            record for record in records
+            if (not status or str(record.get("status") or "") == status)
+            and (not category or str(record.get("category") or "") == category)
+            and (not keyword or keyword in self._history_search_text(record))
+        ]
+        return {
+            "success": True,
+            "total": len(matches),
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "items": matches[safe_offset:safe_offset + safe_limit],
+        }
+
+    @staticmethod
+    def _history_search_text(record: Dict[str, Any]) -> str:
+        fields = (
+            "key", "title", "douban_title", "douban_id", "tmdb_id",
+            "source_url", "status", "category", "reason",
+        )
+        values = []
+        for field in fields:
+            value = record.get(field)
+            if isinstance(value, (list, tuple, set)):
+                values.extend(str(item) for item in value)
+            elif value is not None:
+                values.append(str(value))
+        return " ".join(values).casefold()
 
     def get_service(self) -> List[Dict[str, Any]]:
         if not self._enabled or not self._cron:
@@ -256,7 +310,7 @@ class DoubanSubscribe(_PluginBase):
                                         "type": "number",
                                         "min": 1,
                                         "max": 365,
-                                        "hint": "订阅完成后暂停，等待该天数再核对豆瓣总集数",
+                                        "hint": "订阅完成后暂停，等待该天数再查看豆瓣总集数是否增加",
                                         "persistent-hint": True,
                                     },
                                 }],
@@ -316,9 +370,13 @@ class DoubanSubscribe(_PluginBase):
             }]
         status_labels = {
             "active": "订阅中",
-            "waiting_confirmation": "已暂停，等待复查",
+            "awaiting_douban_total": "订阅中，等待豆瓣总集数",
+            "waiting_confirmation": "已暂停，等待复核豆瓣",
+            "confirming": "正在复核豆瓣",
+            "finalizing": "正在正常完成",
+            "completed": "已完成",
             "manual_review": "等待手动处理",
-            "verification_error": "复查失败，等待重试",
+            "verification_error": "确认失败，等待重试",
             "missing_subscription": "订阅卡片不存在",
         }
         managed_items = []
@@ -329,7 +387,11 @@ class DoubanSubscribe(_PluginBase):
                 "category": MEDIA_CATEGORY_LABELS.get(
                     record.get("category"), record.get("category") or "",
                 ),
-                "total": record.get("expected_total") or "",
+                "total": (
+                    "待获取"
+                    if record.get("total_pending")
+                    else record.get("expected_total") or ""
+                ),
                 "mp_total": record.get("manual_total") or record.get("expected_total") or "",
                 "status": status_labels.get(
                     record.get("status"), record.get("status") or "",
@@ -339,7 +401,7 @@ class DoubanSubscribe(_PluginBase):
             })
 
         history_items = []
-        for record in history[:200]:
+        for record in history[:RECENT_HISTORY_LIMIT]:
             history_items.append({
                 "title": record.get("title") or "",
                 "status": record.get("status") or "",
@@ -364,7 +426,7 @@ class DoubanSubscribe(_PluginBase):
                         "component": "VCard",
                         "props": {
                             "title": "受管订阅",
-                            "subtitle": "完成后暂停、豆瓣总集数复查及手动接管状态",
+                            "subtitle": "完成后暂停、豆瓣总集数复核及手动接管状态",
                             "variant": "tonal",
                         },
                         "content": [{
@@ -379,7 +441,7 @@ class DoubanSubscribe(_PluginBase):
                                         {"title": "豆瓣总集数", "key": "total"},
                                         {"title": "MP总集数", "key": "mp_total"},
                                         {"title": "状态", "key": "status"},
-                                        {"title": "下次复查", "key": "check_after"},
+                                        {"title": "下次确认", "key": "check_after"},
                                         {"title": "说明", "key": "reason"},
                                     ],
                                     "items": managed_items,
@@ -400,6 +462,7 @@ class DoubanSubscribe(_PluginBase):
                         "component": "VCard",
                         "props": {
                             "title": "RSS 处理记录",
+                            "subtitle": "仅展示最近 50 条；可通过历史搜索接口查询全部记录",
                             "variant": "tonal",
                         },
                         "content": [{
@@ -490,8 +553,12 @@ class DoubanSubscribe(_PluginBase):
             "failed": 0,
             "confirmations": 0,
             "resumed": 0,
+            "completed": 0,
             "manual_review": 0,
             "verification_failed": 0,
+            "pending_total_checks": 0,
+            "totals_resolved": 0,
+            "total_check_failed": 0,
         }
         try:
             if not hasattr(Subscribe, "manual_total_episode"):
@@ -500,22 +567,22 @@ class DoubanSubscribe(_PluginBase):
                     "message": "当前 MoviePilot 不支持手动总集数锁定，请升级到 v2.15.0 或更高版本",
                 })
                 return summary
+            pending_total_summary = self._process_pending_totals()
+            summary.update(pending_total_summary)
             confirmation_summary = self._process_due_confirmations()
             summary.update(confirmation_summary)
 
             urls = self._configured_urls()
             if not urls:
-                if summary["confirmations"]:
-                    summary["message"] = "未配置有效 RSS 地址，仅完成到期订阅复查"
+                if summary["confirmations"] or summary["pending_total_checks"]:
+                    summary["message"] = "未配置有效 RSS 地址，仅完成受管订阅复核"
                     return summary
                 summary.update({"success": False, "message": "未配置有效 RSS 地址"})
                 return summary
 
             history = self.get_data("history") or []
-            completed_keys = {
-                record.get("key") for record in history
-                if record.get("status") in SUCCESS_STATUSES
-            }
+            processed_items = self._processed_index(history)
+            completed_keys = set(processed_items)
             for url in urls:
                 try:
                     items = self._fetch_feed(url)
@@ -543,14 +610,16 @@ class DoubanSubscribe(_PluginBase):
                     if status == "subscribed":
                         summary["subscribed"] += 1
                         completed_keys.add(item.key)
+                        self._mark_processed(processed_items, item.key, record)
                     elif status == "existing":
                         summary["existing"] += 1
                         completed_keys.add(item.key)
+                        self._mark_processed(processed_items, item.key, record)
                     elif status in SKIPPED_STATUSES:
                         summary["skipped"] += 1
                     else:
                         summary["failed"] += 1
-            self.save_data("history", history[-500:])
+            self.save_data("history", history)
             return summary
         except Exception as error:
             logger.error(f"豆瓣订阅助手：RSS 处理失败：{error}", exc_info=True)
@@ -574,12 +643,15 @@ class DoubanSubscribe(_PluginBase):
                 return self._failed_record(base_record, "douban_not_found", "未匹配到豆瓣电视剧条目")
             douban_id = str(douban_info.get("id") or item.douban_id or "")
             total_episode = extract_total_episode(douban_info)
+            airing_started = has_started_airing(douban_info)
             category = classify_media_region(douban_info)
             base_record.update({
                 "douban_id": douban_id,
                 "douban_title": douban_info.get("title") or item.title,
                 "douban_year": douban_info.get("year") or item.year or "",
                 "douban_total": total_episode,
+                "airing_started": airing_started,
+                "total_pending": not bool(total_episode),
                 "category": category,
                 "countries": douban_info.get("countries") or [],
             })
@@ -589,14 +661,14 @@ class DoubanSubscribe(_PluginBase):
                     "category_skipped",
                     f"{MEDIA_CATEGORY_LABELS.get(category, category)}未在订阅类型中启用",
                 )
-            if not total_episode:
+            if not total_episode and not airing_started:
                 return self._failed_record(
                     base_record,
                     "douban_total_missing",
-                    "豆瓣详情没有明确总集数，未创建订阅",
+                    "豆瓣详情没有明确总集数，且没有可靠的已开播证据，未创建订阅",
                 )
 
-            decision, media_by_key = self._match_tmdb(douban_info, total_episode)
+            decision, media_by_key = self._match_tmdb(douban_info, total_episode or 0)
             if decision.winner:
                 winner = decision.winner
                 base_record.update({
@@ -619,8 +691,10 @@ class DoubanSubscribe(_PluginBase):
                 mediainfo=mediainfo,
                 douban_id=douban_id,
                 season=winner.season,
-                total_episode=total_episode,
+                total_episode=total_episode or UNKNOWN_TOTAL_EPISODE,
                 category=category,
+                source_key=item.key,
+                total_pending=not bool(total_episode),
             )
             base_record.update(subscription)
             return base_record
@@ -752,6 +826,8 @@ class DoubanSubscribe(_PluginBase):
         season: int,
         total_episode: int,
         category: str,
+        source_key: str,
+        total_pending: bool = False,
     ) -> Dict[str, Any]:
         subscribe_oper = SubscribeOper()
         existing = subscribe_oper.get_by(
@@ -763,7 +839,15 @@ class DoubanSubscribe(_PluginBase):
             managed = str(getattr(existing, "username", "") or "") == PLUGIN_USERNAME
             if managed:
                 managed_record = self._managed_record(existing.id)
-                if managed_record.get("status") != "manual_review":
+                can_update = (
+                    managed_record.get("status") != "manual_review"
+                    and (
+                        not total_pending
+                        or not managed_record
+                        or bool(managed_record.get("total_pending"))
+                    )
+                )
+                if can_update:
                     old_total = int(existing.total_episode or 0)
                     old_lack = int(existing.lack_episode or 0)
                     subscribe_oper.update(existing.id, {
@@ -772,22 +856,38 @@ class DoubanSubscribe(_PluginBase):
                         "manual_total_episode": 1,
                     })
                     existing = subscribe_oper.get(existing.id)
+                effective_pending = (
+                    total_pending if can_update
+                    else bool(managed_record.get("total_pending"))
+                )
+                effective_total = int(existing.total_episode or total_episode)
                 self._register_managed_subscription(
                     subscribe_id=existing.id,
                     title=existing.name or mediainfo.title,
                     tmdb_id=mediainfo.tmdb_id,
                     douban_id=douban_id,
                     season=season,
-                    expected_total=total_episode,
+                    expected_total=effective_total,
                     category=category,
-                    status="active",
-                    reason="已接管此前由豆瓣订阅助手创建的订阅",
+                    status="awaiting_douban_total" if effective_pending else "active",
+                    reason=(
+                        f"豆瓣尚未提供总集数，暂按 {effective_total} 集订阅并周期复核"
+                        if effective_pending else
+                        "已接管此前由豆瓣订阅助手创建的订阅"
+                    ),
+                    source_key=source_key,
+                    total_pending=effective_pending,
                 )
             return {
                 "status": "existing",
                 "subscribe_id": existing.id,
                 "reason": (
-                    "已接管此前由豆瓣订阅助手创建的订阅"
+                    (
+                        f"豆瓣尚未提供总集数，暂按 {int(existing.total_episode or total_episode)} "
+                        "集订阅并周期复核"
+                        if managed and effective_pending else
+                        "已接管此前由豆瓣订阅助手创建的订阅"
+                    )
                     if managed else
                     "MoviePilot 中已存在相同 TMDB 与季度的订阅，未接管用户原订阅"
                 ),
@@ -829,7 +929,7 @@ class DoubanSubscribe(_PluginBase):
             return {
                 "status": "lock_failed",
                 "subscribe_id": subscribe_id,
-                "reason": "订阅已创建，但豆瓣总集数锁定校验失败",
+                "reason": "订阅已创建，但总集数锁定校验失败",
                 "locked": False,
             }
         self._register_managed_subscription(
@@ -840,20 +940,30 @@ class DoubanSubscribe(_PluginBase):
             season=season,
             expected_total=total_episode,
             category=category,
-            status="active",
-            reason="订阅由豆瓣订阅助手管理",
+            status="awaiting_douban_total" if total_pending else "active",
+            reason=(
+                f"豆瓣尚未提供总集数，暂按 {total_episode} 集订阅并周期复核"
+                if total_pending else
+                "订阅由豆瓣订阅助手管理"
+            ),
+            source_key=source_key,
+            total_pending=total_pending,
         )
         return {
             "status": "subscribed",
             "subscribe_id": subscribe_id,
-            "reason": f"已按豆瓣总集数 {total_episode} 创建并锁定订阅",
+            "reason": (
+                f"豆瓣尚未提供总集数，已暂按 {total_episode} 集创建并锁定订阅"
+                if total_pending else
+                f"已按豆瓣总集数 {total_episode} 创建并锁定订阅"
+            ),
             "locked": True,
             "managed": True,
         }
 
     @eventmanager.register(ChainEventType.SubscribeCompletionCheck, priority=10)
     def on_subscribe_completion_check(self, event: Event) -> None:
-        """Keep managed subscriptions as paused cards instead of letting MoviePilot delete them."""
+        """Pause the first completion, but allow the post-confirmation completion."""
         if not self._enabled or not event or not event.event_data:
             return
         event_data: SubscribeCompletionCheckEventData = event.event_data
@@ -862,7 +972,8 @@ class DoubanSubscribe(_PluginBase):
         if not subscribe_id:
             return
         managed = self._managed_record(subscribe_id)
-        if managed and managed.get("status") == "manual_review":
+        managed_status = managed.get("status") if managed else ""
+        if managed_status in {"manual_review", "completed", "missing_subscription"}:
             return
         owned_by_plugin = (
             str(getattr(subscribe, "username", "") or "") == PLUGIN_USERNAME
@@ -877,9 +988,31 @@ class DoubanSubscribe(_PluginBase):
                 })
             return
 
+        if managed_status == "finalizing":
+            self._upsert_managed({
+                **managed,
+                "last_checked": self._now(),
+                "reason": "豆瓣总集数没有增加，正在由 MoviePilot 正常完成订阅",
+            })
+            return
+
         event_data.cancel = True
         event_data.source = self.plugin_name
-        event_data.reason = "订阅已完成，保留卡片并暂停，等待豆瓣总集数复查"
+        if managed_status in {
+            "awaiting_douban_total", "waiting_confirmation",
+            "confirming", "verification_error",
+        }:
+            event_data.reason = "订阅处于完成确认流程，暂不删除卡片"
+            SubscribeOper().update(subscribe_id, {"state": "S"})
+            if managed_status == "awaiting_douban_total":
+                self._upsert_managed({
+                    **managed,
+                    "pending_completed": True,
+                    "reason": "100 集临时订阅已全部满足，等待豆瓣提供明确总集数",
+                })
+            return
+
+        event_data.reason = "订阅已完成，暂停卡片并等待复核豆瓣总集数"
         try:
             SubscribeOper().update(subscribe_id, {
                 "state": "S",
@@ -907,11 +1040,11 @@ class DoubanSubscribe(_PluginBase):
                 "status": "waiting_confirmation",
                 "completed_at": self._now(),
                 "check_after": check_after,
-                "reason": f"已完成并暂停，将在 {self._confirmation_days} 天后复查豆瓣总集数",
+                "reason": f"已完成并暂停，将在 {self._confirmation_days} 天后复核豆瓣总集数",
             })
             logger.info(
                 f"豆瓣订阅助手：订阅 #{subscribe_id} 已完成，已暂停并保留卡片，"
-                f"将在 {check_after} 后复查"
+                f"将在 {check_after} 后复核豆瓣总集数"
             )
         except Exception as error:
             logger.error(
@@ -928,10 +1061,154 @@ class DoubanSubscribe(_PluginBase):
                 "reason": f"完成时暂停失败：{error}",
             })
 
+    def _process_pending_totals(self) -> Dict[str, int]:
+        """Refresh provisional 100-episode subscriptions on every plugin cycle."""
+        summary = {
+            "pending_total_checks": 0,
+            "totals_resolved": 0,
+            "total_check_failed": 0,
+        }
+        for record in self._managed_records():
+            status = record.get("status")
+            if status != "awaiting_douban_total" and not (
+                status == "active" and record.get("total_pending")
+            ):
+                continue
+            summary["pending_total_checks"] += 1
+            try:
+                if self._resolve_pending_total(record):
+                    summary["totals_resolved"] += 1
+            except Exception as error:
+                summary["total_check_failed"] += 1
+                self._upsert_managed({
+                    **record,
+                    "status": "awaiting_douban_total",
+                    "total_pending": True,
+                    "last_checked": self._now(),
+                    "reason": f"豆瓣总集数复核失败：{error}；下个执行周期继续复核",
+                })
+                logger.error(
+                    f"豆瓣订阅助手：订阅 #{record.get('subscribe_id')} "
+                    f"豆瓣总集数复核失败：{error}",
+                    exc_info=True,
+                )
+        return summary
+
+    def _resolve_pending_total(self, record: Dict[str, Any]) -> bool:
+        subscribe_id = int(record.get("subscribe_id"))
+        subscribe_oper = SubscribeOper()
+        subscribe = subscribe_oper.get(subscribe_id)
+        if not subscribe:
+            self._upsert_managed({
+                **record,
+                "status": "missing_subscription",
+                "check_after": "",
+                "last_checked": self._now(),
+                "reason": "等待豆瓣总集数期间，MoviePilot 中已找不到订阅卡片",
+            })
+            return False
+        if str(getattr(subscribe, "username", "") or "") != PLUGIN_USERNAME:
+            self._upsert_managed({
+                **record,
+                "status": "manual_review",
+                "check_after": "",
+                "last_checked": self._now(),
+                "reason": "订阅归属已改变，插件停止复核豆瓣总集数",
+            })
+            return False
+
+        provisional_total = int(record.get("expected_total") or UNKNOWN_TOTAL_EPISODE)
+        if int(getattr(subscribe, "total_episode", 0) or 0) != provisional_total:
+            self._upsert_managed({
+                **record,
+                "status": "manual_review",
+                "check_after": "",
+                "last_checked": self._now(),
+                "reason": "等待豆瓣总集数期间订阅被手动修改，插件停止自动接管",
+            })
+            return False
+        state = str(getattr(subscribe, "state", "") or "")
+        if state == "S" and not record.get("pending_completed"):
+            self._upsert_managed({
+                **record,
+                "status": "manual_review",
+                "check_after": "",
+                "last_checked": self._now(),
+                "reason": "等待豆瓣总集数期间订阅被手动暂停，插件停止自动接管",
+            })
+            return False
+
+        douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
+        if not douban_id:
+            raise RuntimeError("订阅缺少豆瓣 ID")
+        douban_info = self.chain.douban_info(
+            doubanid=douban_id,
+            mtype=MediaType.TV,
+            raise_exception=False,
+        )
+        douban_total = extract_total_episode(douban_info or {})
+        if not douban_total:
+            self._upsert_managed({
+                **record,
+                "status": "awaiting_douban_total",
+                "total_pending": True,
+                "last_checked": self._now(),
+                "reason": (
+                    f"豆瓣仍未提供明确总集数，继续暂按 {provisional_total} 集订阅，"
+                    "下个执行周期再次复核"
+                ),
+            })
+            return False
+
+        old_lack = max(int(getattr(subscribe, "lack_episode", 0) or 0), 0)
+        completed = max(provisional_total - old_lack, 0)
+        new_lack = max(douban_total - completed, 0)
+        subscribe_oper.update(subscribe_id, {
+            "total_episode": douban_total,
+            "lack_episode": new_lack,
+            "manual_total_episode": 1,
+            "state": "R",
+        })
+        self._upsert_managed({
+            **record,
+            "expected_total": douban_total,
+            "manual_total": "",
+            "total_pending": False,
+            "pending_completed": False,
+            "status": "active",
+            "check_after": "",
+            "last_checked": self._now(),
+            "reason": (
+                f"豆瓣已提供总集数 {douban_total}，已替换临时的 "
+                f"{provisional_total} 集并更新缺失集数为 {new_lack}"
+            ),
+        })
+        logger.info(
+            f"豆瓣订阅助手：订阅 #{subscribe_id} 已取得豆瓣总集数 "
+            f"{douban_total}，替换临时总集数 {provisional_total}"
+        )
+        try:
+            SubscribeChain().search(sid=subscribe_id, state="R", manual=False)
+        except Exception as error:
+            logger.error(
+                f"豆瓣订阅助手：订阅 #{subscribe_id} 总集数已回写，"
+                f"但立即搜索失败：{error}",
+                exc_info=True,
+            )
+            self._upsert_managed({
+                "subscribe_id": subscribe_id,
+                "reason": (
+                    f"豆瓣总集数已更新为 {douban_total}；立即搜索失败，"
+                    "订阅保持启用，将由 MoviePilot 后续继续搜索"
+                ),
+            })
+        return True
+
     def _process_due_confirmations(self) -> Dict[str, int]:
         summary = {
             "confirmations": 0,
             "resumed": 0,
+            "completed": 0,
             "manual_review": 0,
             "verification_failed": 0,
         }
@@ -976,6 +1253,8 @@ class DoubanSubscribe(_PluginBase):
             return "manual_review"
 
         expected_total = int(record.get("expected_total") or subscribe.total_episode or 0)
+        if expected_total <= 0:
+            raise RuntimeError("受管订阅缺少有效的预期总集数")
         if (
             str(getattr(subscribe, "state", "") or "") != "S"
             or int(subscribe.total_episode or 0) != expected_total
@@ -985,110 +1264,150 @@ class DoubanSubscribe(_PluginBase):
                 "status": "manual_review",
                 "check_after": "",
                 "last_checked": self._now(),
-                "reason": "等待复查期间订阅被手动修改，插件停止自动接管",
+                "reason": "等待确认期间订阅被手动修改，插件停止自动接管",
             })
             return "manual_review"
 
-        douban_id = str(record.get("douban_id") or subscribe.doubanid or "")
-        if not douban_id:
-            raise RuntimeError("订阅缺少豆瓣 ID")
-        douban_info = self.chain.douban_info(
-            doubanid=douban_id,
-            mtype=MediaType.TV,
-            raise_exception=False,
+        self._upsert_managed({
+            **record,
+            "status": "confirming",
+            "check_after": "",
+            "last_checked": self._now(),
+            "reason": "正在复核豆瓣总集数",
+        })
+        douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
+        douban_info = (
+            self.chain.douban_info(
+                doubanid=douban_id,
+                mtype=MediaType.TV,
+                raise_exception=False,
+            )
+            if douban_id else None
         )
         douban_total = extract_total_episode(douban_info or {})
         if not douban_total:
             raise RuntimeError("豆瓣详情未返回明确总集数")
-
-        decision = decide_confirmation(
-            expected_total=expected_total,
-            douban_total=douban_total,
-            current_lack=int(subscribe.lack_episode or 0),
-            manual_total=MANUAL_REVIEW_TOTAL,
-        )
-        checked_at = self._now()
-        if not decision.changed:
-            subscribe_oper.update(subscribe_id, {
-                "total_episode": decision.total_episode,
-                "lack_episode": decision.lack_episode,
-                "manual_total_episode": 1,
-                "state": "S",
-            })
-            self._upsert_managed({
-                **record,
-                "expected_total": douban_total,
-                "manual_total": decision.total_episode,
-                "status": "manual_review",
-                "check_after": "",
-                "last_checked": checked_at,
-                "reason": (
-                    f"豆瓣总集数仍为 {douban_total}，订阅总集数已改为 "
-                    f"{decision.total_episode} 并保持暂停，请手动处理"
-                ),
-            })
-            logger.info(
-                f"豆瓣订阅助手：订阅 #{subscribe_id} 复查后豆瓣总集数未变化，"
-                f"已改为 {decision.total_episode} 并交由用户处理"
+        if douban_total <= expected_total:
+            return self._finish_after_unchanged_confirmation(
+                record=record,
+                subscribe=subscribe,
+                expected_total=expected_total,
+                douban_total=douban_total,
             )
-            return "manual_review"
 
-        resume = decision.lack_episode > 0
+        new_lack = douban_total - expected_total
         subscribe_oper.update(subscribe_id, {
-            "total_episode": decision.total_episode,
-            "lack_episode": decision.lack_episode,
+            "total_episode": douban_total,
+            "lack_episode": new_lack,
             "manual_total_episode": 1,
-            "state": "R" if resume else "S",
+            "state": "R",
         })
-        if not resume:
-            check_after = self._format_datetime(
-                self._now_datetime() + datetime.timedelta(days=self._confirmation_days)
-            )
-            self._upsert_managed({
-                **record,
-                "expected_total": douban_total,
-                "status": "waiting_confirmation",
-                "check_after": check_after,
-                "last_checked": checked_at,
-                "reason": (
-                    f"豆瓣总集数由 {expected_total} 调整为 {douban_total}，"
-                    f"没有新增缺失集，保持暂停并将在 {self._confirmation_days} 天后再次确认"
-                ),
-            })
-            return ""
-
         self._upsert_managed({
             **record,
             "expected_total": douban_total,
+            "manual_total": "",
             "status": "active",
             "check_after": "",
-            "last_checked": checked_at,
+            "last_checked": self._now(),
             "reason": (
                 f"豆瓣总集数由 {expected_total} 增加为 {douban_total}，"
-                f"已恢复订阅并立即搜索 {decision.lack_episode} 个缺失集"
+                f"继续订阅新增的 {new_lack} 集"
             ),
         })
         logger.info(
             f"豆瓣订阅助手：订阅 #{subscribe_id} 豆瓣总集数由 "
-            f"{expected_total} 变为 {douban_total}，立即搜索缺失集"
+            f"{expected_total} 增加为 {douban_total}，恢复订阅"
         )
         try:
-            SubscribeChain().search(sid=subscribe_id, state="R", manual=True)
+            SubscribeChain().search(sid=subscribe_id, state="R", manual=False)
         except Exception as error:
             logger.error(
-                f"豆瓣订阅助手：订阅 #{subscribe_id} 总集数已更新，但立即搜索失败：{error}",
+                f"豆瓣订阅助手：订阅 #{subscribe_id} 总集数已更新，"
+                f"但立即搜索失败：{error}",
                 exc_info=True,
             )
             self._upsert_managed({
                 "subscribe_id": subscribe_id,
                 "reason": (
-                    f"总集数已更新为 {douban_total}，立即搜索失败；"
-                    "订阅保持启用，将由 MoviePilot 后续周期继续搜索"
+                    f"豆瓣总集数已更新为 {douban_total}；立即搜索失败，"
+                    "订阅保持启用，将由 MoviePilot 后续继续搜索"
                 ),
             })
         return "resumed"
 
+    def _finish_after_unchanged_confirmation(
+        self,
+        record: Dict[str, Any],
+        subscribe: Any,
+        expected_total: int,
+        douban_total: int,
+    ) -> str:
+        """Use MoviePilot's own finish path when Douban did not increase."""
+        subscribe_id = int(record.get("subscribe_id"))
+        subscribe_oper = SubscribeOper()
+        subscribe_oper.update(subscribe_id, {
+            "total_episode": expected_total,
+            "lack_episode": 0,
+            "manual_total_episode": 1,
+            "state": "R",
+        })
+        subscribe = subscribe_oper.get(subscribe_id) or subscribe
+        meta = MetaInfo(str(getattr(subscribe, "name", "") or record.get("title") or ""))
+        meta.type = MediaType.TV
+        meta.begin_season = int(getattr(subscribe, "season", 1) or 1)
+        mediainfo = self.chain.recognize_media(
+            meta=meta,
+            mtype=MediaType.TV,
+            tmdbid=getattr(subscribe, "tmdbid", None) or record.get("tmdb_id"),
+            cache=False,
+        )
+        if not mediainfo:
+            subscribe_oper.update(subscribe_id, {"state": "S"})
+            raise RuntimeError("豆瓣总集数未增加，但 MoviePilot 无法识别媒体以完成订阅")
+
+        self._upsert_managed({
+            **record,
+            "status": "finalizing",
+            "check_after": "",
+            "last_checked": self._now(),
+            "reason": (
+                f"豆瓣总集数为 {douban_total}，没有超过 {expected_total}，"
+                "正在由 MoviePilot 正常完成订阅"
+            ),
+        })
+        SubscribeChain().finish_subscribe_or_not(
+            subscribe=subscribe,
+            meta=meta,
+            mediainfo=mediainfo,
+            force=True,
+        )
+        if subscribe_oper.get(subscribe_id):
+            subscribe_oper.update(subscribe_id, {"state": "S"})
+            raise RuntimeError("豆瓣总集数未增加，但 MoviePilot 未能完成订阅")
+        self._upsert_managed({
+            **record,
+            "status": "completed",
+            "check_after": "",
+            "last_checked": self._now(),
+            "reason": "豆瓣总集数没有增加，订阅已正常完成",
+        })
+        logger.info(
+            f"豆瓣订阅助手：订阅 #{subscribe_id} 豆瓣总集数没有增加，"
+            "已由 MoviePilot 正常完成"
+        )
+        return "completed"
+
     def _mark_confirmation_error(self, record: Dict[str, Any], error: Exception) -> None:
+        subscribe_id = record.get("subscribe_id")
+        if subscribe_id and not SubscribeOper().get(int(subscribe_id)):
+            self._upsert_managed({
+                **record,
+                "status": "completed",
+                "check_after": "",
+                "last_checked": self._now(),
+                "reason": "确认流程结束后订阅卡片已不存在，按正常完成记录",
+            })
+            return
         retry_at = self._format_datetime(
             self._now_datetime() + datetime.timedelta(days=1)
         )
@@ -1097,10 +1416,10 @@ class DoubanSubscribe(_PluginBase):
             "status": "verification_error",
             "check_after": retry_at,
             "last_checked": self._now(),
-            "reason": f"豆瓣总集数复查失败：{error}；将在 1 天后重试",
+            "reason": f"完成确认失败：{error}；将在 1 天后重试",
         })
         logger.error(
-            f"豆瓣订阅助手：订阅 #{record.get('subscribe_id')} 复查失败：{error}",
+            f"豆瓣订阅助手：订阅 #{record.get('subscribe_id')} 完成确认失败：{error}",
             exc_info=True,
         )
 
@@ -1115,11 +1434,18 @@ class DoubanSubscribe(_PluginBase):
         category: str,
         status: str,
         reason: str,
+        source_key: str = "",
+        total_pending: bool = False,
     ) -> None:
         existing = self._managed_record(subscribe_id)
-        if existing and existing.get("status") in {
-            "waiting_confirmation", "manual_review", "verification_error",
-        }:
+        preserved_status = existing.get("status") if existing else ""
+        if existing and (
+            preserved_status in {
+                "waiting_confirmation", "confirming", "finalizing",
+                "manual_review", "verification_error", "completed",
+            }
+            or (preserved_status == "awaiting_douban_total" and total_pending)
+        ):
             status = existing["status"]
             reason = existing.get("reason") or reason
         self._upsert_managed({
@@ -1130,6 +1456,16 @@ class DoubanSubscribe(_PluginBase):
             "season": season,
             "expected_total": expected_total,
             "category": category,
+            "source_key": source_key or existing.get("source_key", ""),
+            "total_pending": (
+                existing.get("total_pending")
+                if existing and existing.get("status") == "manual_review"
+                else total_pending
+            ),
+            "pending_completed": (
+                bool(existing.get("pending_completed"))
+                if total_pending and existing else False
+            ),
             "status": status,
             "created_at": existing.get("created_at") if existing else self._now(),
             "reason": reason,
@@ -1185,6 +1521,63 @@ class DoubanSubscribe(_PluginBase):
             })
             raw[key] = current
             self.save_data("managed_subscriptions", raw)
+
+    def _processed_index(
+        self,
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Return the durable success index, migrating successful old history."""
+        with self._data_lock:
+            raw = self.get_data("processed_items") or {}
+            if isinstance(raw, list):
+                processed = {
+                    str(item.get("key")): dict(item)
+                    for item in raw
+                    if isinstance(item, dict) and item.get("key")
+                }
+            elif isinstance(raw, dict):
+                processed = {
+                    str(key): dict(value)
+                    for key, value in raw.items()
+                    if key and isinstance(value, dict)
+                }
+            else:
+                processed = {}
+
+            changed = False
+            for record in history if history is not None else (self.get_data("history") or []):
+                key = str(record.get("key") or "")
+                if not key or record.get("status") not in SUCCESS_STATUSES or key in processed:
+                    continue
+                processed[key] = self._processed_record(key, record)
+                changed = True
+            if changed or not isinstance(raw, dict):
+                self.save_data("processed_items", processed)
+            return processed
+
+    def _mark_processed(
+        self,
+        processed: Dict[str, Dict[str, Any]],
+        key: str,
+        record: Dict[str, Any],
+    ) -> None:
+        if not key:
+            return
+        processed[str(key)] = self._processed_record(str(key), record)
+        with self._data_lock:
+            self.save_data("processed_items", processed)
+
+    @staticmethod
+    def _processed_record(key: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "key": key,
+            "status": record.get("status") or "",
+            "title": record.get("title") or "",
+            "subscribe_id": record.get("subscribe_id"),
+            "douban_id": record.get("douban_id") or "",
+            "tmdb_id": record.get("tmdb_id"),
+            "time": record.get("time") or "",
+        }
 
     @staticmethod
     def _parse_datetime(value: Any) -> Optional[datetime.datetime]:

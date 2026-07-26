@@ -195,18 +195,27 @@ class FakeSubscribeOper:
                 setattr(subscribe, key, value)
         return subscribe
 
+    def delete(self, subscribe_id):
+        return self.records.pop(int(subscribe_id), None)
+
 
 class FakeSubscribeChain:
     search_calls = []
+    finish_calls = []
 
     def search(self, **kwargs):
         self.search_calls.append(kwargs)
+
+    def finish_subscribe_or_not(self, **kwargs):
+        self.finish_calls.append(kwargs)
+        FakeSubscribeOper().delete(kwargs["subscribe"].id)
 
 
 class ManagedSubscriptionLifecycleTest(unittest.TestCase):
     def setUp(self) -> None:
         FakeSubscribeOper.records = {}
         FakeSubscribeChain.search_calls = []
+        FakeSubscribeChain.finish_calls = []
         plugin_module.SubscribeOper = FakeSubscribeOper
         plugin_module.SubscribeChain = FakeSubscribeChain
         self.plugin = plugin_module.DoubanSubscribe()
@@ -228,7 +237,7 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
             "check_after": "2000-01-01T00:00:00+08:00",
         })
 
-    def test_completion_pauses_card_and_increased_total_resumes_search(self) -> None:
+    def test_completion_pauses_card_and_increased_douban_total_resumes(self) -> None:
         subscribe = FakeSubscribe(1)
         event_data = self._complete(subscribe)
 
@@ -250,22 +259,232 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(subscribe.lack_episode, 4)
         self.assertEqual(subscribe.state, "R")
         self.assertEqual(FakeSubscribeChain.search_calls[0]["sid"], 1)
+        self.assertFalse(FakeSubscribeChain.search_calls[0]["manual"])
 
-    def test_unchanged_total_switches_to_100_and_manual_review(self) -> None:
+    def test_started_item_without_total_uses_provisional_100_subscription(self) -> None:
+        item = plugin_module.FeedItem(
+            title="测试新剧",
+            source_url="https://example.test/feed",
+            douban_id="654321",
+        )
+        candidate = plugin_module.TmdbCandidate(
+            tmdb_id=321,
+            title="测试新剧",
+            season=1,
+        )
+        winner = plugin_module.ScoredCandidate(
+            candidate=candidate,
+            identity_score=60,
+            structure_score=30,
+            score=90,
+        )
+        decision = plugin_module.MatchDecision(
+            accepted=True,
+            status="matched",
+            reason="matched",
+            winner=winner,
+        )
+        mediainfo = types.SimpleNamespace(tmdb_id=321, title="测试新剧")
+        captured = {}
+        self.plugin._resolve_douban = lambda _item: {
+            "id": "654321",
+            "title": "测试新剧",
+            "year": "2026",
+            "countries": ["中国大陆"],
+            "is_released": True,
+        }
+        self.plugin._match_tmdb = lambda *_args: (
+            decision,
+            {(321, 1): mediainfo},
+        )
+        self.plugin._create_subscription = lambda **kwargs: (
+            captured.update(kwargs)
+            or {
+                "status": "subscribed",
+                "subscribe_id": 88,
+                "reason": "created",
+                "locked": True,
+                "managed": True,
+            }
+        )
+
+        record = self.plugin._process_item(item)
+
+        self.assertEqual(record["status"], "subscribed")
+        self.assertTrue(record["airing_started"])
+        self.assertTrue(record["total_pending"])
+        self.assertEqual(captured["total_episode"], 100)
+        self.assertTrue(captured["total_pending"])
+
+    def test_pending_total_is_replaced_and_progress_is_preserved(self) -> None:
+        subscribe = FakeSubscribe(8)
+        subscribe.total_episode = 100
+        subscribe.lack_episode = 90
+        FakeSubscribeOper.records[8] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 8,
+            "title": subscribe.name,
+            "douban_id": subscribe.doubanid,
+            "tmdb_id": subscribe.tmdbid,
+            "season": 1,
+            "expected_total": 100,
+            "status": "awaiting_douban_total",
+            "total_pending": True,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+        )
+
+        summary = self.plugin._process_pending_totals()
+
+        self.assertEqual(summary["pending_total_checks"], 1)
+        self.assertEqual(summary["totals_resolved"], 1)
+        self.assertEqual(subscribe.total_episode, 40)
+        self.assertEqual(subscribe.lack_episode, 30)
+        self.assertEqual(subscribe.state, "R")
+        managed = self.plugin._managed_record(8)
+        self.assertFalse(managed["total_pending"])
+        self.assertEqual(managed["expected_total"], 40)
+        self.assertEqual(managed["status"], "active")
+        self.assertEqual(FakeSubscribeChain.search_calls[0]["sid"], 8)
+
+    def test_pending_total_stays_at_100_until_douban_resolves(self) -> None:
+        subscribe = FakeSubscribe(9)
+        subscribe.total_episode = 100
+        subscribe.lack_episode = 87
+        FakeSubscribeOper.records[9] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 9,
+            "title": subscribe.name,
+            "douban_id": subscribe.doubanid,
+            "tmdb_id": subscribe.tmdbid,
+            "season": 1,
+            "expected_total": 100,
+            "status": "awaiting_douban_total",
+            "total_pending": True,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {},
+        )
+
+        summary = self.plugin._process_pending_totals()
+
+        self.assertEqual(summary["pending_total_checks"], 1)
+        self.assertEqual(summary["totals_resolved"], 0)
+        self.assertEqual(subscribe.total_episode, 100)
+        self.assertEqual(subscribe.lack_episode, 87)
+        self.assertTrue(self.plugin._managed_record(9)["total_pending"])
+        self.assertFalse(FakeSubscribeChain.search_calls)
+
+    def test_pending_total_completion_keeps_card_for_periodic_recheck(self) -> None:
+        subscribe = FakeSubscribe(10)
+        subscribe.total_episode = 100
+        subscribe.lack_episode = 0
+        self.plugin._upsert_managed({
+            "subscribe_id": 10,
+            "title": subscribe.name,
+            "douban_id": subscribe.doubanid,
+            "tmdb_id": subscribe.tmdbid,
+            "season": 1,
+            "expected_total": 100,
+            "status": "awaiting_douban_total",
+            "total_pending": True,
+        })
+
+        event_data = self._complete(subscribe)
+
+        self.assertTrue(event_data.cancel)
+        self.assertEqual(subscribe.state, "S")
+        managed = self.plugin._managed_record(10)
+        self.assertEqual(managed["status"], "awaiting_douban_total")
+        self.assertTrue(managed["total_pending"])
+        self.assertTrue(managed["pending_completed"])
+
+    def test_manually_paused_pending_total_is_not_resumed(self) -> None:
+        subscribe = FakeSubscribe(11)
+        subscribe.total_episode = 100
+        subscribe.lack_episode = 75
+        subscribe.state = "S"
+        FakeSubscribeOper.records[11] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 11,
+            "title": subscribe.name,
+            "douban_id": subscribe.doubanid,
+            "tmdb_id": subscribe.tmdbid,
+            "season": 1,
+            "expected_total": 100,
+            "status": "awaiting_douban_total",
+            "total_pending": True,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: self.fail("手动暂停后不应再查询豆瓣"),
+        )
+
+        summary = self.plugin._process_pending_totals()
+
+        self.assertEqual(summary["pending_total_checks"], 1)
+        self.assertEqual(summary["totals_resolved"], 0)
+        self.assertEqual(subscribe.total_episode, 100)
+        self.assertEqual(subscribe.lack_episode, 75)
+        self.assertEqual(subscribe.state, "S")
+        managed = self.plugin._managed_record(11)
+        self.assertEqual(managed["status"], "manual_review")
+        self.assertTrue(managed["total_pending"])
+        self.assertFalse(FakeSubscribeChain.search_calls)
+
+    def test_unchanged_douban_total_normally_completes_and_removes_card(self) -> None:
         subscribe = FakeSubscribe(2)
         self._complete(subscribe)
         self._make_due(2)
         self.plugin.chain = types.SimpleNamespace(
             douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(
+                type=MediaType.TV,
+                title_year="测试剧 (2026)",
+            ),
         )
 
         summary = self.plugin._process_due_confirmations()
 
-        self.assertEqual(summary["manual_review"], 1)
-        self.assertEqual(subscribe.total_episode, 100)
-        self.assertEqual(subscribe.lack_episode, 60)
+        self.assertEqual(summary["completed"], 1)
+        self.assertIsNone(FakeSubscribeOper().get(2))
+        self.assertEqual(self.plugin._managed_record(2)["status"], "completed")
+        self.assertFalse(FakeSubscribeChain.search_calls)
+        self.assertEqual(len(FakeSubscribeChain.finish_calls), 1)
+
+    def test_decreased_douban_total_is_also_treated_as_not_increased(self) -> None:
+        subscribe = FakeSubscribe(7)
+        self._complete(subscribe)
+        self._make_due(7)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 36},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(
+                type=MediaType.TV,
+                title_year="测试剧 (2026)",
+            ),
+        )
+
+        summary = self.plugin._process_due_confirmations()
+
+        self.assertEqual(summary["completed"], 1)
+        self.assertIsNone(FakeSubscribeOper().get(7))
+        self.assertFalse(FakeSubscribeChain.search_calls)
+
+    def test_missing_douban_total_keeps_card_and_retries_later(self) -> None:
+        subscribe = FakeSubscribe(6)
+        self._complete(subscribe)
+        self._make_due(6)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {},
+        )
+
+        summary = self.plugin._process_due_confirmations()
+
+        self.assertEqual(summary["verification_failed"], 1)
+        self.assertEqual(subscribe.total_episode, 40)
+        self.assertEqual(subscribe.lack_episode, 0)
         self.assertEqual(subscribe.state, "S")
-        self.assertEqual(self.plugin._managed_record(2)["status"], "manual_review")
+        self.assertEqual(self.plugin._managed_record(6)["status"], "verification_error")
         self.assertFalse(FakeSubscribeChain.search_calls)
 
     def test_user_owned_subscription_is_not_intercepted(self) -> None:
@@ -296,6 +515,73 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
 
         json.dumps(self.plugin.get_form(), ensure_ascii=False)
         json.dumps(self.plugin.get_page(), ensure_ascii=False)
+
+    def test_recent_history_is_50_and_search_uses_complete_history(self) -> None:
+        history = [
+            {
+                "key": f"item:{index}",
+                "title": f"剧集 {index}",
+                "status": "subscribed" if index % 2 else "existing",
+                "category": "domestic",
+                "reason": "测试记录",
+                "time": f"2026-07-26T12:{index:02d}:00+08:00",
+            }
+            for index in range(75)
+        ]
+        history[3]["title"] = "唯一可搜索标题"
+        self.plugin.save_data("history", history)
+
+        recent = self.plugin.api_history()
+        searched = self.plugin.api_search_history(keyword="唯一可搜索", limit=10)
+        page = self.plugin.get_page()
+        page_items = (
+            page[0]["content"][1]["content"][0]["content"][0]["content"][0]
+            ["props"]["items"]
+        )
+
+        self.assertEqual(recent["total"], 75)
+        self.assertEqual(len(recent["items"]), 50)
+        self.assertEqual(len(page_items), 50)
+        self.assertEqual(searched["total"], 1)
+        self.assertEqual(searched["items"][0]["key"], "item:3")
+
+    def test_durable_processed_index_survives_history_removal(self) -> None:
+        record = {
+            "key": "rss:old-item",
+            "title": "已经完成的旧条目",
+            "status": "subscribed",
+            "subscribe_id": 99,
+            "time": "2026-07-01T00:00:00+08:00",
+        }
+        self.plugin.save_data("history", [record])
+
+        migrated = self.plugin._processed_index()
+        self.plugin.save_data("history", [])
+        persisted = self.plugin._processed_index([])
+
+        self.assertIn("rss:old-item", migrated)
+        self.assertIn("rss:old-item", persisted)
+
+    def test_sync_skips_processed_item_when_history_is_empty(self) -> None:
+        item = plugin_module.FeedItem(
+            title="已经处理过的剧",
+            source_url="https://example.test/feed",
+            douban_id="987654",
+        )
+        self.plugin.save_data("history", [])
+        self.plugin.save_data("processed_items", {
+            item.key: {"key": item.key, "status": "subscribed"},
+        })
+        self.plugin._fetch_feed = lambda _url: [item]
+        self.plugin._process_item = lambda _item: self.fail(
+            "永久索引中的条目不应再次进入订阅处理",
+        )
+
+        summary = self.plugin.sync()
+
+        self.assertEqual(summary["items"], 1)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(summary["subscribed"], 0)
 
 
 if __name__ == "__main__":

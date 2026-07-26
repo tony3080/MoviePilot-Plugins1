@@ -7,6 +7,7 @@ import html
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
@@ -120,16 +121,6 @@ class MatchDecision:
     reason: str
     winner: Optional[ScoredCandidate] = None
     alternatives: Tuple[ScoredCandidate, ...] = field(default_factory=tuple)
-
-
-@dataclass(frozen=True)
-class ConfirmationDecision:
-    """Database values to apply after a delayed Douban total recheck."""
-
-    changed: bool
-    total_episode: int
-    lack_episode: int
-    manual_review: bool
 
 
 def _local_name(tag: str) -> str:
@@ -443,6 +434,48 @@ def extract_total_episode(douban_info: Dict[str, Any]) -> Optional[int]:
     return None
 
 
+def has_started_airing(
+    douban_info: Dict[str, Any],
+    today: Optional[date] = None,
+) -> bool:
+    """Determine whether Douban provides reliable evidence that airing has begun."""
+    info = douban_info or {}
+    released = info.get("is_released")
+    if released is not None:
+        if isinstance(released, str):
+            normalized = released.strip().casefold()
+            if normalized in {"false", "0", "no", "否", "未上映", "未开播"}:
+                return False
+            if normalized in {"true", "1", "yes", "是", "已上映", "已开播"}:
+                return True
+        return bool(released)
+    for field_name in (
+        "last_episode_number", "current_episode", "current_episode_number",
+    ):
+        if _positive_int(info.get(field_name)):
+            return True
+    episodes_info = str(info.get("episodes_info") or "")
+    if re.search(r"(?:更新至|已播至|播至)\s*(?:第\s*)?\d+\s*集?", episodes_info):
+        return True
+
+    current_date = today or date.today()
+    date_values = []
+    for field_name in ("release_date", "pubdate"):
+        value = info.get(field_name)
+        date_values.extend(value if isinstance(value, list) else [value])
+    for value in date_values:
+        match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", str(value or ""))
+        if not match:
+            continue
+        try:
+            release_date = date(*(int(part) for part in match.groups()))
+        except ValueError:
+            continue
+        if release_date <= current_date:
+            return True
+    return False
+
+
 def classify_media_region(douban_info: Dict[str, Any]) -> str:
     """Classify a Douban television entry by its first recognized production country."""
     info = douban_info or {}
@@ -466,33 +499,6 @@ def classify_media_region(douban_info: Dict[str, Any]) -> str:
         if country in WESTERN_COUNTRIES:
             return "western"
     return "other"
-
-
-def decide_confirmation(
-    expected_total: int,
-    douban_total: int,
-    current_lack: int = 0,
-    manual_total: int = 100,
-) -> ConfirmationDecision:
-    """Decide whether to resume a changed subscription or hand an unchanged one to the user."""
-    expected = _positive_int(expected_total) or 0
-    actual = _positive_int(douban_total) or 0
-    missing = max(int(current_lack or 0), 0)
-    if actual and actual != expected:
-        return ConfirmationDecision(
-            changed=True,
-            total_episode=actual,
-            lack_episode=max(missing + actual - expected, 0),
-            manual_review=False,
-        )
-    completed = max(expected - missing, 0)
-    fallback = _positive_int(manual_total) or 100
-    return ConfirmationDecision(
-        changed=False,
-        total_episode=fallback,
-        lack_episode=max(fallback - completed, 0),
-        manual_review=True,
-    )
 
 
 def person_names(items: Sequence[Any]) -> Tuple[str, ...]:
