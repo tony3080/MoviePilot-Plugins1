@@ -54,6 +54,8 @@ class RepositoryContractTest(unittest.TestCase):
         }
         self.assertFalse(required - self.metadata.keys())
         self.assertIn(self.metadata["level"], {1, 2, 3})
+        self.assertIs(self.metadata.get("v2"), True)
+        self.assertEqual(self.metadata.get("system_version"), ">=2.15.1")
 
     def test_runtime_metadata_matches_market(self) -> None:
         mappings = {
@@ -74,6 +76,32 @@ class RepositoryContractTest(unittest.TestCase):
     def test_release_history_contains_current_version(self) -> None:
         version_key = f"v{self.metadata['version']}"
         self.assertIn(version_key, self.metadata["history"])
+
+    def test_locked_douban_episode_contract(self) -> None:
+        tree = ast.parse(INIT_PATH.read_text(encoding="utf-8"), filename=str(INIT_PATH))
+        add_calls = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add"
+            and any(keyword.arg == "manual_total_episode" for keyword in node.keywords)
+        ]
+        self.assertEqual(len(add_calls), 1, "expected one locked subscription creation call")
+        keywords = {keyword.arg: keyword.value for keyword in add_calls[0].keywords}
+        required = {
+            "tmdbid",
+            "doubanid",
+            "season",
+            "total_episode",
+            "lack_episode",
+            "manual_total_episode",
+        }
+        self.assertFalse(required - keywords.keys())
+        self.assertEqual(ast.literal_eval(keywords["manual_total_episode"]), 1)
+        self.assertIsInstance(keywords["total_episode"], ast.Name)
+        self.assertEqual(keywords["total_episode"].id, "total_episode")
+        self.assertIsInstance(keywords["lack_episode"], ast.Name)
+        self.assertEqual(keywords["lack_episode"].id, "total_episode")
 
 
 if __name__ == "__main__":

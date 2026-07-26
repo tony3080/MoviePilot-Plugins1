@@ -1,8 +1,8 @@
 # MoviePilot 豆瓣订阅插件
 
-面向 MoviePilot V2 的第三方插件仓库，用于开发“豆瓣条目识别、TMDB 作品与季度匹配、准确创建订阅”能力。
+面向 MoviePilot V2 的第三方插件仓库。插件从用户配置的 RSS 获取电视剧，读取豆瓣声明的总集数，匹配 TMDB 作品与季度，再创建锁定总集数的 MoviePilot 订阅。
 
-> 当前状态：仓库骨架已完成，核心匹配与订阅功能尚在开发中。
+当前版本：`0.2.0`，要求 MoviePilot `2.15.1` 或更高版本。
 
 ## 仓库结构
 
@@ -13,8 +13,9 @@
 ├── plugins.v2/
 │   └── doubansubscribe/
 │       ├── __init__.py                  # 插件入口，类名必须为 DoubanSubscribe
+│       ├── core.py                      # RSS 解析、季度假设与候选评分
 │       └── README.md                    # 插件说明
-├── tests/                               # 不依赖 MoviePilot 宿主的仓库校验
+├── tests/                               # 不依赖 MoviePilot 宿主的逻辑与仓库校验
 └── 豆瓣接口与TMDB电视剧匹配设计.md       # 匹配方案设计文档
 ```
 
@@ -28,14 +29,14 @@ python -m unittest discover -s tests -v
 git diff --check
 ```
 
-完整运行验证需要将仓库接入 MoviePilot V2 宿主；这里只执行不依赖宿主模块的静态校验。
+完整的豆瓣、TMDB 与订阅联调需要将仓库接入 MoviePilot V2 宿主；仓库测试覆盖 RSS 解析、标题与季度拆分、匹配评分及订阅锁定调用契约。
 
 ## 接入 MoviePilot
 
 仓库发布到 GitHub 的 `main` 分支后，在 MoviePilot V2 的插件市场中添加仓库地址：
 
 ```text
-https://github.com/<你的 GitHub 用户名>/<仓库名>/
+https://github.com/tony3080/MoviePilot-Plugins1/
 ```
 
 MoviePilot 第三方插件市场仅支持 GitHub 仓库的 `main` 分支。发布新版本时，必须同时更新 `package.v2.json` 的 `version`、`history` 和插件类的 `plugin_version`。
