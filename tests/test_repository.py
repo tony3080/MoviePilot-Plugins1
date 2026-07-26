@@ -55,7 +55,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertFalse(required - self.metadata.keys())
         self.assertIn(self.metadata["level"], {1, 2, 3})
         self.assertIs(self.metadata.get("v2"), True)
-        self.assertEqual(self.metadata.get("system_version"), ">=2.15.1")
+        self.assertEqual(self.metadata.get("system_version"), ">=2.15.0")
 
     def test_runtime_metadata_matches_market(self) -> None:
         mappings = {

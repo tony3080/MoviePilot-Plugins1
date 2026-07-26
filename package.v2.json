@@ -3,14 +3,15 @@
     "name": "豆瓣订阅助手",
     "description": "从 RSS 获取剧集，经豆瓣与 TMDB 匹配后创建锁定豆瓣总集数的订阅。",
     "labels": "订阅",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
     "level": 2,
     "v2": true,
-    "system_version": ">=2.15.1",
+    "system_version": ">=2.15.0",
     "history": {
+      "v0.2.1": "修正最低 MoviePilot 版本为 v2.15.0，该版本已支持手动总集数锁定",
       "v0.2.0": "支持自定义 RSS、豆瓣总集数提取、TMDB 季度匹配和订阅集数锁定",
       "v0.1.0": "创建符合 MoviePilot V2 规范的插件仓库骨架"
     }

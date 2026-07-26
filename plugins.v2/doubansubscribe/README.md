@@ -13,7 +13,7 @@
 5. 创建订阅时将豆瓣总集数写入 `total_episode` 和 `lack_episode`，并设置 `manual_total_episode=1`。
 6. 创建后重新读取数据库，确认集数和锁定标记均已保存。
 
-锁定使用 MoviePilot 自身的“手动修改过总集数”字段。MoviePilot 后续刷新元数据时会保留该总集数，不会用 TMDB 集数覆盖。要求 MoviePilot `2.15.1` 或更高版本。
+锁定使用 MoviePilot 自身的“手动修改过总集数”字段。MoviePilot 后续刷新元数据时会保留该总集数，不会用 TMDB 集数覆盖。要求 MoviePilot `2.15.0` 或更高版本。
 
 ## 配置
 

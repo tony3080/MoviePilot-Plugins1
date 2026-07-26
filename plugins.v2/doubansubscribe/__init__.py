@@ -49,7 +49,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.2.0"
+    plugin_version = "0.2.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -370,7 +370,7 @@ class DoubanSubscribe(_PluginBase):
             if not hasattr(Subscribe, "manual_total_episode"):
                 summary.update({
                     "success": False,
-                    "message": "当前 MoviePilot 不支持手动总集数锁定，请升级到 v2.15.1 或更高版本",
+                    "message": "当前 MoviePilot 不支持手动总集数锁定，请升级到 v2.15.0 或更高版本",
                 })
                 return summary
 
