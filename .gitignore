@@ -18,6 +18,9 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Local design notes
+豆瓣接口与TMDB电视剧匹配设计.md
+
 # Build output
 node_modules/
 build/
