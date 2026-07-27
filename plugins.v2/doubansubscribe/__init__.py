@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,6 +45,12 @@ from .core import (
 
 DEFAULT_RSS_URL = "http://192.168.110.31:9150/rsshub/hot_tv"
 DEFAULT_CRON = "0 */6 * * *"
+MAOYAN_HEAT_URL = "https://piaofang.maoyan.com/dashboard/webHeatData"
+MAOYAN_LIST_TYPES = {
+    "tv": {"label": "电视剧热度榜", "series_type": 0},
+    "web": {"label": "网剧热度榜", "series_type": 1},
+}
+DEFAULT_MAOYAN_TYPES = tuple(MAOYAN_LIST_TYPES)
 DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"
 DEFAULT_SUPPLEMENT_CRON = "0 23 * * *"
 SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
@@ -60,6 +67,7 @@ FAILURE_STATUSES = {
     "feed_error",
     "lock_failed",
     "low_score",
+    "maoyan_error",
     "no_candidate",
     "subscribe_failed",
     "tmdb_detail_missing",
@@ -81,12 +89,12 @@ class DoubanSubscribe(_PluginBase):
     """Create locked MoviePilot subscriptions from user-provided RSS feeds."""
 
     plugin_name = "豆瓣订阅助手"
-    plugin_desc = "按地区筛选 RSS 剧集，追踪豆瓣总集数，并补搜今日未更新订阅。"
+    plugin_desc = "从 RSS 和猫眼榜单发现剧集，锁定豆瓣总集数，并补搜今日未更新订阅。"
     plugin_icon = (
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.4.1"
+    plugin_version = "0.5.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -97,6 +105,9 @@ class DoubanSubscribe(_PluginBase):
     _onlyonce = False
     _proxy = False
     _rss_urls = DEFAULT_RSS_URL
+    _maoyan_enabled = False
+    _maoyan_types = list(DEFAULT_MAOYAN_TYPES)
+    _maoyan_num = 10
     _cron = DEFAULT_CRON
     _supplement_cron = DEFAULT_SUPPLEMENT_CRON
     _max_items = 50
@@ -116,7 +127,25 @@ class DoubanSubscribe(_PluginBase):
         self._enabled = bool(config.get("enabled", False))
         self._onlyonce = bool(config.get("onlyonce", False))
         self._proxy = bool(config.get("proxy", False))
-        self._rss_urls = config.get("rss_urls") or DEFAULT_RSS_URL
+        self._rss_urls = (
+            config.get("rss_urls")
+            if "rss_urls" in config
+            else DEFAULT_RSS_URL
+        )
+        self._maoyan_enabled = bool(config.get("maoyan_enabled", False))
+        maoyan_types = config.get("maoyan_types", list(DEFAULT_MAOYAN_TYPES))
+        if isinstance(maoyan_types, str):
+            maoyan_types = [value.strip() for value in maoyan_types.split(",")]
+        self._maoyan_types = [
+            value for value in (maoyan_types or [])
+            if value in MAOYAN_LIST_TYPES
+        ]
+        self._maoyan_num = self._bounded_int(
+            config.get("maoyan_num"),
+            10,
+            1,
+            30,
+        )
         self._cron = str(config.get("cron") or DEFAULT_CRON).strip()
         self._supplement_cron = str(
             config.get("supplement_cron") or DEFAULT_SUPPLEMENT_CRON
@@ -153,6 +182,9 @@ class DoubanSubscribe(_PluginBase):
             "onlyonce": self._onlyonce,
             "proxy": self._proxy,
             "rss_urls": self._rss_urls,
+            "maoyan_enabled": self._maoyan_enabled,
+            "maoyan_types": self._maoyan_types,
+            "maoyan_num": self._maoyan_num,
             "cron": self._cron,
             "supplement_cron": self._supplement_cron,
             "max_items": self._max_items,
@@ -202,9 +234,9 @@ class DoubanSubscribe(_PluginBase):
 
     def api_run(self) -> Dict[str, Any]:
         if self._sync_lock.locked():
-            return {"success": False, "message": "RSS 处理正在运行"}
+            return {"success": False, "message": "内容源处理正在运行"}
         self._start_sync_thread()
-        return {"success": True, "message": "RSS 处理已启动"}
+        return {"success": True, "message": "内容源处理已启动"}
 
     def api_history(self) -> Dict[str, Any]:
         history = list(reversed(self.get_data("history") or []))
@@ -259,12 +291,12 @@ class DoubanSubscribe(_PluginBase):
         self,
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Retry one failed RSS item without starting a complete feed run."""
+        """Retry one failed content item without starting a complete source run."""
         key = str((payload or {}).get("key") or "").strip()
         if not key:
             return {"success": False, "message": "缺少记录 key"}
         if not self._sync_lock.acquire(blocking=False):
-            return {"success": False, "message": "RSS 处理正在运行，请稍后重试"}
+            return {"success": False, "message": "内容源处理正在运行，请稍后重试"}
         try:
             history = self.get_data("history") or []
             source = next(
@@ -308,7 +340,7 @@ class DoubanSubscribe(_PluginBase):
     def _is_retryable_history_record(record: Dict[str, Any]) -> bool:
         return (
             str(record.get("status") or "") in FAILURE_STATUSES
-            and str(record.get("status") or "") != "feed_error"
+            and str(record.get("status") or "") not in {"feed_error", "maoyan_error"}
             and bool(record.get("title"))
         )
 
@@ -335,7 +367,7 @@ class DoubanSubscribe(_PluginBase):
             try:
                 services.append({
                     "id": "DoubanSubscribe.Sync",
-                    "name": "豆瓣订阅助手 RSS 处理",
+                    "name": "豆瓣订阅助手 内容源处理",
                     "trigger": CronTrigger.from_crontab(self._cron),
                     "func": self.sync,
                     "kwargs": {},
@@ -505,6 +537,9 @@ class DoubanSubscribe(_PluginBase):
             "onlyonce": False,
             "proxy": False,
             "rss_urls": DEFAULT_RSS_URL,
+            "maoyan_enabled": False,
+            "maoyan_types": list(DEFAULT_MAOYAN_TYPES),
+            "maoyan_num": 10,
             "cron": DEFAULT_CRON,
             "supplement_cron": DEFAULT_SUPPLEMENT_CRON,
             "max_items": 50,
@@ -1058,16 +1093,157 @@ class DoubanSubscribe(_PluginBase):
             raise RuntimeError(f"RSS HTTP 状态码 {response.status_code}")
         return parse_feed(response.text, source_url=url)
 
+    def _fetch_maoyan_list(
+        self,
+        list_type: str,
+        cookies: Optional[Dict[str, str]] = None,
+    ) -> List[FeedItem]:
+        config = MAOYAN_LIST_TYPES.get(list_type)
+        if not config:
+            return []
+        url = (
+            f"{MAOYAN_HEAT_URL}?seriesType={config['series_type']}"
+            "&platformType=&showDate=2"
+        )
+        request = (
+            RequestUtils(proxies=settings.PROXY)
+            if self._proxy
+            else RequestUtils()
+        )
+        response = request.get_res(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://piaofang.maoyan.com/",
+            },
+            cookies=cookies or None,
+        )
+        if not response:
+            raise RuntimeError("猫眼请求无响应")
+        if response.status_code != 200:
+            raise RuntimeError(f"猫眼 HTTP 状态码 {response.status_code}")
+        try:
+            payload = response.json()
+        except Exception as error:
+            raise RuntimeError(f"猫眼返回内容不是有效 JSON：{error}") from error
+        if payload.get("status") is False:
+            raise RuntimeError("猫眼接口返回失败状态")
+        return self._parse_maoyan_items(
+            payload=payload,
+            list_type=list_type,
+            source_url=url,
+            limit=self._maoyan_num,
+        )
+
+    @classmethod
+    def _parse_maoyan_items(
+        cls,
+        payload: Dict[str, Any],
+        list_type: str,
+        source_url: str,
+        limit: int,
+        now: Optional[datetime.datetime] = None,
+    ) -> List[FeedItem]:
+        rows = ((payload or {}).get("dataList") or {}).get("list") or []
+        result: List[FeedItem] = []
+        seen = set()
+        for row in rows:
+            info = (row or {}).get("seriesInfo") or {}
+            title = str(info.get("name") or "").strip()
+            normalized = re.sub(r"\s+", "", title).casefold()
+            if not title or normalized in seen:
+                continue
+            seen.add(normalized)
+            release_info = str(info.get("releaseInfo") or "").strip()
+            platform = str(info.get("platformDesc") or "").strip()
+            series_id = (
+                info.get("movieId")
+                or info.get("seriesId")
+                or info.get("id")
+                or (row or {}).get("movieId")
+                or (row or {}).get("seriesId")
+            )
+            guid = (
+                f"maoyan:{list_type}:{series_id}"
+                if series_id
+                else f"maoyan:{list_type}:{normalized}"
+            )
+            link = (
+                f"https://piaofang.maoyan.com/dashboard/web-heat?movieId={series_id}"
+                if series_id
+                else ""
+            )
+            result.append(FeedItem(
+                title=title,
+                link=link,
+                guid=guid,
+                description=" / ".join(
+                    value for value in (release_info, platform) if value
+                ),
+                source_url=source_url,
+                year=cls._maoyan_release_year(release_info, now=now),
+                poster=str(
+                    info.get("imgUrl")
+                    or info.get("img")
+                    or info.get("image")
+                    or ""
+                ),
+            ))
+            if len(result) >= limit:
+                break
+        return result
+
+    @staticmethod
+    def _maoyan_release_year(
+        release_info: str,
+        now: Optional[datetime.datetime] = None,
+    ) -> Optional[str]:
+        text = str(release_info or "")
+        explicit = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", text)
+        if explicit:
+            return explicit.group(1)
+        days = re.search(r"(\d+)\s*天", text)
+        if not days:
+            return None
+        current = now or datetime.datetime.now()
+        return str((current - datetime.timedelta(days=int(days.group(1)))).year)
+
+    @staticmethod
+    def _maoyan_cookies() -> Dict[str, str]:
+        try:
+            from app.helper.browser import PlaywrightHelper
+
+            def page_handler(page) -> Dict[str, str]:
+                return {
+                    str(cookie.get("name")): str(cookie.get("value"))
+                    for cookie in page.context.cookies()
+                    if cookie.get("name")
+                }
+
+            return PlaywrightHelper().action(
+                url="https://piaofang.maoyan.com",
+                callback=page_handler,
+                headless=True,
+            ) or {}
+        except Exception as error:
+            logger.warning(f"豆瓣订阅助手：获取猫眼 Cookie 失败，将尝试直接请求：{error}")
+            return {}
+
     def sync(self) -> Dict[str, Any]:
-        """Fetch all feeds and process unseen entries serially to respect API limits."""
+        """Fetch enabled sources and process unseen entries serially."""
         if not self._sync_lock.acquire(blocking=False):
-            return {"success": False, "message": "RSS 处理正在运行"}
+            return {"success": False, "message": "内容源处理正在运行"}
         started_at = self._now()
         summary = {
             "success": True,
             "started_at": started_at,
             "finished_at": "",
             "feeds": 0,
+            "maoyan_lists": 0,
             "items": 0,
             "subscribed": 0,
             "existing": 0,
@@ -1095,11 +1271,12 @@ class DoubanSubscribe(_PluginBase):
             summary.update(confirmation_summary)
 
             urls = self._configured_urls()
-            if not urls:
+            maoyan_types = self._maoyan_types if self._maoyan_enabled else []
+            if not urls and not maoyan_types:
                 if summary["confirmations"] or summary["pending_total_checks"]:
-                    summary["message"] = "未配置有效 RSS 地址，仅完成受管订阅复核"
+                    summary["message"] = "未配置有效内容来源，仅完成受管订阅复核"
                     return summary
-                summary.update({"success": False, "message": "未配置有效 RSS 地址"})
+                summary.update({"success": False, "message": "未配置有效 RSS 或猫眼榜单"})
                 return summary
 
             history = self.get_data("history") or []
@@ -1121,26 +1298,50 @@ class DoubanSubscribe(_PluginBase):
                         "time": self._now(),
                     })
                     continue
-                for item in items[:self._max_items]:
-                    summary["items"] += 1
-                    if item.key in completed_keys:
-                        summary["skipped"] += 1
-                        continue
-                    record = self._process_item(item)
-                    self._record_history(history, record)
-                    status = record.get("status")
-                    if status == "subscribed":
-                        summary["subscribed"] += 1
-                        completed_keys.add(item.key)
-                        self._mark_processed(processed_items, item.key, record)
-                    elif status in {"existing", "history_existing"}:
-                        summary["existing"] += 1
-                        completed_keys.add(item.key)
-                        self._mark_processed(processed_items, item.key, record)
-                    elif status in SKIPPED_STATUSES:
-                        summary["skipped"] += 1
-                    else:
+                self._process_source_items(
+                    items=items[:self._max_items],
+                    history=history,
+                    processed_items=processed_items,
+                    completed_keys=completed_keys,
+                    summary=summary,
+                )
+
+            if maoyan_types:
+                cookies: Optional[Dict[str, str]] = None
+                for list_type in maoyan_types:
+                    config = MAOYAN_LIST_TYPES.get(list_type) or {}
+                    try:
+                        try:
+                            items = self._fetch_maoyan_list(list_type)
+                        except Exception:
+                            if cookies is None:
+                                cookies = self._maoyan_cookies()
+                            if not cookies:
+                                raise
+                            items = self._fetch_maoyan_list(
+                                list_type,
+                                cookies=cookies,
+                            )
+                        summary["maoyan_lists"] += 1
+                        self._process_source_items(
+                            items=items,
+                            history=history,
+                            processed_items=processed_items,
+                            completed_keys=completed_keys,
+                            summary=summary,
+                        )
+                    except Exception as error:
+                        label = config.get("label") or list_type
+                        logger.error(f"豆瓣订阅助手：获取猫眼{label}失败：{error}")
                         summary["failed"] += 1
+                        self._record_history(history, {
+                            "key": f"maoyan:{list_type}:fetch",
+                            "title": f"猫眼{label}",
+                            "source_url": MAOYAN_HEAT_URL,
+                            "status": "maoyan_error",
+                            "reason": str(error),
+                            "time": self._now(),
+                        })
             self.save_data("history", history)
             return summary
         except Exception as error:
@@ -1151,6 +1352,35 @@ class DoubanSubscribe(_PluginBase):
             summary["finished_at"] = self._now()
             self.save_data("last_run", summary)
             self._sync_lock.release()
+
+    def _process_source_items(
+        self,
+        items: List[FeedItem],
+        history: List[dict],
+        processed_items: Dict[str, Dict[str, Any]],
+        completed_keys: set,
+        summary: Dict[str, Any],
+    ) -> None:
+        for item in items:
+            summary["items"] += 1
+            if item.key in completed_keys:
+                summary["skipped"] += 1
+                continue
+            record = self._process_item(item)
+            self._record_history(history, record)
+            status = record.get("status")
+            if status == "subscribed":
+                summary["subscribed"] += 1
+                completed_keys.add(item.key)
+                self._mark_processed(processed_items, item.key, record)
+            elif status in {"existing", "history_existing"}:
+                summary["existing"] += 1
+                completed_keys.add(item.key)
+                self._mark_processed(processed_items, item.key, record)
+            elif status in SKIPPED_STATUSES:
+                summary["skipped"] += 1
+            else:
+                summary["failed"] += 1
 
     def _process_item(self, item: FeedItem) -> Dict[str, Any]:
         base_record = {

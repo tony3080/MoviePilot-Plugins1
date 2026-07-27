@@ -15,6 +15,9 @@ const defaults = {
   onlyonce: false,
   proxy: false,
   rss_urls: 'http://192.168.110.31:9150/rsshub/hot_tv',
+  maoyan_enabled: false,
+  maoyan_types: ['tv', 'web'],
+  maoyan_num: 10,
   cron: '0 */6 * * *',
   supplement_cron: '0 23 * * *',
   max_items: 50,
@@ -30,6 +33,11 @@ const categories = [
   { title: '其他地区', value: 'other' },
 ]
 
+const maoyanTypes = [
+  { title: '电视剧热度榜', value: 'tv' },
+  { title: '网剧热度榜', value: 'web' },
+]
+
 const config = ref({ ...defaults })
 
 function save() {
@@ -43,6 +51,9 @@ onMounted(() => {
   }
   if (!Array.isArray(config.value.media_categories)) {
     config.value.media_categories = [...defaults.media_categories]
+  }
+  if (!Array.isArray(config.value.maoyan_types)) {
+    config.value.maoyan_types = [...defaults.maoyan_types]
   }
 })
 </script>
@@ -85,7 +96,7 @@ onMounted(() => {
           <VSwitch v-model="config.onlyonce" label="立即运行一次" color="primary" />
         </VCol>
         <VCol cols="12" md="4">
-          <VSwitch v-model="config.proxy" label="RSS 使用代理" color="primary" />
+          <VSwitch v-model="config.proxy" label="内容源使用代理" color="primary" />
         </VCol>
         <VCol cols="12">
           <VTextarea
@@ -96,7 +107,35 @@ onMounted(() => {
           />
         </VCol>
         <VCol cols="12" md="4">
-          <VTextField v-model="config.cron" label="RSS 执行周期" />
+          <VSwitch
+            v-model="config.maoyan_enabled"
+            label="启用猫眼全网榜单"
+            color="primary"
+          />
+        </VCol>
+        <VCol cols="12" md="5">
+          <VSelect
+            v-model="config.maoyan_types"
+            :items="maoyanTypes"
+            label="猫眼榜单"
+            multiple
+            chips
+            closable-chips
+            :disabled="!config.maoyan_enabled"
+          />
+        </VCol>
+        <VCol cols="12" md="3">
+          <VTextField
+            v-model.number="config.maoyan_num"
+            label="每榜处理条数"
+            type="number"
+            min="1"
+            max="30"
+            :disabled="!config.maoyan_enabled"
+          />
+        </VCol>
+        <VCol cols="12" md="4">
+          <VTextField v-model="config.cron" label="内容源执行周期" />
         </VCol>
         <VCol cols="12" md="4">
           <VTextField

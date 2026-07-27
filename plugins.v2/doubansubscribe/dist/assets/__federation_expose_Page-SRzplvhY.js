@@ -30,7 +30,7 @@ const _sfc_main = {
     default: () => ({}),
   },
 },
-  emits: ['close'],
+  emits: ['switch', 'close'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -95,10 +95,72 @@ const supplementHeaders = [
   { title: '早间进度', key: 'start_progress', width: 110 },
   { title: '当前进度', key: 'current_progress', width: 110 },
   { title: '状态', key: 'status', width: 150 },
-  { title: '搜索时间', key: 'searched_at', minWidth: 190 },
+  { title: '检查时间', key: 'checked_at', minWidth: 190 },
 ];
 
-const supplementItems = computed(() => supplement.value?.items || []);
+const historyStatusLabels = {
+  processing: '处理中',
+  subscribed: '已创建订阅',
+  existing: '活动订阅已存在',
+  history_existing: '订阅历史已存在',
+  category_skipped: '地区已跳过',
+  douban_not_found: '未找到豆瓣条目',
+  douban_total_missing: '豆瓣总集数缺失',
+  tmdb_search_error: 'TMDB 搜索失败',
+  tmdb_search_empty: 'TMDB 无搜索结果',
+  tmdb_detail_missing: 'TMDB 详情缺失',
+  no_candidate: '无匹配候选',
+  low_score: '匹配分不足',
+  ambiguous: '候选存在歧义',
+  subscribe_failed: '创建订阅失败',
+  lock_failed: '总集数锁定失败',
+  feed_error: 'RSS 获取失败',
+  maoyan_error: '猫眼榜单获取失败',
+  error: '处理异常',
+};
+const managedStatusLabels = {
+  active: '订阅中',
+  awaiting_douban_total: '等待豆瓣总集数',
+  waiting_confirmation: '等待复核豆瓣',
+  confirming: '正在复核豆瓣',
+  finalizing: '正在完成订阅',
+  completed: '已完成',
+  manual_review: '等待手动处理',
+  verification_error: '复核失败，等待重试',
+  missing_subscription: '订阅卡片不存在',
+};
+const supplementStatusLabels = {
+  pending: '等待晚间检查',
+  needs_search: '等待触发搜索',
+  updated: '今日已有更新',
+  search_triggered: '已触发补齐搜索',
+  search_error: '补齐搜索失败',
+  missing_subscription: '订阅卡片不存在',
+  inactive: '订阅已暂停或完成',
+  identity_changed: '订阅信息已变化',
+};
+const managedItems = computed(() => managed.value.map(item => ({
+  ...item,
+  status: managedStatusLabels[item.status] || item.status || '-',
+})));
+const translatedSupplementItems = computed(() => Object.values(
+  supplement.value?.items || {},
+).map(item => ({
+  ...item,
+  start_progress: (
+    item.baseline_completed !== null
+    && item.baseline_completed !== undefined
+    && item.baseline_total !== null
+    && item.baseline_total !== undefined
+  ) ? `${item.baseline_completed}/${item.baseline_total}` : '',
+  current_progress: (
+    item.current_completed !== null
+    && item.current_completed !== undefined
+    && item.current_total !== null
+    && item.current_total !== undefined
+  ) ? `${item.current_completed}/${item.current_total}` : '',
+  status: supplementStatusLabels[item.status] || item.status || '-',
+})));
 
 function unwrap(response) {
   if (
@@ -119,6 +181,10 @@ function statusColor(status) {
   if (['subscribed', 'existing', 'history_existing'].includes(status)) return 'success'
   if (status === 'category_skipped') return 'warning'
   return 'error'
+}
+
+function statusLabel(status) {
+  return historyStatusLabels[status] || status || '-'
 }
 
 function categoryLabel(value) {
@@ -264,9 +330,9 @@ return (_ctx, _cache) => {
       class: "page-toolbar"
     }, {
       default: _withCtx(() => [
-        _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手", -1)),
+        _cache[13] || (_cache[13] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手", -1)),
         _createVNode(_component_VSpacer),
-        _createVNode(_component_VTooltip, { text: "立即处理 RSS" }, {
+        _createVNode(_component_VTooltip, { text: "立即处理内容源" }, {
           activator: _withCtx(({ props: tooltipProps }) => [
             _createVNode(_component_VBtn, _mergeProps(tooltipProps, {
               icon: "mdi-play",
@@ -309,19 +375,19 @@ return (_ctx, _cache) => {
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VTab, { value: "history" }, {
-          default: _withCtx(() => [...(_cache[13] || (_cache[13] = [
-            _createTextVNode("RSS 处理记录", -1)
+          default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
+            _createTextVNode("处理记录", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "managed" }, {
-          default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
+          default: _withCtx(() => [...(_cache[15] || (_cache[15] = [
             _createTextVNode("受管订阅", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "supplement" }, {
-          default: _withCtx(() => [...(_cache[15] || (_cache[15] = [
+          default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
             _createTextVNode("今日补齐", -1)
           ]))]),
           _: 1
@@ -437,7 +503,7 @@ return (_ctx, _cache) => {
                   variant: "tonal"
                 }, {
                   default: _withCtx(() => [
-                    _createTextVNode(_toDisplayString(item.status), 1)
+                    _createTextVNode(_toDisplayString(statusLabel(item.status)), 1)
                   ]),
                   _: 2
                 }, 1032, ["color"])
@@ -492,7 +558,7 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_VDataTable, {
               headers: managedHeaders,
-              items: managed.value,
+              items: managedItems.value,
               "items-per-page": 25,
               "fixed-header": ""
             }, null, 8, ["items"])
@@ -517,7 +583,7 @@ return (_ctx, _cache) => {
               : _createCommentVNode("", true),
             _createVNode(_component_VDataTable, {
               headers: supplementHeaders,
-              items: supplementItems.value,
+              items: translatedSupplementItems.value,
               "items-per-page": 25,
               "fixed-header": ""
             }, null, 8, ["items"])
@@ -556,7 +622,7 @@ return (_ctx, _cache) => {
               class: "diagnostics-table"
             }, {
               default: _withCtx(() => [
-                _cache[16] || (_cache[16] = _createElementVNode("thead", null, [
+                _cache[17] || (_cache[17] = _createElementVNode("thead", null, [
                   _createElementVNode("tr", null, [
                     _createElementVNode("th", null, "查询词"),
                     _createElementVNode("th", null, "模式"),
@@ -597,12 +663,28 @@ return (_ctx, _cache) => {
         _createTextVNode(_toDisplayString(snackbar.value.text), 1)
       ]),
       _: 1
-    }, 8, ["modelValue", "color"])
+    }, 8, ["modelValue", "color"]),
+    _createVNode(_component_VTooltip, {
+      text: "插件设置",
+      location: "start"
+    }, {
+      activator: _withCtx(({ props: tooltipProps }) => [
+        _createVNode(_component_VBtn, _mergeProps(tooltipProps, {
+          icon: "mdi-cog-outline",
+          color: "primary",
+          elevation: "4",
+          class: "settings-fab",
+          "aria-label": "插件设置",
+          onClick: _cache[12] || (_cache[12] = $event => (emit('switch')))
+        }), null, 16)
+      ]),
+      _: 1
+    })
   ]))
 }
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-af30cd34"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-abc491da"]]);
 
 export { Page as default };

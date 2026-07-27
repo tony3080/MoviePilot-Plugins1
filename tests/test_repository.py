@@ -122,7 +122,22 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("<VDataTableServer", page_source)
         self.assertIn("history/retry", page_source)
         self.assertIn("搜索处理记录", page_source)
+        self.assertIn("emit('switch')", page_source)
+        self.assertIn("mdi-cog-outline", page_source)
+        self.assertIn("已创建订阅", page_source)
         self.assertTrue((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").is_file())
+
+    def test_maoyan_rank_source_is_all_network_only(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        config_source = (
+            PLUGIN_DIR / "src" / "components" / "Config.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("MAOYAN_HEAT_URL", source)
+        self.assertIn("&platformType=&showDate=2", source)
+        self.assertIn("电视剧热度榜", config_source)
+        self.assertIn("网剧热度榜", config_source)
+        for platform in ("腾讯", "爱奇艺", "芒果", "优酷"):
+            self.assertNotIn(platform, config_source)
 
     def test_history_search_and_durable_dedup_contract(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")

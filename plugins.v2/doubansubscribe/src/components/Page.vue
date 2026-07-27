@@ -8,7 +8,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['switch', 'close'])
 
 const activeTab = ref('history')
 const loading = ref(false)
@@ -68,10 +68,72 @@ const supplementHeaders = [
   { title: '早间进度', key: 'start_progress', width: 110 },
   { title: '当前进度', key: 'current_progress', width: 110 },
   { title: '状态', key: 'status', width: 150 },
-  { title: '搜索时间', key: 'searched_at', minWidth: 190 },
+  { title: '检查时间', key: 'checked_at', minWidth: 190 },
 ]
 
-const supplementItems = computed(() => supplement.value?.items || [])
+const historyStatusLabels = {
+  processing: '处理中',
+  subscribed: '已创建订阅',
+  existing: '活动订阅已存在',
+  history_existing: '订阅历史已存在',
+  category_skipped: '地区已跳过',
+  douban_not_found: '未找到豆瓣条目',
+  douban_total_missing: '豆瓣总集数缺失',
+  tmdb_search_error: 'TMDB 搜索失败',
+  tmdb_search_empty: 'TMDB 无搜索结果',
+  tmdb_detail_missing: 'TMDB 详情缺失',
+  no_candidate: '无匹配候选',
+  low_score: '匹配分不足',
+  ambiguous: '候选存在歧义',
+  subscribe_failed: '创建订阅失败',
+  lock_failed: '总集数锁定失败',
+  feed_error: 'RSS 获取失败',
+  maoyan_error: '猫眼榜单获取失败',
+  error: '处理异常',
+}
+const managedStatusLabels = {
+  active: '订阅中',
+  awaiting_douban_total: '等待豆瓣总集数',
+  waiting_confirmation: '等待复核豆瓣',
+  confirming: '正在复核豆瓣',
+  finalizing: '正在完成订阅',
+  completed: '已完成',
+  manual_review: '等待手动处理',
+  verification_error: '复核失败，等待重试',
+  missing_subscription: '订阅卡片不存在',
+}
+const supplementStatusLabels = {
+  pending: '等待晚间检查',
+  needs_search: '等待触发搜索',
+  updated: '今日已有更新',
+  search_triggered: '已触发补齐搜索',
+  search_error: '补齐搜索失败',
+  missing_subscription: '订阅卡片不存在',
+  inactive: '订阅已暂停或完成',
+  identity_changed: '订阅信息已变化',
+}
+const managedItems = computed(() => managed.value.map(item => ({
+  ...item,
+  status: managedStatusLabels[item.status] || item.status || '-',
+})))
+const translatedSupplementItems = computed(() => Object.values(
+  supplement.value?.items || {},
+).map(item => ({
+  ...item,
+  start_progress: (
+    item.baseline_completed !== null
+    && item.baseline_completed !== undefined
+    && item.baseline_total !== null
+    && item.baseline_total !== undefined
+  ) ? `${item.baseline_completed}/${item.baseline_total}` : '',
+  current_progress: (
+    item.current_completed !== null
+    && item.current_completed !== undefined
+    && item.current_total !== null
+    && item.current_total !== undefined
+  ) ? `${item.current_completed}/${item.current_total}` : '',
+  status: supplementStatusLabels[item.status] || item.status || '-',
+})))
 
 function unwrap(response) {
   if (
@@ -92,6 +154,10 @@ function statusColor(status) {
   if (['subscribed', 'existing', 'history_existing'].includes(status)) return 'success'
   if (status === 'category_skipped') return 'warning'
   return 'error'
+}
+
+function statusLabel(status) {
+  return historyStatusLabels[status] || status || '-'
 }
 
 function categoryLabel(value) {
@@ -215,7 +281,7 @@ onMounted(() => {
     <VToolbar density="comfortable" class="page-toolbar">
       <div class="text-h6 ms-3">豆瓣订阅助手</div>
       <VSpacer />
-      <VTooltip text="立即处理 RSS">
+      <VTooltip text="立即处理内容源">
         <template #activator="{ props: tooltipProps }">
           <VBtn
             v-bind="tooltipProps"
@@ -251,7 +317,7 @@ onMounted(() => {
     <VDivider />
 
     <VTabs v-model="activeTab" density="comfortable">
-      <VTab value="history">RSS 处理记录</VTab>
+      <VTab value="history">处理记录</VTab>
       <VTab value="managed">受管订阅</VTab>
       <VTab value="supplement">今日补齐</VTab>
     </VTabs>
@@ -341,7 +407,7 @@ onMounted(() => {
           </template>
           <template #item.status="{ item }">
             <VChip :color="statusColor(item.status)" size="small" variant="tonal">
-              {{ item.status }}
+              {{ statusLabel(item.status) }}
             </VChip>
           </template>
           <template #item.category="{ item }">
@@ -381,7 +447,7 @@ onMounted(() => {
       <VWindowItem value="managed">
         <VDataTable
           :headers="managedHeaders"
-          :items="managed"
+          :items="managedItems"
           :items-per-page="25"
           fixed-header
         />
@@ -399,7 +465,7 @@ onMounted(() => {
         </VAlert>
         <VDataTable
           :headers="supplementHeaders"
-          :items="supplementItems"
+          :items="translatedSupplementItems"
           :items-per-page="25"
           fixed-header
         />
@@ -444,12 +510,27 @@ onMounted(() => {
     <VSnackbar v-model="snackbar.show" :color="snackbar.color" timeout="3500">
       {{ snackbar.text }}
     </VSnackbar>
+
+    <VTooltip text="插件设置" location="start">
+      <template #activator="{ props: tooltipProps }">
+        <VBtn
+          v-bind="tooltipProps"
+          icon="mdi-cog-outline"
+          color="primary"
+          elevation="4"
+          class="settings-fab"
+          aria-label="插件设置"
+          @click="emit('switch')"
+        />
+      </template>
+    </VTooltip>
   </div>
 </template>
 
 <style scoped>
 .page-root {
   min-width: 0;
+  padding-bottom: 72px;
 }
 
 .page-toolbar {
@@ -457,6 +538,13 @@ onMounted(() => {
   top: 0;
   z-index: 10;
   background: rgb(var(--v-theme-surface));
+}
+
+.settings-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 20;
 }
 
 .history-tools {

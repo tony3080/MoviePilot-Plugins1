@@ -859,6 +859,69 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(attempts[0]["request_count"], 3)
         self.assertEqual(attempts[0]["error"], "timeout")
 
+    def test_maoyan_rank_payload_becomes_deduplicated_feed_items(self) -> None:
+        payload = {
+            "dataList": {
+                "list": [
+                    {
+                        "seriesInfo": {
+                            "name": "猫眼测试剧",
+                            "releaseInfo": "上线10天",
+                            "platformDesc": "全网",
+                            "seriesId": 12345,
+                            "imgUrl": "https://img.test/poster.jpg",
+                        },
+                    },
+                    {
+                        "seriesInfo": {
+                            "name": "猫眼测试剧",
+                            "releaseInfo": "上线10天",
+                        },
+                    },
+                ],
+            },
+        }
+        now = datetime.datetime(2026, 1, 5, 9, 0)
+
+        items = self.plugin._parse_maoyan_items(
+            payload=payload,
+            list_type="tv",
+            source_url="https://piaofang.maoyan.com/test",
+            limit=10,
+            now=now,
+        )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].title, "猫眼测试剧")
+        self.assertEqual(items[0].year, "2025")
+        self.assertEqual(items[0].guid, "maoyan:tv:12345")
+        self.assertIn("movieId=12345", items[0].link)
+
+    def test_sync_can_process_maoyan_without_rss_source(self) -> None:
+        self.plugin._rss_urls = ""
+        self.plugin._maoyan_enabled = True
+        self.plugin._maoyan_types = ["tv"]
+        item = plugin_module.FeedItem(
+            title="猫眼测试剧",
+            guid="maoyan:tv:12345",
+            source_url="https://piaofang.maoyan.com/test",
+        )
+        self.plugin._maoyan_cookies = lambda: {}
+        self.plugin._fetch_maoyan_list = lambda *_args, **_kwargs: [item]
+        self.plugin._process_item = lambda value: {
+            **value.to_dict(),
+            "status": "subscribed",
+            "subscribe_id": 77,
+            "time": "2026-07-27T12:00:00+08:00",
+        }
+
+        summary = self.plugin.sync()
+
+        self.assertTrue(summary["success"])
+        self.assertEqual(summary["maoyan_lists"], 1)
+        self.assertEqual(summary["subscribed"], 1)
+        self.assertIn(item.key, self.plugin.get_data("processed_items"))
+
     def test_durable_processed_index_survives_history_removal(self) -> None:
         record = {
             "key": "rss:old-item",

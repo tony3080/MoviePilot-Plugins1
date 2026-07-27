@@ -30,6 +30,9 @@ const defaults = {
   onlyonce: false,
   proxy: false,
   rss_urls: 'http://192.168.110.31:9150/rsshub/hot_tv',
+  maoyan_enabled: false,
+  maoyan_types: ['tv', 'web'],
+  maoyan_num: 10,
   cron: '0 */6 * * *',
   supplement_cron: '0 23 * * *',
   max_items: 50,
@@ -43,6 +46,11 @@ const categories = [
   { title: '欧美剧', value: 'western' },
   { title: '日韩剧', value: 'japan_korea' },
   { title: '其他地区', value: 'other' },
+];
+
+const maoyanTypes = [
+  { title: '电视剧热度榜', value: 'tv' },
+  { title: '网剧热度榜', value: 'web' },
 ];
 
 const config = ref({ ...defaults });
@@ -59,6 +67,9 @@ onMounted(() => {
   if (!Array.isArray(config.value.media_categories)) {
     config.value.media_categories = [...defaults.media_categories];
   }
+  if (!Array.isArray(config.value.maoyan_types)) {
+    config.value.maoyan_types = [...defaults.maoyan_types];
+  }
 });
 
 return (_ctx, _cache) => {
@@ -70,8 +81,8 @@ return (_ctx, _cache) => {
   const _component_VSwitch = _resolveComponent("VSwitch");
   const _component_VCol = _resolveComponent("VCol");
   const _component_VTextarea = _resolveComponent("VTextarea");
-  const _component_VTextField = _resolveComponent("VTextField");
   const _component_VSelect = _resolveComponent("VSelect");
+  const _component_VTextField = _resolveComponent("VTextField");
   const _component_VRow = _resolveComponent("VRow");
   const _component_VForm = _resolveComponent("VForm");
 
@@ -81,7 +92,7 @@ return (_ctx, _cache) => {
       color: "transparent"
     }, {
       default: _withCtx(() => [
-        _cache[11] || (_cache[11] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手配置", -1)),
+        _cache[14] || (_cache[14] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手配置", -1)),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "保存" }, {
           activator: _withCtx(({ props: tooltipProps }) => [
@@ -148,7 +159,7 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSwitch, {
                   modelValue: config.value.proxy,
                   "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((config.value.proxy) = $event)),
-                  label: "RSS 使用代理",
+                  label: "内容源使用代理",
                   color: "primary"
                 }, null, 8, ["modelValue"])
               ]),
@@ -171,10 +182,60 @@ return (_ctx, _cache) => {
               md: "4"
             }, {
               default: _withCtx(() => [
+                _createVNode(_component_VSwitch, {
+                  modelValue: config.value.maoyan_enabled,
+                  "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((config.value.maoyan_enabled) = $event)),
+                  label: "启用猫眼全网榜单",
+                  color: "primary"
+                }, null, 8, ["modelValue"])
+              ]),
+              _: 1
+            }),
+            _createVNode(_component_VCol, {
+              cols: "12",
+              md: "5"
+            }, {
+              default: _withCtx(() => [
+                _createVNode(_component_VSelect, {
+                  modelValue: config.value.maoyan_types,
+                  "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((config.value.maoyan_types) = $event)),
+                  items: maoyanTypes,
+                  label: "猫眼榜单",
+                  multiple: "",
+                  chips: "",
+                  "closable-chips": "",
+                  disabled: !config.value.maoyan_enabled
+                }, null, 8, ["modelValue", "disabled"])
+              ]),
+              _: 1
+            }),
+            _createVNode(_component_VCol, {
+              cols: "12",
+              md: "3"
+            }, {
+              default: _withCtx(() => [
+                _createVNode(_component_VTextField, {
+                  modelValue: config.value.maoyan_num,
+                  "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.maoyan_num) = $event)),
+                  modelModifiers: { number: true },
+                  label: "每榜处理条数",
+                  type: "number",
+                  min: "1",
+                  max: "30",
+                  disabled: !config.value.maoyan_enabled
+                }, null, 8, ["modelValue", "disabled"])
+              ]),
+              _: 1
+            }),
+            _createVNode(_component_VCol, {
+              cols: "12",
+              md: "4"
+            }, {
+              default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: config.value.cron,
-                  "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((config.value.cron) = $event)),
-                  label: "RSS 执行周期"
+                  "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.value.cron) = $event)),
+                  label: "内容源执行周期"
                 }, null, 8, ["modelValue"])
               ]),
               _: 1
@@ -186,7 +247,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: config.value.supplement_cron,
-                  "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((config.value.supplement_cron) = $event)),
+                  "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.value.supplement_cron) = $event)),
                   label: "订阅补齐执行周期",
                   hint: "每日 08:00 建立快照，到此周期检查订阅进度",
                   "persistent-hint": ""
@@ -201,7 +262,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: config.value.max_items,
-                  "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.max_items) = $event)),
+                  "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((config.value.max_items) = $event)),
                   modelModifiers: { number: true },
                   label: "每个 RSS 最大条目数",
                   type: "number",
@@ -218,7 +279,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: config.value.candidate_limit,
-                  "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.value.candidate_limit) = $event)),
+                  "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((config.value.candidate_limit) = $event)),
                   modelModifiers: { number: true },
                   label: "TMDB 候选详情上限",
                   type: "number",
@@ -235,7 +296,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VTextField, {
                   modelValue: config.value.confirmation_days,
-                  "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.value.confirmation_days) = $event)),
+                  "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((config.value.confirmation_days) = $event)),
                   modelModifiers: { number: true },
                   label: "完成后二次确认天数",
                   type: "number",
@@ -249,7 +310,7 @@ return (_ctx, _cache) => {
               default: _withCtx(() => [
                 _createVNode(_component_VSelect, {
                   modelValue: config.value.media_categories,
-                  "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((config.value.media_categories) = $event)),
+                  "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((config.value.media_categories) = $event)),
                   items: categories,
                   label: "需要订阅的剧集类型",
                   multiple: "",
@@ -270,6 +331,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7a098a3e"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-ba759adb"]]);
 
 export { Config as default };
