@@ -132,6 +132,18 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("def _process_pending_totals", source)
         self.assertIn('"total_pending": False', source)
 
+    def test_daily_supplement_contract(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertIn('DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"', source)
+        self.assertIn("SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120", source)
+        self.assertIn('"model": "supplement_cron"', source)
+        self.assertIn('"id": "DoubanSubscribe.SupplementSnapshot"', source)
+        self.assertIn('"id": "DoubanSubscribe.SupplementSearch"', source)
+        self.assertIn('SubscribeOper().list(state="N,R,P")', source)
+        self.assertIn("TmdbChain().tmdb_episodes(", source)
+        self.assertIn("SubscribeChain().search(sid=subscribe_id, manual=True)", source)
+        self.assertIn("time.sleep(SUPPLEMENT_SEARCH_INTERVAL_SECONDS)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

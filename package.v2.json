@@ -1,9 +1,9 @@
 {
   "DoubanSubscribe": {
     "name": "豆瓣订阅助手",
-    "description": "按地区筛选 RSS 剧集，追踪豆瓣总集数，并在完成后延迟复核。",
+    "description": "按地区筛选 RSS 剧集，追踪豆瓣总集数，并补搜今日未更新订阅。",
     "labels": "订阅",
-    "version": "0.3.1",
+    "version": "0.4.0",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -11,6 +11,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.4.0": "每天 08:00 通过 TMDB 记录今日更新订阅及 MoviePilot 进度，按可配置周期对进度未增加的订阅间隔 2 分钟触发缺集搜索；任务仅处理当天快照且同日不重复执行",
       "v0.3.1": "增加已开播但总集数未知时的临时 100 集订阅和周期回写；历史改为最近 50 条展示、全历史搜索及永久去重；完成后复核豆瓣",
       "v0.3.0": "增加地区分类过滤及完成后暂停、延迟复查豆瓣总集数的订阅接管流程，修复数据页面",
       "v0.2.1": "修正最低 MoviePilot 版本为 v2.15.0，该版本已支持手动总集数锁定",

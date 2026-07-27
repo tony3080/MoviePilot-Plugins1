@@ -1,12 +1,14 @@
 """Host-isolated tests for the managed subscription lifecycle."""
 
 import importlib.util
+import datetime
 import json
 import sys
 import types
 import unittest
 from enum import Enum
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +49,7 @@ app_schemas = _module("app.schemas")
 app_schemas_types = _module("app.schemas.types")
 app_chain = _module("app.chain")
 app_chain_subscribe = _module("app.chain.subscribe")
+app_chain_tmdb = _module("app.chain.tmdb")
 app_utils = _module("app.utils")
 app_utils_http = _module("app.utils.http")
 
@@ -152,6 +155,13 @@ class PlaceholderSubscribeChain:
 app_chain_subscribe.SubscribeChain = PlaceholderSubscribeChain
 
 
+class PlaceholderTmdbChain:
+    pass
+
+
+app_chain_tmdb.TmdbChain = PlaceholderTmdbChain
+
+
 class RequestUtils:
     pass
 
@@ -175,6 +185,8 @@ class FakeSubscribe:
         self.tmdbid = 123
         self.doubanid = "456"
         self.season = 1
+        self.episode_group = None
+        self.type = MediaType.TV.value
         self.total_episode = 40
         self.lack_episode = 0
         self.manual_total_episode = 1
@@ -184,6 +196,13 @@ class FakeSubscribe:
 
 class FakeSubscribeOper:
     records = {}
+
+    def list(self, state=None):
+        records = list(self.records.values())
+        if not state:
+            return records
+        states = set(str(state).split(","))
+        return [record for record in records if record.state in states]
 
     def get(self, subscribe_id):
         return self.records.get(int(subscribe_id))
@@ -211,13 +230,30 @@ class FakeSubscribeChain:
         FakeSubscribeOper().delete(kwargs["subscribe"].id)
 
 
+class FakeTmdbChain:
+    episodes = {}
+    calls = []
+
+    def tmdb_episodes(self, **kwargs):
+        self.calls.append(kwargs)
+        key = (
+            kwargs.get("tmdbid"),
+            kwargs.get("season"),
+            kwargs.get("episode_group"),
+        )
+        return self.episodes.get(key, [])
+
+
 class ManagedSubscriptionLifecycleTest(unittest.TestCase):
     def setUp(self) -> None:
         FakeSubscribeOper.records = {}
         FakeSubscribeChain.search_calls = []
         FakeSubscribeChain.finish_calls = []
+        FakeTmdbChain.episodes = {}
+        FakeTmdbChain.calls = []
         plugin_module.SubscribeOper = FakeSubscribeOper
         plugin_module.SubscribeChain = FakeSubscribeChain
+        plugin_module.TmdbChain = FakeTmdbChain
         self.plugin = plugin_module.DoubanSubscribe()
         self.plugin.init_plugin({
             "enabled": True,
@@ -515,6 +551,141 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
 
         json.dumps(self.plugin.get_form(), ensure_ascii=False)
         json.dumps(self.plugin.get_page(), ensure_ascii=False)
+
+    def test_daily_snapshot_records_all_active_tv_subscriptions_airing_today(self) -> None:
+        today = datetime.datetime(
+            2026, 7, 27, 8, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8))
+        )
+        active = FakeSubscribe(20, username="admin")
+        active.lack_episode = 35
+        inactive = FakeSubscribe(21, username="admin")
+        inactive.state = "S"
+        FakeSubscribeOper.records = {20: active, 21: inactive}
+        FakeTmdbChain.episodes[(123, 1, None)] = [
+            types.SimpleNamespace(air_date="2026-07-27", episode_number=6),
+            types.SimpleNamespace(air_date="2026-07-28", episode_number=7),
+        ]
+
+        with patch.object(
+            plugin_module.DoubanSubscribe, "_now_datetime", return_value=today
+        ):
+            summary = self.plugin.capture_daily_supplement_snapshot()
+
+        snapshot = self.plugin.get_data(plugin_module.SUPPLEMENT_DATA_KEY)
+        self.assertTrue(summary["success"])
+        self.assertEqual(summary["checked"], 1)
+        self.assertEqual(summary["today_updates"], 1)
+        self.assertEqual(snapshot["date"], "2026-07-27")
+        self.assertEqual(snapshot["items"]["20"]["baseline_completed"], 5)
+        self.assertEqual(snapshot["items"]["20"]["scheduled_episodes"], [6])
+        self.assertEqual(snapshot["items"]["20"]["status"], "pending")
+
+    def test_daily_supplement_searches_only_unchanged_progress(self) -> None:
+        today = datetime.datetime(
+            2026, 7, 27, 23, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8))
+        )
+        updated = FakeSubscribe(30, username="admin")
+        updated.lack_episode = 35
+        unchanged = FakeSubscribe(31, username="admin")
+        unchanged.lack_episode = 35
+        unchanged.tmdbid = 456
+        FakeSubscribeOper.records = {30: updated, 31: unchanged}
+        FakeTmdbChain.episodes[(123, 1, None)] = [
+            {"air_date": "2026-07-27", "episode_number": 6},
+        ]
+        FakeTmdbChain.episodes[(456, 1, None)] = [
+            {"air_date": "2026-07-27", "episode_number": 9},
+        ]
+
+        morning = today.replace(hour=8)
+        with patch.object(
+            plugin_module.DoubanSubscribe, "_now_datetime", return_value=morning
+        ):
+            self.plugin.capture_daily_supplement_snapshot()
+        updated.lack_episode = 34
+
+        with patch.object(
+            plugin_module.DoubanSubscribe, "_now_datetime", return_value=today
+        ):
+            summary = self.plugin.run_daily_supplement()
+
+        snapshot = self.plugin.get_data(plugin_module.SUPPLEMENT_DATA_KEY)
+        self.assertEqual(summary["updated"], 1)
+        self.assertEqual(summary["searched"], 1)
+        self.assertEqual(
+            FakeSubscribeChain.search_calls,
+            [{"sid": 31, "manual": True}],
+        )
+        self.assertEqual(snapshot["items"]["30"]["status"], "updated")
+        self.assertEqual(snapshot["items"]["31"]["status"], "search_triggered")
+
+    def test_daily_supplement_waits_between_searches_and_runs_only_once(self) -> None:
+        today = datetime.datetime(
+            2026, 7, 27, 23, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8))
+        )
+        first = FakeSubscribe(40, username="admin")
+        first.lack_episode = 35
+        second = FakeSubscribe(41, username="admin")
+        second.tmdbid = 456
+        second.lack_episode = 35
+        FakeSubscribeOper.records = {40: first, 41: second}
+        FakeTmdbChain.episodes[(123, 1, None)] = [
+            {"air_date": "2026-07-27", "episode_number": 6},
+        ]
+        FakeTmdbChain.episodes[(456, 1, None)] = [
+            {"air_date": "2026-07-27", "episode_number": 8},
+        ]
+
+        with patch.object(
+            plugin_module.DoubanSubscribe,
+            "_now_datetime",
+            return_value=today.replace(hour=8),
+        ):
+            self.plugin.capture_daily_supplement_snapshot()
+        with (
+            patch.object(
+                plugin_module.DoubanSubscribe, "_now_datetime", return_value=today
+            ),
+            patch.object(plugin_module.time, "sleep") as sleep,
+        ):
+            first_run = self.plugin.run_daily_supplement()
+            second_run = self.plugin.run_daily_supplement()
+
+        self.assertEqual(first_run["searched"], 2)
+        self.assertTrue(second_run["already_finished"])
+        self.assertEqual(len(FakeSubscribeChain.search_calls), 2)
+        sleep.assert_called_once_with(120)
+
+    def test_daily_supplement_never_uses_previous_day_snapshot(self) -> None:
+        today = datetime.datetime(
+            2026, 7, 28, 23, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8))
+        )
+        subscribe = FakeSubscribe(50, username="admin")
+        subscribe.lack_episode = 35
+        FakeSubscribeOper.records = {50: subscribe}
+        self.plugin.save_data(plugin_module.SUPPLEMENT_DATA_KEY, {
+            "date": "2026-07-27",
+            "captured_at": "2026-07-27T08:00:00+08:00",
+            "finished_at": "",
+            "items": {
+                "50": {
+                    "subscribe_id": 50,
+                    "tmdb_id": 123,
+                    "season": 1,
+                    "baseline_completed": 5,
+                    "status": "pending",
+                },
+            },
+        })
+
+        with patch.object(
+            plugin_module.DoubanSubscribe, "_now_datetime", return_value=today
+        ):
+            summary = self.plugin.run_daily_supplement()
+
+        self.assertFalse(summary["success"])
+        self.assertIn("不是今天", summary["message"])
+        self.assertFalse(FakeSubscribeChain.search_calls)
 
     def test_recent_history_is_50_and_search_uses_complete_history(self) -> None:
         history = [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -19,6 +20,7 @@ from app.plugins import _PluginBase
 from app.schemas import SubscribeCompletionCheckEventData
 from app.schemas.types import ChainEventType, MediaType
 from app.chain.subscribe import SubscribeChain
+from app.chain.tmdb import TmdbChain
 from app.utils.http import RequestUtils
 
 from .core import (
@@ -41,6 +43,11 @@ from .core import (
 
 DEFAULT_RSS_URL = "http://192.168.110.31:9150/rsshub/hot_tv"
 DEFAULT_CRON = "0 */6 * * *"
+DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"
+DEFAULT_SUPPLEMENT_CRON = "0 23 * * *"
+SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
+ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
+SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 PLUGIN_USERNAME = "豆瓣订阅助手"
 SUCCESS_STATUSES = {"subscribed", "existing"}
 SKIPPED_STATUSES = {"category_skipped"}
@@ -53,12 +60,12 @@ class DoubanSubscribe(_PluginBase):
     """Create locked MoviePilot subscriptions from user-provided RSS feeds."""
 
     plugin_name = "豆瓣订阅助手"
-    plugin_desc = "按地区筛选 RSS 剧集，追踪豆瓣总集数，并在完成后延迟复核。"
+    plugin_desc = "按地区筛选 RSS 剧集，追踪豆瓣总集数，并补搜今日未更新订阅。"
     plugin_icon = (
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.3.1"
+    plugin_version = "0.4.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -70,6 +77,7 @@ class DoubanSubscribe(_PluginBase):
     _proxy = False
     _rss_urls = DEFAULT_RSS_URL
     _cron = DEFAULT_CRON
+    _supplement_cron = DEFAULT_SUPPLEMENT_CRON
     _max_items = 50
     _candidate_limit = 10
     _confirmation_days = 7
@@ -79,6 +87,7 @@ class DoubanSubscribe(_PluginBase):
         super().__init__(*args, **kwargs)
         self._sync_lock = threading.Lock()
         self._data_lock = threading.RLock()
+        self._supplement_lock = threading.Lock()
 
     def init_plugin(self, config: dict = None) -> None:
         """Load configuration and optionally start a one-time run."""
@@ -88,6 +97,9 @@ class DoubanSubscribe(_PluginBase):
         self._proxy = bool(config.get("proxy", False))
         self._rss_urls = config.get("rss_urls") or DEFAULT_RSS_URL
         self._cron = str(config.get("cron") or DEFAULT_CRON).strip()
+        self._supplement_cron = str(
+            config.get("supplement_cron") or DEFAULT_SUPPLEMENT_CRON
+        ).strip()
         self._max_items = self._bounded_int(config.get("max_items"), 50, 1, 200)
         self._candidate_limit = self._bounded_int(config.get("candidate_limit"), 10, 1, 30)
         self._confirmation_days = self._bounded_int(
@@ -121,6 +133,7 @@ class DoubanSubscribe(_PluginBase):
             "proxy": self._proxy,
             "rss_urls": self._rss_urls,
             "cron": self._cron,
+            "supplement_cron": self._supplement_cron,
             "max_items": self._max_items,
             "candidate_limit": self._candidate_limit,
             "confirmation_days": self._confirmation_days,
@@ -173,6 +186,7 @@ class DoubanSubscribe(_PluginBase):
             "total": len(history),
             "items": history[:RECENT_HISTORY_LIMIT],
             "managed": self._managed_records(),
+            "supplement": self._supplement_snapshot(),
         }
 
     def api_search_history(
@@ -220,20 +234,48 @@ class DoubanSubscribe(_PluginBase):
         return " ".join(values).casefold()
 
     def get_service(self) -> List[Dict[str, Any]]:
-        if not self._enabled or not self._cron:
+        if not self._enabled:
             return []
-        try:
-            trigger = CronTrigger.from_crontab(self._cron)
-        except (TypeError, ValueError) as error:
-            logger.error(f"豆瓣订阅助手：无效的 Cron 表达式 {self._cron}：{error}")
-            return []
-        return [{
-            "id": "DoubanSubscribe.Sync",
-            "name": "豆瓣订阅助手 RSS 处理",
-            "trigger": trigger,
-            "func": self.sync,
-            "kwargs": {},
-        }]
+        services = []
+        if self._cron:
+            try:
+                services.append({
+                    "id": "DoubanSubscribe.Sync",
+                    "name": "豆瓣订阅助手 RSS 处理",
+                    "trigger": CronTrigger.from_crontab(self._cron),
+                    "func": self.sync,
+                    "kwargs": {},
+                })
+            except (TypeError, ValueError) as error:
+                logger.error(
+                    f"豆瓣订阅助手：无效的 RSS Cron 表达式 {self._cron}：{error}"
+                )
+        if self._supplement_cron:
+            try:
+                services.extend([
+                    {
+                        "id": "DoubanSubscribe.SupplementSnapshot",
+                        "name": "豆瓣订阅助手 今日更新快照",
+                        "trigger": CronTrigger.from_crontab(
+                            DAILY_SUPPLEMENT_SNAPSHOT_CRON
+                        ),
+                        "func": self.capture_daily_supplement_snapshot,
+                        "kwargs": {},
+                    },
+                    {
+                        "id": "DoubanSubscribe.SupplementSearch",
+                        "name": "豆瓣订阅助手 订阅补齐",
+                        "trigger": CronTrigger.from_crontab(self._supplement_cron),
+                        "func": self.run_daily_supplement,
+                        "kwargs": {},
+                    },
+                ])
+            except (TypeError, ValueError) as error:
+                logger.error(
+                    "豆瓣订阅助手：无效的订阅补齐 Cron 表达式 "
+                    f"{self._supplement_cron}：{error}"
+                )
+        return services
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
@@ -276,6 +318,19 @@ class DoubanSubscribe(_PluginBase):
                                         "model": "rss_urls",
                                         "label": "RSS 地址（每行一个）",
                                         "rows": 4,
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "supplement_cron",
+                                        "label": "订阅补齐执行周期",
+                                        "hint": "每天 08:00 记录今日更新订阅；到此周期仍无进度时触发搜索",
+                                        "persistent-hint": True,
                                     },
                                 }],
                             },
@@ -350,6 +405,7 @@ class DoubanSubscribe(_PluginBase):
             "proxy": False,
             "rss_urls": DEFAULT_RSS_URL,
             "cron": DEFAULT_CRON,
+            "supplement_cron": DEFAULT_SUPPLEMENT_CRON,
             "max_items": 50,
             "candidate_limit": 10,
             "confirmation_days": 7,
@@ -359,7 +415,8 @@ class DoubanSubscribe(_PluginBase):
     def get_page(self) -> List[dict]:
         history = list(reversed(self.get_data("history") or []))
         managed = self._managed_records()
-        if not history and not managed:
+        supplement = self._supplement_snapshot()
+        if not history and not managed and not supplement:
             return [{
                 "component": "VAlert",
                 "props": {
@@ -415,6 +472,44 @@ class DoubanSubscribe(_PluginBase):
                 ),
                 "time": record.get("time") or "",
                 "reason": record.get("reason") or "",
+            })
+
+        supplement_status_labels = {
+            "pending": "等待晚间检查",
+            "needs_search": "等待触发搜索",
+            "updated": "今日已有更新",
+            "search_triggered": "已触发补齐搜索",
+            "search_error": "补齐搜索失败",
+            "missing_subscription": "订阅卡片不存在",
+            "inactive": "订阅已暂停或完成",
+            "identity_changed": "订阅信息已变化",
+        }
+        supplement_items = []
+        for item in (supplement.get("items") or {}).values():
+            baseline_completed = item.get("baseline_completed")
+            baseline_total = item.get("baseline_total")
+            current_completed = item.get("current_completed")
+            current_total = item.get("current_total")
+            supplement_items.append({
+                "subscribe_id": item.get("subscribe_id") or "",
+                "title": item.get("title") or "",
+                "episodes": ", ".join(
+                    f"E{number}" for number in (item.get("scheduled_episodes") or [])
+                ),
+                "morning_progress": (
+                    f"{baseline_completed}/{baseline_total}"
+                    if baseline_completed is not None and baseline_total is not None
+                    else ""
+                ),
+                "current_progress": (
+                    f"{current_completed}/{current_total}"
+                    if current_completed is not None and current_total is not None
+                    else ""
+                ),
+                "status": supplement_status_labels.get(
+                    item.get("status"), item.get("status") or "",
+                ),
+                "reason": item.get("reason") or "",
             })
         return [{
             "component": "VRow",
@@ -490,6 +585,44 @@ class DoubanSubscribe(_PluginBase):
                         }],
                     }],
                 },
+                {
+                    "component": "VCol",
+                    "props": {"cols": 12},
+                    "content": [{
+                        "component": "VCard",
+                        "props": {
+                            "title": "今日订阅补齐",
+                            "subtitle": (
+                                f"{supplement.get('date') or '尚无快照'}；"
+                                "每天 08:00 记录进度，补齐周期仅处理当天未更新订阅"
+                            ),
+                            "variant": "tonal",
+                        },
+                        "content": [{
+                            "component": "VCardText",
+                            "content": [{
+                                "component": "VDataTableVirtual",
+                                "props": {
+                                    "headers": [
+                                        {"title": "订阅ID", "key": "subscribe_id"},
+                                        {"title": "标题", "key": "title"},
+                                        {"title": "今日排期", "key": "episodes"},
+                                        {"title": "08:00 进度", "key": "morning_progress"},
+                                        {"title": "当前进度", "key": "current_progress"},
+                                        {"title": "状态", "key": "status"},
+                                        {"title": "说明", "key": "reason"},
+                                    ],
+                                    "items": supplement_items,
+                                    "height": "22rem",
+                                    "density": "compact",
+                                    "fixed-header": True,
+                                    "hide-no-data": False,
+                                    "hover": True,
+                                },
+                            }],
+                        }],
+                    }],
+                },
             ],
         }]
 
@@ -509,6 +642,291 @@ class DoubanSubscribe(_PluginBase):
             name="DoubanSubscribeSync",
             daemon=True,
         ).start()
+
+    def capture_daily_supplement_snapshot(self) -> Dict[str, Any]:
+        """Record progress for active TV subscriptions with episodes airing today."""
+        if not self._supplement_lock.acquire(blocking=False):
+            return {"success": False, "message": "订阅补齐任务正在运行"}
+        try:
+            now = self._now_datetime()
+            today = now.date().isoformat()
+            existing = self._supplement_snapshot()
+            if existing.get("date") == today:
+                return {
+                    "success": True,
+                    "message": "今日订阅快照已存在",
+                    "date": today,
+                    "today_updates": len(existing.get("items") or {}),
+                    "already_captured": True,
+                }
+
+            items: Dict[str, Dict[str, Any]] = {}
+            checked = 0
+            failed = 0
+            subscriptions = SubscribeOper().list(state="N,R,P") or []
+            for subscribe in subscriptions:
+                if not self._is_active_tv_subscription(subscribe):
+                    continue
+                checked += 1
+                subscribe_id = getattr(subscribe, "id", None)
+                tmdb_id = getattr(subscribe, "tmdbid", None)
+                season = getattr(subscribe, "season", None)
+                episode_group = getattr(subscribe, "episode_group", None)
+                try:
+                    episodes = TmdbChain().tmdb_episodes(
+                        tmdbid=int(tmdb_id),
+                        season=int(season),
+                        episode_group=episode_group,
+                    ) or []
+                except Exception as error:
+                    failed += 1
+                    logger.error(
+                        f"豆瓣订阅助手：查询订阅 {subscribe_id} 今日 TMDB 排期失败：{error}"
+                    )
+                    continue
+                scheduled_episodes = self._episodes_airing_on(episodes, today)
+                if not scheduled_episodes:
+                    continue
+                total, lack, completed = self._subscription_progress(subscribe)
+                items[str(subscribe_id)] = {
+                    "subscribe_id": subscribe_id,
+                    "title": getattr(subscribe, "name", "") or "",
+                    "tmdb_id": int(tmdb_id),
+                    "season": int(season),
+                    "episode_group": episode_group or "",
+                    "scheduled_episodes": scheduled_episodes,
+                    "baseline_completed": completed,
+                    "baseline_total": total,
+                    "baseline_lack": lack,
+                    "current_completed": None,
+                    "current_total": None,
+                    "current_lack": None,
+                    "status": "pending",
+                    "checked_at": "",
+                    "reason": "等待订阅补齐周期检查",
+                }
+
+            snapshot = {
+                "date": today,
+                "captured_at": self._format_datetime(now),
+                "finished_at": "",
+                "checked_subscriptions": checked,
+                "tmdb_failures": failed,
+                "items": items,
+            }
+            self._save_supplement_snapshot(snapshot)
+            logger.info(
+                f"豆瓣订阅助手：今日更新快照完成，检查 {checked} 个订阅，"
+                f"记录 {len(items)} 个今日更新订阅"
+            )
+            return {
+                "success": True,
+                "date": today,
+                "checked": checked,
+                "today_updates": len(items),
+                "failed": failed,
+            }
+        finally:
+            self._supplement_lock.release()
+
+    def run_daily_supplement(self) -> Dict[str, Any]:
+        """Search today's scheduled subscriptions whose MoviePilot progress did not grow."""
+        if not self._supplement_lock.acquire(blocking=False):
+            return {"success": False, "message": "订阅补齐任务正在运行"}
+        try:
+            now = self._now_datetime()
+            today = now.date().isoformat()
+            snapshot = self._supplement_snapshot()
+            if not snapshot:
+                return {
+                    "success": False,
+                    "message": "没有今日 08:00 订阅快照，已跳过补齐",
+                    "date": today,
+                }
+            if snapshot.get("date") != today:
+                return {
+                    "success": False,
+                    "message": "订阅快照不是今天的数据，已跳过补齐",
+                    "date": today,
+                }
+            if snapshot.get("finished_at"):
+                return {
+                    "success": True,
+                    "message": "今日订阅补齐已经执行",
+                    "date": today,
+                    "already_finished": True,
+                }
+
+            items = snapshot.get("items") or {}
+            search_items = []
+            oper = SubscribeOper()
+            checked_at = self._format_datetime(now)
+            for item in items.values():
+                status = str(item.get("status") or "pending")
+                if status not in {"pending", "needs_search"}:
+                    continue
+                subscribe = oper.get(item.get("subscribe_id"))
+                if not subscribe:
+                    self._set_supplement_item_status(
+                        item, "missing_subscription", checked_at,
+                        "订阅卡片已不存在",
+                    )
+                    continue
+                if not self._is_active_tv_subscription(subscribe):
+                    self._set_supplement_item_status(
+                        item, "inactive", checked_at,
+                        "订阅已不在活动状态",
+                    )
+                    continue
+                if (
+                    self._safe_int(getattr(subscribe, "tmdbid", None)) !=
+                    self._safe_int(item.get("tmdb_id"))
+                    or self._safe_int(getattr(subscribe, "season", None)) !=
+                    self._safe_int(item.get("season"))
+                ):
+                    self._set_supplement_item_status(
+                        item, "identity_changed", checked_at,
+                        "订阅的 TMDB 或季度已变化",
+                    )
+                    continue
+
+                total, lack, completed = self._subscription_progress(subscribe)
+                item.update({
+                    "current_completed": completed,
+                    "current_total": total,
+                    "current_lack": lack,
+                    "checked_at": checked_at,
+                })
+                baseline = self._safe_int(item.get("baseline_completed"), 0)
+                if completed > baseline:
+                    item.update({
+                        "status": "updated",
+                        "reason": f"订阅进度已从 {baseline} 增加到 {completed}",
+                    })
+                else:
+                    item.update({
+                        "status": "needs_search",
+                        "reason": f"订阅进度仍为 {completed}，等待触发补齐搜索",
+                    })
+                    search_items.append(item)
+
+            self._save_supplement_snapshot(snapshot)
+
+            searched = 0
+            search_failed = 0
+            for index, item in enumerate(search_items):
+                if index:
+                    time.sleep(SUPPLEMENT_SEARCH_INTERVAL_SECONDS)
+                subscribe_id = item.get("subscribe_id")
+                try:
+                    SubscribeChain().search(sid=subscribe_id, manual=True)
+                    searched += 1
+                    self._set_supplement_item_status(
+                        item,
+                        "search_triggered",
+                        self._format_datetime(self._now_datetime()),
+                        "已触发 MoviePilot 搜索全部缺失集数",
+                    )
+                except Exception as error:
+                    search_failed += 1
+                    self._set_supplement_item_status(
+                        item,
+                        "search_error",
+                        self._format_datetime(self._now_datetime()),
+                        f"触发 MoviePilot 搜索失败：{error}",
+                    )
+                    logger.error(
+                        f"豆瓣订阅助手：订阅 {subscribe_id} 补齐搜索失败：{error}"
+                    )
+                self._save_supplement_snapshot(snapshot)
+
+            snapshot["finished_at"] = self._format_datetime(self._now_datetime())
+            self._save_supplement_snapshot(snapshot)
+            updated = sum(
+                1 for item in items.values() if item.get("status") == "updated"
+            )
+            skipped = len(items) - updated - searched - search_failed
+            logger.info(
+                f"豆瓣订阅助手：今日订阅补齐完成，已更新 {updated} 个，"
+                f"触发搜索 {searched} 个，搜索失败 {search_failed} 个"
+            )
+            return {
+                "success": True,
+                "date": today,
+                "items": len(items),
+                "updated": updated,
+                "searched": searched,
+                "search_failed": search_failed,
+                "skipped": skipped,
+            }
+        finally:
+            self._supplement_lock.release()
+
+    def _supplement_snapshot(self) -> Dict[str, Any]:
+        value = self.get_data(SUPPLEMENT_DATA_KEY)
+        return value if isinstance(value, dict) else {}
+
+    def _save_supplement_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        with self._data_lock:
+            self.save_data(SUPPLEMENT_DATA_KEY, snapshot)
+
+    @staticmethod
+    def _set_supplement_item_status(
+        item: Dict[str, Any],
+        status: str,
+        checked_at: str,
+        reason: str,
+    ) -> None:
+        item.update({
+            "status": status,
+            "checked_at": checked_at,
+            "reason": reason,
+        })
+
+    @staticmethod
+    def _is_active_tv_subscription(subscribe: Any) -> bool:
+        return bool(
+            subscribe
+            and getattr(subscribe, "state", None) in ACTIVE_SUBSCRIBE_STATES
+            and getattr(subscribe, "type", None) == MediaType.TV.value
+            and getattr(subscribe, "tmdbid", None) is not None
+            and getattr(subscribe, "season", None) is not None
+        )
+
+    @classmethod
+    def _subscription_progress(cls, subscribe: Any) -> Tuple[int, int, int]:
+        total = max(cls._safe_int(getattr(subscribe, "total_episode", None), 0), 0)
+        lack_value = getattr(subscribe, "lack_episode", None)
+        lack = total if lack_value is None else max(cls._safe_int(lack_value, total), 0)
+        completed = max(total - lack, 0)
+        return total, lack, min(completed, total)
+
+    @staticmethod
+    def _episodes_airing_on(episodes: List[Any], date_value: str) -> List[int]:
+        numbers = set()
+        for episode in episodes:
+            if isinstance(episode, dict):
+                air_date = episode.get("air_date")
+                episode_number = episode.get("episode_number")
+            else:
+                air_date = getattr(episode, "air_date", None)
+                episode_number = getattr(episode, "episode_number", None)
+            if str(air_date or "") != date_value:
+                continue
+            try:
+                number = int(episode_number)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                numbers.add(number)
+        return sorted(numbers)
+
+    @staticmethod
+    def _safe_int(value: Any, default: Optional[int] = None) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     def _configured_urls(self) -> List[str]:
         values = self._rss_urls if isinstance(self._rss_urls, list) else str(self._rss_urls or "").splitlines()
