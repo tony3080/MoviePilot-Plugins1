@@ -20,6 +20,8 @@ Thumbs.db
 
 # Local design notes
 豆瓣接口与TMDB电视剧匹配设计.md
+0.4.1改进需求.md
+开发交接文档.md
 
 # Build output
 node_modules/
