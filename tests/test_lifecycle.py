@@ -196,6 +196,7 @@ class FakeSubscribe:
 
 class FakeSubscribeOper:
     records = {}
+    history = set()
 
     def list(self, state=None):
         records = list(self.records.values())
@@ -206,6 +207,20 @@ class FakeSubscribeOper:
 
     def get(self, subscribe_id):
         return self.records.get(int(subscribe_id))
+
+    def get_by(self, type=None, season=None, tmdbid=None):
+        return next(
+            (
+                record for record in self.records.values()
+                if record.type == type
+                and record.season == season
+                and record.tmdbid == tmdbid
+            ),
+            None,
+        )
+
+    def exist_history(self, tmdbid=None, season=None):
+        return (tmdbid, season) in self.history
 
     def update(self, subscribe_id, payload):
         subscribe = self.get(subscribe_id)
@@ -221,6 +236,7 @@ class FakeSubscribeOper:
 class FakeSubscribeChain:
     search_calls = []
     finish_calls = []
+    add_calls = []
 
     def search(self, **kwargs):
         self.search_calls.append(kwargs)
@@ -229,9 +245,14 @@ class FakeSubscribeChain:
         self.finish_calls.append(kwargs)
         FakeSubscribeOper().delete(kwargs["subscribe"].id)
 
+    def add(self, **kwargs):
+        self.add_calls.append(kwargs)
+        return None, "unexpected add"
+
 
 class FakeTmdbChain:
     episodes = {}
+    seasons = {}
     calls = []
 
     def tmdb_episodes(self, **kwargs):
@@ -243,13 +264,20 @@ class FakeTmdbChain:
         )
         return self.episodes.get(key, [])
 
+    def tmdb_seasons(self, tmdbid):
+        self.calls.append({"tmdbid": tmdbid, "method": "tmdb_seasons"})
+        return self.seasons.get(tmdbid, [])
+
 
 class ManagedSubscriptionLifecycleTest(unittest.TestCase):
     def setUp(self) -> None:
         FakeSubscribeOper.records = {}
+        FakeSubscribeOper.history = set()
         FakeSubscribeChain.search_calls = []
         FakeSubscribeChain.finish_calls = []
+        FakeSubscribeChain.add_calls = []
         FakeTmdbChain.episodes = {}
+        FakeTmdbChain.seasons = {}
         FakeTmdbChain.calls = []
         plugin_module.SubscribeOper = FakeSubscribeOper
         plugin_module.SubscribeChain = FakeSubscribeChain
@@ -332,6 +360,7 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.plugin._match_tmdb = lambda *_args: (
             decision,
             {(321, 1): mediainfo},
+            [],
         )
         self.plugin._create_subscription = lambda **kwargs: (
             captured.update(kwargs)
@@ -704,17 +733,131 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
 
         recent = self.plugin.api_history()
         searched = self.plugin.api_search_history(keyword="唯一可搜索", limit=10)
-        page = self.plugin.get_page()
-        page_items = (
-            page[0]["content"][1]["content"][0]["content"][0]["content"][0]
-            ["props"]["items"]
-        )
 
         self.assertEqual(recent["total"], 75)
         self.assertEqual(len(recent["items"]), 50)
-        self.assertEqual(len(page_items), 50)
+        self.assertEqual(self.plugin.get_page(), [])
         self.assertEqual(searched["total"], 1)
         self.assertEqual(searched["items"][0]["key"], "item:3")
+
+    def test_history_group_filter_and_single_record_retry(self) -> None:
+        failed = {
+            "key": "douban:100",
+            "title": "失败剧集",
+            "douban_id": "100",
+            "status": "tmdb_search_empty",
+            "reason": "empty",
+            "time": "2026-07-27T12:00:00+08:00",
+        }
+        self.plugin.save_data("history", [
+            failed,
+            {
+                "key": "douban:101",
+                "title": "成功剧集",
+                "status": "subscribed",
+            },
+        ])
+        filtered = self.plugin.api_search_history(group="failure")
+        self.assertEqual(filtered["total"], 1)
+        self.assertTrue(filtered["items"][0]["retryable"])
+        self.plugin._process_item = lambda item: {
+            **item.to_dict(),
+            "status": "history_existing",
+            "reason": "history",
+            "time": "2026-07-27T13:00:00+08:00",
+        }
+
+        retried = self.plugin.api_retry_history({"key": "douban:100"})
+
+        self.assertTrue(retried["success"])
+        stored = self.plugin.get_data("history")
+        self.assertEqual(len(stored), 2)
+        self.assertEqual(
+            next(item for item in stored if item["key"] == "douban:100")["status"],
+            "history_existing",
+        )
+        self.assertIn("douban:100", self.plugin.get_data("processed_items"))
+
+    def test_subscription_history_same_tmdb_and_season_is_skipped(self) -> None:
+        FakeSubscribeOper.history = {(123, 2)}
+        mediainfo = types.SimpleNamespace(
+            tmdb_id=123,
+            title="测试剧",
+            year="2026",
+        )
+
+        result = self.plugin._create_subscription(
+            mediainfo=mediainfo,
+            douban_id="456",
+            season=2,
+            total_episode=12,
+            category="domestic",
+            source_key="douban:456",
+        )
+
+        self.assertEqual(result["status"], "history_existing")
+        self.assertEqual(FakeSubscribeChain.add_calls, [])
+
+    def test_arc_title_uses_tmdb_season_name_to_select_real_season(self) -> None:
+        media = types.SimpleNamespace(
+            tmdb_id=85937,
+            title="鬼灭之刃",
+            original_title="鬼滅の刃",
+            names=[],
+            year="2019",
+            seasons={},
+            season_years={},
+            actors=[],
+            directors=[],
+        )
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=lambda **_kwargs: [types.SimpleNamespace(tmdb_id=85937)],
+            recognize_media=lambda **_kwargs: media,
+        )
+        FakeTmdbChain.seasons[85937] = [
+            types.SimpleNamespace(
+                season_number=1,
+                name="竈門炭治郎 立志篇",
+                episode_count=26,
+                air_date="2019-04-06",
+            ),
+            types.SimpleNamespace(
+                season_number=2,
+                name="无限列车篇",
+                episode_count=7,
+                air_date="2021-10-10",
+            ),
+        ]
+
+        decision, _media, attempts = self.plugin._match_tmdb({
+            "title": "鬼灭之刃 无限列车篇",
+            "year": "2021",
+            "episodes_count": 7,
+        }, 7)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 2)
+        self.assertTrue(any(item["mode"] == "arc_title" for item in attempts))
+
+    def test_tmdb_search_error_retries_and_records_diagnostics(self) -> None:
+        calls = []
+
+        def fail_search(**_kwargs):
+            calls.append(True)
+            raise RuntimeError("timeout")
+
+        self.plugin.chain = types.SimpleNamespace(search_medias=fail_search)
+        with patch.object(plugin_module.time, "sleep") as sleep:
+            decision, _media, attempts = self.plugin._match_tmdb({
+                "title": "测试剧",
+                "year": "2026",
+            }, 12)
+
+        self.assertEqual(decision.status, "tmdb_search_error")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 5])
+        self.assertEqual(attempts[0]["request_count"], 3)
+        self.assertEqual(attempts[0]["error"], "timeout")
 
     def test_durable_processed_index_survives_history_removal(self) -> None:
         record = {

@@ -87,6 +87,18 @@ class TitleHypothesisTest(unittest.TestCase):
         self.assertIn(("Punishment 2", None, "original_title"), paths)
         self.assertIn(("罚罪", 2, "base_and_season"), paths)
 
+    def test_named_arc_is_split_only_with_an_explicit_delimiter(self) -> None:
+        hypotheses = core.build_title_hypotheses("鬼灭之刃 无限列车篇")
+        self.assertIn(
+            ("鬼灭之刃", "无限列车篇", "arc_title"),
+            {(item.title, item.arc_title, item.mode) for item in hypotheses},
+        )
+        unsplit = core.build_title_hypotheses("鬼灭之刃无限列车篇")
+        self.assertEqual(
+            [(item.title, item.mode) for item in unsplit],
+            [("鬼灭之刃无限列车篇", "exact_title")],
+        )
+
 
 class DoubanEpisodeTest(unittest.TestCase):
     def test_prefers_declared_episode_count(self) -> None:
@@ -225,6 +237,33 @@ class CandidateScoringTest(unittest.TestCase):
         source = {**self.source, "year": "2025年"}
         scored = core.score_candidate(source, candidate)
         self.assertGreaterEqual(scored.score, 35)
+
+    def test_named_arc_matches_tmdb_season_name_without_guessing_season(self) -> None:
+        source = {
+            "title": "鬼灭之刃 无限列车篇",
+            "year": "2021",
+            "total_episode": 7,
+        }
+        candidate = core.TmdbCandidate(
+            tmdb_id=85937,
+            title="鬼灭之刃",
+            year="2019",
+            season=2,
+            season_year="2021",
+            season_episode_count=7,
+            mode="arc_title",
+            hypothesis_title="鬼灭之刃",
+            season_name="无限列车篇",
+            arc_title="无限列车篇",
+        )
+        decision = core.choose_match([core.score_candidate(source, candidate)])
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 2)
+
+    def test_generic_tmdb_season_name_is_not_arc_evidence(self) -> None:
+        self.assertEqual(core.arc_name_match_score("无限列车篇", "Season 2"), 0)
+        self.assertEqual(core.arc_name_match_score("无限列车篇", "第二季"), 0)
 
 
 if __name__ == "__main__":

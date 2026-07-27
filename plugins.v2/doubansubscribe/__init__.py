@@ -29,6 +29,7 @@ from .core import (
     MatchDecision,
     ScoredCandidate,
     TmdbCandidate,
+    arc_name_match_score,
     build_search_hypotheses,
     build_title_hypotheses,
     classify_media_region,
@@ -49,8 +50,28 @@ SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
 ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 PLUGIN_USERNAME = "豆瓣订阅助手"
-SUCCESS_STATUSES = {"subscribed", "existing"}
+SUCCESS_STATUSES = {"subscribed", "existing", "history_existing"}
 SKIPPED_STATUSES = {"category_skipped"}
+FAILURE_STATUSES = {
+    "ambiguous",
+    "douban_not_found",
+    "douban_total_missing",
+    "error",
+    "feed_error",
+    "lock_failed",
+    "low_score",
+    "no_candidate",
+    "subscribe_failed",
+    "tmdb_detail_missing",
+    "tmdb_search_empty",
+    "tmdb_search_error",
+}
+STATUS_GROUPS = {
+    "success": SUCCESS_STATUSES,
+    "skipped": SKIPPED_STATUSES,
+    "failure": FAILURE_STATUSES,
+}
+TMDB_RETRY_DELAYS = (2, 5)
 DEFAULT_MEDIA_CATEGORIES = tuple(MEDIA_CATEGORY_LABELS)
 RECENT_HISTORY_LIMIT = 50
 UNKNOWN_TOTAL_EPISODE = 100
@@ -65,7 +86,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.4.0"
+    plugin_version = "0.4.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -170,6 +191,13 @@ class DoubanSubscribe(_PluginBase):
                 "auth": "bear",
                 "summary": "搜索全部处理历史",
             },
+            {
+                "path": "/history/retry",
+                "endpoint": self.api_retry_history,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "重试单条失败记录",
+            },
         ]
 
     def api_run(self) -> Dict[str, Any]:
@@ -193,6 +221,7 @@ class DoubanSubscribe(_PluginBase):
         self,
         keyword: str = "",
         status: str = "",
+        group: str = "",
         category: str = "",
         offset: int = 0,
         limit: int = RECENT_HISTORY_LIMIT,
@@ -202,21 +231,86 @@ class DoubanSubscribe(_PluginBase):
         safe_limit = self._bounded_int(limit, RECENT_HISTORY_LIMIT, 1, 200)
         keyword = str(keyword or "").strip().casefold()
         status = str(status or "").strip()
+        group = str(group or "").strip()
         category = str(category or "").strip()
         records = list(reversed(self.get_data("history") or []))
         matches = [
             record for record in records
             if (not status or str(record.get("status") or "") == status)
+            and (
+                not group
+                or str(record.get("status") or "") in STATUS_GROUPS.get(group, set())
+            )
             and (not category or str(record.get("category") or "") == category)
             and (not keyword or keyword in self._history_search_text(record))
         ]
+        items = [dict(record) for record in matches[safe_offset:safe_offset + safe_limit]]
+        for record in items:
+            record["retryable"] = self._is_retryable_history_record(record)
         return {
             "success": True,
             "total": len(matches),
             "offset": safe_offset,
             "limit": safe_limit,
-            "items": matches[safe_offset:safe_offset + safe_limit],
+            "items": items,
         }
+
+    def api_retry_history(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Retry one failed RSS item without starting a complete feed run."""
+        key = str((payload or {}).get("key") or "").strip()
+        if not key:
+            return {"success": False, "message": "缺少记录 key"}
+        if not self._sync_lock.acquire(blocking=False):
+            return {"success": False, "message": "RSS 处理正在运行，请稍后重试"}
+        try:
+            history = self.get_data("history") or []
+            source = next(
+                (record for record in history if str(record.get("key") or "") == key),
+                None,
+            )
+            if not source:
+                return {"success": False, "message": "未找到该处理记录"}
+            if not self._is_retryable_history_record(source):
+                return {"success": False, "message": "该记录不是可重试的失败条目"}
+            item = FeedItem(
+                title=str(source.get("title") or ""),
+                link=str(source.get("link") or ""),
+                guid=str(source.get("guid") or ""),
+                description=str(source.get("description") or ""),
+                published=str(source.get("published") or ""),
+                source_url=str(source.get("source_url") or ""),
+                douban_id=str(source.get("douban_id") or "") or None,
+                year=str(source.get("year") or "") or None,
+                poster=str(source.get("poster") or ""),
+            )
+            record = self._process_item(item)
+            record["key"] = key
+            self._record_history(history, record)
+            self.save_data("history", history)
+            if record.get("status") in SUCCESS_STATUSES:
+                processed = self._processed_index(history)
+                self._mark_processed(processed, key, record)
+            return {
+                "success": True,
+                "message": "重试完成",
+                "item": record,
+            }
+        except Exception as error:
+            logger.error(f"豆瓣订阅助手：重试记录 {key} 失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
+        finally:
+            self._sync_lock.release()
+
+    @staticmethod
+    def _is_retryable_history_record(record: Dict[str, Any]) -> bool:
+        return (
+            str(record.get("status") or "") in FAILURE_STATUSES
+            and str(record.get("status") or "") != "feed_error"
+            and bool(record.get("title"))
+        )
 
     @staticmethod
     def _history_search_text(record: Dict[str, Any]) -> str:
@@ -277,7 +371,14 @@ class DoubanSubscribe(_PluginBase):
                 )
         return services
 
+    @staticmethod
+    def get_render_mode() -> Tuple[str, str]:
+        return "vue", "dist/assets"
+
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        return [], self._default_config()
+
+    def _legacy_get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
             {
                 "component": "VForm",
@@ -413,6 +514,9 @@ class DoubanSubscribe(_PluginBase):
         }
 
     def get_page(self) -> List[dict]:
+        return []
+
+    def _legacy_get_page(self) -> List[dict]:
         history = list(reversed(self.get_data("history") or []))
         managed = self._managed_records()
         supplement = self._supplement_snapshot()
@@ -1029,7 +1133,7 @@ class DoubanSubscribe(_PluginBase):
                         summary["subscribed"] += 1
                         completed_keys.add(item.key)
                         self._mark_processed(processed_items, item.key, record)
-                    elif status == "existing":
+                    elif status in {"existing", "history_existing"}:
                         summary["existing"] += 1
                         completed_keys.add(item.key)
                         self._mark_processed(processed_items, item.key, record)
@@ -1086,7 +1190,11 @@ class DoubanSubscribe(_PluginBase):
                     "豆瓣详情没有明确总集数，且没有可靠的已开播证据，未创建订阅",
                 )
 
-            decision, media_by_key = self._match_tmdb(douban_info, total_episode or 0)
+            decision, media_by_key, search_attempts = self._match_tmdb(
+                douban_info,
+                total_episode or 0,
+            )
+            base_record["search_attempts"] = search_attempts
             if decision.winner:
                 winner = decision.winner
                 base_record.update({
@@ -1151,7 +1259,11 @@ class DoubanSubscribe(_PluginBase):
         self,
         douban_info: Dict[str, Any],
         total_episode: int,
-    ) -> Tuple[MatchDecision, Dict[Tuple[int, int], Any]]:
+    ) -> Tuple[
+        MatchDecision,
+        Dict[Tuple[int, int], Any],
+        List[Dict[str, Any]],
+    ]:
         title = str(douban_info.get("title") or "").strip()
         year = str(douban_info.get("year") or "").strip() or None
         source = {
@@ -1166,7 +1278,17 @@ class DoubanSubscribe(_PluginBase):
         scored: List[ScoredCandidate] = []
         media_by_key: Dict[Tuple[int, int], Any] = {}
         hydrated_by_id: Dict[int, Any] = {}
+        seasons_by_id: Dict[int, List[Any]] = {}
         searched_keys = set()
+        search_attempts: List[Dict[str, Any]] = []
+        search_succeeded = False
+        any_results = False
+        any_hydrated = False
+        any_season_detail = False
+        arc_season_requested = False
+        search_errors: List[str] = []
+        detail_errors: List[str] = []
+        tmdb_chain = TmdbChain()
         for hypothesis in build_search_hypotheses(
             title=title,
             original_title=str(douban_info.get("original_title") or ""),
@@ -1174,34 +1296,167 @@ class DoubanSubscribe(_PluginBase):
         ):
             meta = MetaInfo(hypothesis.title)
             meta.type = MediaType.TV
-            if hypothesis.mode != "base_and_season" and year:
+            if hypothesis.mode not in {"base_and_season", "arc_title"} and year:
                 meta.year = year
-            results = self.chain.search_medias(meta=meta, source="themoviedb") or []
+            results, search_error, request_count = self._tmdb_call_with_retry(
+                lambda: self.chain.search_medias(meta=meta, source="themoviedb"),
+            )
+            results = results or []
+            attempt = {
+                "query": hypothesis.title,
+                "season": hypothesis.season,
+                "mode": hypothesis.mode,
+                "result_count": len(results),
+                "hydrated_count": 0,
+                "request_count": request_count,
+                "error": search_error,
+            }
+            search_attempts.append(attempt)
+            if search_error:
+                search_errors.append(search_error)
+                continue
+            search_succeeded = True
+            if results:
+                any_results = True
+            hydrated_in_attempt = set()
             for search_result in results:
                 tmdb_id = getattr(search_result, "tmdb_id", None)
-                season = hypothesis.season if hypothesis.season is not None else 1
-                if not tmdb_id or (tmdb_id, season, hypothesis.mode) in searched_keys:
+                if not tmdb_id:
                     continue
-                searched_keys.add((tmdb_id, season, hypothesis.mode))
+                tmdb_id = int(tmdb_id)
                 if len(hydrated_by_id) >= self._candidate_limit and tmdb_id not in hydrated_by_id:
                     continue
                 mediainfo = hydrated_by_id.get(tmdb_id)
                 if mediainfo is None:
                     detail_meta = MetaInfo(hypothesis.title)
                     detail_meta.type = MediaType.TV
-                    mediainfo = self.chain.recognize_media(
-                        meta=detail_meta,
-                        mtype=MediaType.TV,
-                        tmdbid=tmdb_id,
-                        cache=False,
+                    mediainfo, detail_error, _ = self._tmdb_call_with_retry(
+                        lambda: self.chain.recognize_media(
+                            meta=detail_meta,
+                            mtype=MediaType.TV,
+                            tmdbid=tmdb_id,
+                            cache=False,
+                        ),
                     )
+                    if detail_error:
+                        detail_errors.append(detail_error)
                     if not mediainfo:
                         continue
                     hydrated_by_id[tmdb_id] = mediainfo
+                any_hydrated = True
+                hydrated_in_attempt.add(tmdb_id)
+                if hypothesis.mode == "arc_title":
+                    arc_season_requested = True
+                    if tmdb_id not in seasons_by_id:
+                        season_rows, season_error, _ = self._tmdb_call_with_retry(
+                            lambda: tmdb_chain.tmdb_seasons(tmdb_id),
+                        )
+                        seasons_by_id[tmdb_id] = list(season_rows or [])
+                        if season_error:
+                            detail_errors.append(season_error)
+                    season_rows = seasons_by_id[tmdb_id]
+                    if season_rows:
+                        any_season_detail = True
+                    for season_row in season_rows:
+                        season = self._season_value(season_row, "season_number")
+                        season_name = str(
+                            self._season_value(season_row, "name") or ""
+                        ).strip()
+                        if not season or season <= 0:
+                            continue
+                        if not arc_name_match_score(hypothesis.arc_title, season_name):
+                            continue
+                        search_key = (
+                            tmdb_id,
+                            season,
+                            hypothesis.mode,
+                            hypothesis.arc_title,
+                        )
+                        if search_key in searched_keys:
+                            continue
+                        searched_keys.add(search_key)
+                        air_date = str(
+                            self._season_value(season_row, "air_date") or ""
+                        )
+                        episode_count = self._season_value(
+                            season_row,
+                            "episode_count",
+                        )
+                        try:
+                            episode_count = int(episode_count)
+                        except (TypeError, ValueError):
+                            episode_count = None
+                        candidate = self._build_tmdb_candidate(
+                            mediainfo,
+                            hypothesis,
+                            season,
+                            season_name=season_name,
+                            season_episode_count=episode_count,
+                            season_year=air_date[:4] if air_date else None,
+                        )
+                        scored.append(score_candidate(source, candidate))
+                        media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
+                    continue
+
+                season = hypothesis.season if hypothesis.season is not None else 1
+                search_key = (tmdb_id, season, hypothesis.mode, "")
+                if search_key in searched_keys:
+                    continue
+                searched_keys.add(search_key)
                 candidate = self._build_tmdb_candidate(mediainfo, hypothesis, season)
                 scored.append(score_candidate(source, candidate))
                 media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
-        return choose_match(scored), media_by_key
+            attempt["hydrated_count"] = len(hydrated_in_attempt)
+
+        if not scored:
+            if search_errors and not search_succeeded:
+                decision = MatchDecision(
+                    False,
+                    "tmdb_search_error",
+                    f"TMDB 搜索接口连续失败：{search_errors[-1]}",
+                )
+            elif not any_results:
+                decision = MatchDecision(
+                    False,
+                    "tmdb_search_empty",
+                    "TMDB 搜索正常返回，但没有候选结果",
+                )
+            elif (
+                not any_hydrated
+                or detail_errors and not any_season_detail
+                or arc_season_requested and not any_season_detail
+            ):
+                decision = MatchDecision(
+                    False,
+                    "tmdb_detail_missing",
+                    "找到 TMDB 搜索结果，但详情或分季数据加载失败",
+                )
+            else:
+                decision = MatchDecision(
+                    False,
+                    "no_candidate",
+                    "找到 TMDB 作品，但没有满足标题或分季名规则的候选",
+                )
+            return decision, media_by_key, search_attempts
+        return choose_match(scored), media_by_key, search_attempts
+
+    @staticmethod
+    def _tmdb_call_with_retry(callable_):
+        last_error = ""
+        for index in range(len(TMDB_RETRY_DELAYS) + 1):
+            try:
+                return callable_(), "", index + 1
+            except Exception as error:
+                last_error = str(error)
+                if index < len(TMDB_RETRY_DELAYS):
+                    time.sleep(TMDB_RETRY_DELAYS[index])
+        return None, last_error, len(TMDB_RETRY_DELAYS) + 1
+
+    @staticmethod
+    def _season_value(season: Any, field: str) -> Any:
+        if isinstance(season, dict):
+            return season.get(field)
+        return getattr(season, field, None)
 
     @staticmethod
     def _title_names(values: List[Any]) -> Tuple[str, ...]:
@@ -1214,13 +1469,26 @@ class DoubanSubscribe(_PluginBase):
                 result.append(text)
         return tuple(result)
 
-    def _build_tmdb_candidate(self, mediainfo, hypothesis, season: int) -> TmdbCandidate:
+    def _build_tmdb_candidate(
+        self,
+        mediainfo,
+        hypothesis,
+        season: int,
+        season_name: str = "",
+        season_episode_count: Optional[int] = None,
+        season_year: Optional[str] = None,
+    ) -> TmdbCandidate:
         seasons = getattr(mediainfo, "seasons", {}) or {}
         episodes = seasons.get(season)
         if episodes is None:
             episodes = seasons.get(str(season))
         season_years = getattr(mediainfo, "season_years", {}) or {}
-        season_year = season_years.get(season) or season_years.get(str(season))
+        detected_season_year = (
+            season_years.get(season)
+            or season_years.get(str(season))
+        )
+        if season_episode_count is None and episodes is not None:
+            season_episode_count = len(episodes)
         return TmdbCandidate(
             tmdb_id=int(mediainfo.tmdb_id),
             title=str(getattr(mediainfo, "title", "") or ""),
@@ -1228,13 +1496,15 @@ class DoubanSubscribe(_PluginBase):
             names=self._title_names(getattr(mediainfo, "names", []) or []),
             year=str(getattr(mediainfo, "year", "") or "") or None,
             season=season,
-            season_year=str(season_year or "") or None,
-            season_episode_count=len(episodes) if episodes is not None else None,
+            season_year=str(season_year or detected_season_year or "") or None,
+            season_episode_count=season_episode_count,
             actors=person_names(getattr(mediainfo, "actors", []) or []),
             directors=person_names(getattr(mediainfo, "directors", []) or []),
             mode=hypothesis.mode,
             strength=hypothesis.strength,
             hypothesis_title=hypothesis.title,
+            season_name=season_name,
+            arc_title=hypothesis.arc_title,
         )
 
     def _create_subscription(
@@ -1311,6 +1581,20 @@ class DoubanSubscribe(_PluginBase):
                 ),
                 "locked": bool(getattr(existing, "manual_total_episode", False)),
                 "managed": managed,
+            }
+
+        if subscribe_oper.exist_history(
+            tmdbid=mediainfo.tmdb_id,
+            season=season,
+        ):
+            return {
+                "status": "history_existing",
+                "reason": (
+                    "MoviePilot 电视剧订阅历史中已存在相同 TMDB 与季度，"
+                    "为避免重复订阅已跳过"
+                ),
+                "locked": False,
+                "managed": False,
             }
 
         subscribe_id, message = SubscribeChain().add(

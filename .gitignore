@@ -19,6 +19,9 @@ venv/
 Thumbs.db
 
 # Build output
+node_modules/
 build/
 dist/
+!plugins.v2/doubansubscribe/dist/
+!plugins.v2/doubansubscribe/dist/**
 *.egg-info/

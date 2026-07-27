@@ -113,16 +113,24 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn('"model": "minimum_score"', source)
         self.assertNotIn('"model": "minimum_margin"', source)
 
-    def test_detail_page_uses_supported_virtual_tables(self) -> None:
+    def test_detail_page_uses_official_vue_render_mode(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
-        self.assertIn('"component": "VDataTableVirtual"', source)
-        self.assertNotIn('"component": "VDataTable"', source)
+        page_source = (PLUGIN_DIR / "src" / "components" / "Page.vue").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn('return "vue", "dist/assets"', source)
+        self.assertIn("<VDataTableServer", page_source)
+        self.assertIn("history/retry", page_source)
+        self.assertIn("搜索处理记录", page_source)
+        self.assertTrue((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").is_file())
 
     def test_history_search_and_durable_dedup_contract(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
         self.assertIn('"path": "/history/search"', source)
+        self.assertIn('"path": "/history/retry"', source)
         self.assertIn("RECENT_HISTORY_LIMIT = 50", source)
         self.assertIn('self.save_data("processed_items"', source)
+        self.assertIn("exist_history(", source)
         self.assertNotIn("history[-500:]", source)
 
     def test_unknown_total_periodic_resolution_contract(self) -> None:

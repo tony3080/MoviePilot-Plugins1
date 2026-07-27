@@ -75,6 +75,7 @@ class TitleHypothesis:
     season: Optional[int]
     mode: str
     strength: str
+    arc_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,8 @@ class TmdbCandidate:
     mode: str = "exact_title"
     strength: str = "exact"
     hypothesis_title: str = ""
+    season_name: str = ""
+    arc_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,6 +239,28 @@ def normalize_title(value: str) -> str:
     )
 
 
+def normalize_arc_title(value: str) -> str:
+    """Normalize a named story arc while ignoring generic arc suffixes."""
+    normalized = normalize_title(value)
+    return re.sub(r"(?:篇|編|arc)$", "", normalized, flags=re.IGNORECASE)
+
+
+def arc_name_match_score(arc_title: str, season_name: str) -> int:
+    """Return deterministic evidence strength for an arc/season-name match."""
+    arc = normalize_arc_title(arc_title)
+    season = normalize_arc_title(season_name)
+    if not arc or not season:
+        return 0
+    generic = normalize_title(season_name)
+    if re.fullmatch(r"(?:season\d+|第?[零〇一二两三四五六七八九十\d]+季)", generic, re.I):
+        return 0
+    if arc == season:
+        return 55
+    if min(len(arc), len(season)) >= 4 and (arc in season or season in arc):
+        return 35
+    return 0
+
+
 _CHINESE_DIGITS = {
     "零": 0,
     "〇": 0,
@@ -292,15 +317,16 @@ def _append_hypothesis(
     season: Optional[int],
     mode: str,
     strength: str,
+    arc_title: str = "",
 ) -> None:
     clean_title = str(title or "").strip(" -_.")
     if not clean_title or season is not None and not 0 <= season <= 50:
         return
-    key = (normalize_title(clean_title), season, mode)
+    key = (normalize_title(clean_title), season, mode, normalize_arc_title(arc_title))
     if key in seen:
         return
     seen.add(key)
-    result.append(TitleHypothesis(clean_title, season, mode, strength))
+    result.append(TitleHypothesis(clean_title, season, mode, strength, arc_title))
 
 
 def build_title_hypotheses(title: str) -> List[TitleHypothesis]:
@@ -311,6 +337,22 @@ def build_title_hypotheses(title: str) -> List[TitleHypothesis]:
     _append_hypothesis(result, seen, source, None, "exact_title", "exact")
     if not source or source.isdigit():
         return result
+
+    arc_match = re.match(
+        r"^(?P<base>.+?)[\s:：·・_\-—]+(?P<arc>[^:：·・_\-—]{2,}?(?:篇|編|Arc))\s*$",
+        source,
+        re.I,
+    )
+    if arc_match:
+        _append_hypothesis(
+            result,
+            seen,
+            arc_match.group("base"),
+            None,
+            "arc_title",
+            "strong",
+            arc_match.group("arc"),
+        )
 
     strong_patterns = (
         re.compile(r"^(?P<base>.+?)\s*第\s*(?P<num>[零〇一二两三四五六七八九十\d]+)\s*季\s*$", re.I),
@@ -381,7 +423,11 @@ def build_search_hypotheses(
     for source_title, exact_mode in title_sources:
         for hypothesis in build_title_hypotheses(source_title):
             mode = exact_mode if hypothesis.mode == "exact_title" else hypothesis.mode
-            key = (normalize_title(hypothesis.title), hypothesis.season)
+            key = (
+                normalize_title(hypothesis.title),
+                hypothesis.season,
+                normalize_arc_title(hypothesis.arc_title),
+            )
             if not key[0] or key in seen:
                 continue
             seen.add(key)
@@ -390,6 +436,7 @@ def build_search_hypotheses(
                 season=hypothesis.season,
                 mode=mode,
                 strength=hypothesis.strength,
+                arc_title=hypothesis.arc_title,
             ))
     return result
 
@@ -568,7 +615,34 @@ def score_candidate(source: Dict[str, Any], candidate: TmdbCandidate) -> ScoredC
         identity_score += 10
         evidence.append("主创重合")
 
-    if candidate.mode == "base_and_season":
+    if candidate.mode == "arc_title":
+        hypothesis_title = normalize_title(candidate.hypothesis_title)
+        if hypothesis_title and hypothesis_title in candidate_titles:
+            identity_score += 35
+            evidence.append("篇章主剧标题一致")
+        arc_score = arc_name_match_score(candidate.arc_title, candidate.season_name)
+        if arc_score:
+            structure_score += arc_score
+            evidence.append("TMDB 分季名与篇章名一致")
+        else:
+            structure_score -= 100
+            evidence.append("TMDB 分季名与篇章名不一致")
+        season_year = _year_number(candidate.season_year)
+        if source_year and season_year == source_year:
+            structure_score += 30
+            evidence.append("季度年份一致")
+        elif source_year and season_year and abs(source_year - season_year) <= 1:
+            structure_score += 10
+            evidence.append("季度年份接近")
+        source_total = _positive_int(source.get("total_episode"))
+        if source_total and candidate.season_episode_count == source_total:
+            structure_score += 25
+            evidence.append("季度集数一致")
+        elif source_total and candidate.season_episode_count is not None \
+                and abs(candidate.season_episode_count - source_total) <= 1:
+            structure_score += 10
+            evidence.append("季度集数接近")
+    elif candidate.mode == "base_and_season":
         structure_score += 50 if candidate.strength == "strong" else 5
         evidence.append("明确季度标题" if candidate.strength == "strong" else "弱季度标题候选")
         hypothesis_title = normalize_title(candidate.hypothesis_title)
