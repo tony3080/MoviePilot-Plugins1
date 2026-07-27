@@ -105,6 +105,7 @@ const historyStatusLabels = {
   history_existing: '订阅历史已存在',
   category_skipped: '地区已跳过',
   douban_not_found: '未找到豆瓣条目',
+  douban_rate_limited: '豆瓣请求受限',
   douban_total_missing: '豆瓣总集数缺失',
   tmdb_search_error: 'TMDB 搜索失败',
   tmdb_search_empty: 'TMDB 无搜索结果',
@@ -685,6 +686,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-abc491da"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-6099c2ac"]]);
 
 export { Page as default };

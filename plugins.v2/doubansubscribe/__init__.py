@@ -18,7 +18,7 @@ from app.db.models.subscribe import Subscribe
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas import SubscribeCompletionCheckEventData
+from app.schemas import LimitException, SubscribeCompletionCheckEventData
 from app.schemas.types import ChainEventType, MediaType
 from app.chain.subscribe import SubscribeChain
 from app.chain.tmdb import TmdbChain
@@ -54,6 +54,7 @@ DEFAULT_MAOYAN_TYPES = tuple(MAOYAN_LIST_TYPES)
 DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"
 DEFAULT_SUPPLEMENT_CRON = "0 23 * * *"
 SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
+DOUBAN_QUERY_INTERVAL_SECONDS = 3
 ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 PLUGIN_USERNAME = "豆瓣订阅助手"
@@ -62,6 +63,7 @@ SKIPPED_STATUSES = {"category_skipped"}
 FAILURE_STATUSES = {
     "ambiguous",
     "douban_not_found",
+    "douban_rate_limited",
     "douban_total_missing",
     "error",
     "feed_error",
@@ -94,7 +96,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.0"
+    plugin_version = "0.5.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -120,6 +122,8 @@ class DoubanSubscribe(_PluginBase):
         self._sync_lock = threading.Lock()
         self._data_lock = threading.RLock()
         self._supplement_lock = threading.Lock()
+        self._douban_query_lock = threading.Lock()
+        self._last_douban_query_at = 0.0
 
     def init_plugin(self, config: dict = None) -> None:
         """Load configuration and optionally start a one-time run."""
@@ -1257,6 +1261,7 @@ class DoubanSubscribe(_PluginBase):
             "pending_total_checks": 0,
             "totals_resolved": 0,
             "total_check_failed": 0,
+            "douban_rate_limited": False,
         }
         try:
             if not hasattr(Subscribe, "manual_total_episode"):
@@ -1266,13 +1271,27 @@ class DoubanSubscribe(_PluginBase):
                 })
                 return summary
             pending_total_summary = self._process_pending_totals()
+            douban_rate_limited = bool(
+                pending_total_summary.pop("douban_rate_limited", False)
+            )
             summary.update(pending_total_summary)
-            confirmation_summary = self._process_due_confirmations()
-            summary.update(confirmation_summary)
+            if not douban_rate_limited:
+                confirmation_summary = self._process_due_confirmations()
+                douban_rate_limited = bool(
+                    confirmation_summary.pop("douban_rate_limited", False)
+                )
+                summary.update(confirmation_summary)
 
             urls = self._configured_urls()
             maoyan_types = self._maoyan_types if self._maoyan_enabled else []
             if not urls and not maoyan_types:
+                if douban_rate_limited:
+                    summary.update({
+                        "success": False,
+                        "douban_rate_limited": True,
+                        "message": "豆瓣请求受限，受管订阅复核已提前停止",
+                    })
+                    return summary
                 if summary["confirmations"] or summary["pending_total_checks"]:
                     summary["message"] = "未配置有效内容来源，仅完成受管订阅复核"
                     return summary
@@ -1282,7 +1301,7 @@ class DoubanSubscribe(_PluginBase):
             history = self.get_data("history") or []
             processed_items = self._processed_index(history)
             completed_keys = set(processed_items)
-            for url in urls:
+            for url in urls if not douban_rate_limited else []:
                 try:
                     items = self._fetch_feed(url)
                     summary["feeds"] += 1
@@ -1298,15 +1317,17 @@ class DoubanSubscribe(_PluginBase):
                         "time": self._now(),
                     })
                     continue
-                self._process_source_items(
+                douban_rate_limited = self._process_source_items(
                     items=items[:self._max_items],
                     history=history,
                     processed_items=processed_items,
                     completed_keys=completed_keys,
                     summary=summary,
                 )
+                if douban_rate_limited:
+                    break
 
-            if maoyan_types:
+            if maoyan_types and not douban_rate_limited:
                 cookies: Optional[Dict[str, str]] = None
                 for list_type in maoyan_types:
                     config = MAOYAN_LIST_TYPES.get(list_type) or {}
@@ -1323,13 +1344,15 @@ class DoubanSubscribe(_PluginBase):
                                 cookies=cookies,
                             )
                         summary["maoyan_lists"] += 1
-                        self._process_source_items(
+                        douban_rate_limited = self._process_source_items(
                             items=items,
                             history=history,
                             processed_items=processed_items,
                             completed_keys=completed_keys,
                             summary=summary,
                         )
+                        if douban_rate_limited:
+                            break
                     except Exception as error:
                         label = config.get("label") or list_type
                         logger.error(f"豆瓣订阅助手：获取猫眼{label}失败：{error}")
@@ -1342,6 +1365,15 @@ class DoubanSubscribe(_PluginBase):
                             "reason": str(error),
                             "time": self._now(),
                         })
+            if douban_rate_limited:
+                summary.update({
+                    "success": False,
+                    "douban_rate_limited": True,
+                    "message": (
+                        "豆瓣请求受限，本批次已提前停止；"
+                        "未处理条目将在下次执行时重试"
+                    ),
+                })
             self.save_data("history", history)
             return summary
         except Exception as error:
@@ -1360,7 +1392,8 @@ class DoubanSubscribe(_PluginBase):
         processed_items: Dict[str, Dict[str, Any]],
         completed_keys: set,
         summary: Dict[str, Any],
-    ) -> None:
+    ) -> bool:
+        """逐条处理内容源，并在豆瓣限流后停止当前批次。"""
         for item in items:
             summary["items"] += 1
             if item.key in completed_keys:
@@ -1381,6 +1414,9 @@ class DoubanSubscribe(_PluginBase):
                 summary["skipped"] += 1
             else:
                 summary["failed"] += 1
+            if status == "douban_rate_limited":
+                return True
+        return False
 
     def _process_item(self, item: FeedItem) -> Dict[str, Any]:
         base_record = {
@@ -1454,6 +1490,15 @@ class DoubanSubscribe(_PluginBase):
             )
             base_record.update(subscription)
             return base_record
+        except LimitException as error:
+            logger.warning(
+                f"豆瓣订阅助手：处理《{item.title}》时豆瓣请求受限：{error}"
+            )
+            return self._failed_record(
+                base_record,
+                "douban_rate_limited",
+                "豆瓣请求受限，本批次已暂停，未处理条目将在下次执行时重试",
+            )
         except Exception as error:
             logger.error(f"豆瓣订阅助手：处理《{item.title}》失败：{error}", exc_info=True)
             return self._failed_record(base_record, "error", str(error))
@@ -1461,29 +1506,57 @@ class DoubanSubscribe(_PluginBase):
     def _resolve_douban(self, item: FeedItem) -> Optional[Dict[str, Any]]:
         douban_id = item.douban_id
         if not douban_id:
-            for hypothesis in build_title_hypotheses(item.title):
-                if hypothesis.mode != "exact_title":
-                    continue
-                matched = self.chain.match_doubaninfo(
-                    name=hypothesis.title,
+            for title, year in self._douban_search_attempts(item):
+                matched = self._call_douban(
+                    self.chain.match_doubaninfo,
+                    name=title,
                     mtype=MediaType.TV,
-                    year=item.year,
-                    season=hypothesis.season,
-                    raise_exception=False,
+                    year=year,
+                    season=None,
                 )
                 if matched and matched.get("id"):
                     douban_id = str(matched["id"])
                     break
         if not douban_id:
             return None
-        detail = self.chain.douban_info(
+        detail = self._call_douban(
+            self.chain.douban_info,
             doubanid=str(douban_id),
             mtype=MediaType.TV,
-            raise_exception=False,
         )
         if detail:
             detail["id"] = str(detail.get("id") or douban_id)
         return detail
+
+    @staticmethod
+    def _douban_search_attempts(item: FeedItem) -> List[Tuple[str, Optional[str]]]:
+        """生成豆瓣标题搜索的去重降级路径。"""
+        source_title = str(item.title or "").strip()
+        dequoted_title = re.sub(r"[\"'“”‘’「」『』]", "", source_title)
+        dequoted_title = re.sub(r"\s+", " ", dequoted_title).strip()
+        titles = list(dict.fromkeys(
+            title for title in (source_title, dequoted_title) if title
+        ))
+        years = [item.year] if item.year else [None]
+        if item.year:
+            years.append(None)
+        return [
+            (title, year)
+            for year in years
+            for title in titles
+        ]
+
+    def _call_douban(self, method, **kwargs):
+        """统一控制插件豆瓣查询间隔，并透传限流异常。"""
+        with self._douban_query_lock:
+            elapsed = time.monotonic() - self._last_douban_query_at
+            wait_seconds = DOUBAN_QUERY_INTERVAL_SECONDS - elapsed
+            if self._last_douban_query_at and wait_seconds > 0:
+                time.sleep(wait_seconds)
+            try:
+                return method(**kwargs, raise_exception=True)
+            finally:
+                self._last_douban_query_at = time.monotonic()
 
     def _match_tmdb(
         self,
@@ -1999,6 +2072,7 @@ class DoubanSubscribe(_PluginBase):
             "pending_total_checks": 0,
             "totals_resolved": 0,
             "total_check_failed": 0,
+            "douban_rate_limited": False,
         }
         for record in self._managed_records():
             status = record.get("status")
@@ -2010,6 +2084,21 @@ class DoubanSubscribe(_PluginBase):
             try:
                 if self._resolve_pending_total(record):
                     summary["totals_resolved"] += 1
+            except LimitException as error:
+                summary["total_check_failed"] += 1
+                summary["douban_rate_limited"] = True
+                self._upsert_managed({
+                    **record,
+                    "status": "awaiting_douban_total",
+                    "total_pending": True,
+                    "last_checked": self._now(),
+                    "reason": "豆瓣请求受限，本批剩余复核将在下次执行",
+                })
+                logger.warning(
+                    f"豆瓣订阅助手：复核订阅 #{record.get('subscribe_id')} "
+                    f"时豆瓣请求受限：{error}"
+                )
+                break
             except Exception as error:
                 summary["total_check_failed"] += 1
                 self._upsert_managed({
@@ -2073,10 +2162,10 @@ class DoubanSubscribe(_PluginBase):
         douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
         if not douban_id:
             raise RuntimeError("订阅缺少豆瓣 ID")
-        douban_info = self.chain.douban_info(
+        douban_info = self._call_douban(
+            self.chain.douban_info,
             doubanid=douban_id,
             mtype=MediaType.TV,
-            raise_exception=False,
         )
         douban_total = extract_total_episode(douban_info or {})
         if not douban_total:
@@ -2143,6 +2232,7 @@ class DoubanSubscribe(_PluginBase):
             "completed": 0,
             "manual_review": 0,
             "verification_failed": 0,
+            "douban_rate_limited": False,
         }
         now = self._now_datetime()
         for record in self._managed_records():
@@ -2156,6 +2246,11 @@ class DoubanSubscribe(_PluginBase):
                 outcome = self._confirm_managed_subscription(record)
                 if outcome in summary:
                     summary[outcome] += 1
+            except LimitException as error:
+                summary["verification_failed"] += 1
+                summary["douban_rate_limited"] = True
+                self._mark_confirmation_error(record, error)
+                break
             except Exception as error:
                 summary["verification_failed"] += 1
                 self._mark_confirmation_error(record, error)
@@ -2209,10 +2304,10 @@ class DoubanSubscribe(_PluginBase):
         })
         douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
         douban_info = (
-            self.chain.douban_info(
+            self._call_douban(
+                self.chain.douban_info,
                 doubanid=douban_id,
                 mtype=MediaType.TV,
-                raise_exception=False,
             )
             if douban_id else None
         )

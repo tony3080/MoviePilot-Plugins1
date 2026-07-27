@@ -101,6 +101,10 @@ class Logger:
     def error(*_args, **_kwargs):
         return None
 
+    @staticmethod
+    def warning(*_args, **_kwargs):
+        return None
+
 
 app_log.logger = Logger()
 
@@ -134,6 +138,13 @@ class SubscribeCompletionCheckEventData:
 
 
 app_schemas.SubscribeCompletionCheckEventData = SubscribeCompletionCheckEventData
+
+
+class LimitException(Exception):
+    pass
+
+
+app_schemas.LimitException = LimitException
 
 
 class ChainEventType(Enum):
@@ -921,6 +932,98 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(summary["maoyan_lists"], 1)
         self.assertEqual(summary["subscribed"], 1)
         self.assertIn(item.key, self.plugin.get_data("processed_items"))
+
+    def test_douban_rate_limit_has_distinct_status(self) -> None:
+        item = plugin_module.FeedItem(
+            title="南部档案",
+            guid="maoyan:tv:1",
+            source_url="https://piaofang.maoyan.com/test",
+            year="2026",
+        )
+        self.plugin.chain = types.SimpleNamespace(
+            match_doubaninfo=lambda **_kwargs: (_ for _ in ()).throw(
+                LimitException("限流期间，跳过调用")
+            ),
+        )
+
+        record = self.plugin._process_item(item)
+
+        self.assertEqual(record["status"], "douban_rate_limited")
+        self.assertIn("下次执行", record["reason"])
+
+    def test_source_batch_stops_after_douban_rate_limit(self) -> None:
+        items = [
+            plugin_module.FeedItem(title="条目一", guid="maoyan:tv:1"),
+            plugin_module.FeedItem(title="条目二", guid="maoyan:tv:2"),
+        ]
+        calls = []
+
+        def process_item(item):
+            calls.append(item.title)
+            return {
+                **item.to_dict(),
+                "status": "douban_rate_limited",
+                "reason": "rate limited",
+            }
+
+        self.plugin._process_item = process_item
+        summary = {
+            "items": 0,
+            "subscribed": 0,
+            "existing": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        stopped = self.plugin._process_source_items(
+            items=items,
+            history=[],
+            processed_items={},
+            completed_keys=set(),
+            summary=summary,
+        )
+
+        self.assertTrue(stopped)
+        self.assertEqual(calls, ["条目一"])
+        self.assertEqual(summary["items"], 1)
+        self.assertEqual(summary["failed"], 1)
+
+    def test_douban_search_removes_quotes_and_retries_without_year(self) -> None:
+        item = plugin_module.FeedItem(
+            title="二龙湖·“村”暖花开3",
+            guid="maoyan:tv:3",
+            year="2026",
+        )
+        search_calls = []
+
+        def match_doubaninfo(**kwargs):
+            search_calls.append(kwargs)
+            if kwargs["name"] == "二龙湖·村暖花开3" and kwargs["year"] is None:
+                return {"id": "123456"}
+            return None
+
+        self.plugin.chain = types.SimpleNamespace(
+            match_doubaninfo=match_doubaninfo,
+            douban_info=lambda **_kwargs: {
+                "id": "123456",
+                "title": "二龙湖·村暖花开3",
+            },
+        )
+
+        with patch.object(plugin_module.time, "sleep"):
+            result = self.plugin._resolve_douban(item)
+
+        self.assertEqual(result["id"], "123456")
+        self.assertEqual(
+            [(call["name"], call["year"]) for call in search_calls],
+            [
+                ("二龙湖·“村”暖花开3", "2026"),
+                ("二龙湖·村暖花开3", "2026"),
+                ("二龙湖·“村”暖花开3", None),
+                ("二龙湖·村暖花开3", None),
+            ],
+        )
+        self.assertTrue(all(call["raise_exception"] for call in search_calls))
 
     def test_durable_processed_index_survives_history_removal(self) -> None:
         record = {

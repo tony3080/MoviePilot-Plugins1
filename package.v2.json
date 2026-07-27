@@ -3,7 +3,7 @@
     "name": "豆瓣订阅助手",
     "description": "从 RSS 和猫眼榜单发现剧集，锁定豆瓣总集数，并补搜今日未更新订阅。",
     "labels": "订阅",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -11,6 +11,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.5.1": "修复猫眼榜单批量查询触发豆瓣风控后被误记为未找到的问题；豆瓣查询统一间隔 3 秒，限流时立即停止本批并保留剩余条目到下次重试，同时增加去引号及无年份标题降级匹配",
       "v0.5.0": "增加猫眼全网电视剧与网剧热度榜来源，榜单条目复用豆瓣总集数和 TMDB 匹配流程；恢复详情页右下角设置入口，并将处理、受管订阅及今日补齐状态中文化",
       "v0.4.1": "增加 MoviePilot 电视剧订阅历史同季去重、RSS 记录搜索与失败筛选、单条重试和 TMDB 查询诊断；支持按 TMDB 分季名匹配“XXXX篇”标题，并对 TMDB 异常执行退避重试",
       "v0.4.0": "每天 08:00 通过 TMDB 记录今日更新订阅及 MoviePilot 进度，按可配置周期对进度未增加的订阅间隔 2 分钟触发缺集搜索；任务仅处理当天快照且同日不重复执行",
