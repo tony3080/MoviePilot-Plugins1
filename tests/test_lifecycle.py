@@ -870,6 +870,116 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(attempts[0]["request_count"], 3)
         self.assertEqual(attempts[0]["error"], "timeout")
 
+    def test_douban_full_info_page_supplies_imdb_id(self) -> None:
+        self.plugin._run_douban_request = lambda _callable: types.SimpleNamespace(
+            status_code=200,
+            text="<tr><td>IMDb</td><td>tt35288698</td></tr>",
+        )
+
+        imdb_id = self.plugin._resolve_douban_imdb_id({
+            "id": "37042229",
+            "info_url": "https://www.douban.com/doubanapp/h5/movie/37042229/desc",
+        })
+
+        self.assertEqual(imdb_id, "tt35288698")
+        self.assertEqual(
+            self.plugin._douban_imdb_cache["37042229"],
+            "tt35288698",
+        )
+
+    def test_imdb_exact_match_precedes_title_search(self) -> None:
+        media = types.SimpleNamespace(
+            tmdb_id=9988,
+            title="改名后的电视剧",
+            original_title="",
+            names=[],
+            year="2026",
+            seasons={1: [object()]},
+            season_years={1: "2026"},
+            actors=[],
+            directors=[],
+        )
+        self.plugin._tmdb_find_by_imdb_id = lambda _imdb_id: {
+            "tv_results": [{"id": 9988}],
+        }
+        self.plugin.chain = types.SimpleNamespace(
+            recognize_media=lambda **_kwargs: media,
+            search_medias=lambda **_kwargs: self.fail("IMDb 命中后不应执行标题搜索"),
+        )
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb({
+            "title": "醉梦",
+            "year": "2026",
+            "imdb_id": "tt35288698",
+        }, 16)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.tmdb_id, 9988)
+        self.assertIn("IMDb ID 精确关联", decision.winner.evidence)
+        self.assertIn((9988, 1), media_by_key)
+        self.assertEqual([item["mode"] for item in attempts], ["imdb_exact"])
+
+    def test_imdb_empty_result_falls_back_and_rejects_wrong_title(self) -> None:
+        wrong_media = types.SimpleNamespace(
+            tmdb_id=312575,
+            title="醉梦春夜",
+            original_title="醉梦春夜",
+            names=["坠梦春夜"],
+            year="2026",
+            seasons={1: [object(), object()]},
+            season_years={1: "2026"},
+            actors=["刘兰博", "时童", "李思颖"],
+            directors=[],
+        )
+        self.plugin._tmdb_find_by_imdb_id = lambda _imdb_id: {"tv_results": []}
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=lambda **_kwargs: [types.SimpleNamespace(tmdb_id=312575)],
+            recognize_media=lambda **_kwargs: wrong_media,
+        )
+
+        decision, _media_by_key, attempts = self.plugin._match_tmdb({
+            "title": "醉梦",
+            "year": "2026",
+            "episodes_count": 16,
+            "actors": [{"name": "刘诗诗"}, {"name": "胡先煦"}],
+            "imdb_id": "tt35288698",
+        }, 16)
+
+        self.assertFalse(decision.accepted)
+        self.assertEqual(decision.status, "low_score")
+        self.assertEqual(decision.winner.score, 25)
+        self.assertIn("TMDB 未收录 IMDb tt35288698", decision.reason)
+        self.assertEqual(attempts[0]["mode"], "imdb_exact")
+
+    def test_subscription_notification_setting_is_forwarded(self) -> None:
+        mediainfo = types.SimpleNamespace(
+            tmdb_id=654,
+            title="通知测试剧",
+            year="2026",
+        )
+
+        self.plugin._notify_subscription = True
+        self.plugin._create_subscription(
+            mediainfo=mediainfo,
+            douban_id="987",
+            season=1,
+            total_episode=12,
+            category="domestic",
+            source_key="douban:987",
+        )
+        self.assertTrue(FakeSubscribeChain.add_calls[-1]["message"])
+
+        self.plugin._notify_subscription = False
+        self.plugin._create_subscription(
+            mediainfo=mediainfo,
+            douban_id="988",
+            season=2,
+            total_episode=12,
+            category="domestic",
+            source_key="douban:988",
+        )
+        self.assertFalse(FakeSubscribeChain.add_calls[-1]["message"])
+
     def test_maoyan_rank_payload_becomes_deduplicated_feed_items(self) -> None:
         payload = {
             "dataList": {

@@ -55,6 +55,7 @@ DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"
 DEFAULT_SUPPLEMENT_CRON = "0 23 * * *"
 SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
 DOUBAN_QUERY_INTERVAL_SECONDS = 3
+IMDB_ID_PATTERN = re.compile(r"\btt\d{7,10}\b", re.IGNORECASE)
 ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 PLUGIN_USERNAME = "豆瓣订阅助手"
@@ -96,7 +97,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.1"
+    plugin_version = "0.5.2"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -115,6 +116,7 @@ class DoubanSubscribe(_PluginBase):
     _max_items = 50
     _candidate_limit = 10
     _confirmation_days = 7
+    _notify_subscription = True
     _media_categories = list(DEFAULT_MEDIA_CATEGORIES)
 
     def __init__(self, *args, **kwargs):
@@ -124,6 +126,7 @@ class DoubanSubscribe(_PluginBase):
         self._supplement_lock = threading.Lock()
         self._douban_query_lock = threading.Lock()
         self._last_douban_query_at = 0.0
+        self._douban_imdb_cache: Dict[str, str] = {}
 
     def init_plugin(self, config: dict = None) -> None:
         """Load configuration and optionally start a one-time run."""
@@ -159,6 +162,7 @@ class DoubanSubscribe(_PluginBase):
         self._confirmation_days = self._bounded_int(
             config.get("confirmation_days"), 7, 1, 365,
         )
+        self._notify_subscription = bool(config.get("notify_subscription", True))
         categories = config.get("media_categories", list(DEFAULT_MEDIA_CATEGORIES))
         if isinstance(categories, str):
             categories = [value.strip() for value in categories.split(",")]
@@ -194,6 +198,7 @@ class DoubanSubscribe(_PluginBase):
             "max_items": self._max_items,
             "candidate_limit": self._candidate_limit,
             "confirmation_days": self._confirmation_days,
+            "notify_subscription": self._notify_subscription,
             "media_categories": self._media_categories,
         })
 
@@ -424,7 +429,7 @@ class DoubanSubscribe(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [{
                                     "component": "VSwitch",
                                     "props": {"model": "enabled", "label": "启用插件"},
@@ -432,7 +437,7 @@ class DoubanSubscribe(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [{
                                     "component": "VSwitch",
                                     "props": {"model": "onlyonce", "label": "立即运行一次"},
@@ -440,10 +445,21 @@ class DoubanSubscribe(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [{
                                     "component": "VSwitch",
                                     "props": {"model": "proxy", "label": "RSS 使用代理"},
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {
+                                        "model": "notify_subscription",
+                                        "label": "订阅成功通知",
+                                    },
                                 }],
                             },
                             {
@@ -549,6 +565,7 @@ class DoubanSubscribe(_PluginBase):
             "max_items": 50,
             "candidate_limit": 10,
             "confirmation_days": 7,
+            "notify_subscription": True,
             "media_categories": list(DEFAULT_MEDIA_CATEGORIES),
         }
 
@@ -1430,6 +1447,9 @@ class DoubanSubscribe(_PluginBase):
             if not douban_info:
                 return self._failed_record(base_record, "douban_not_found", "未匹配到豆瓣电视剧条目")
             douban_id = str(douban_info.get("id") or item.douban_id or "")
+            imdb_id = self._resolve_douban_imdb_id(douban_info)
+            if imdb_id:
+                douban_info["imdb_id"] = imdb_id
             total_episode = extract_total_episode(douban_info)
             airing_started = has_started_airing(douban_info)
             category = classify_media_region(douban_info)
@@ -1438,6 +1458,7 @@ class DoubanSubscribe(_PluginBase):
                 "douban_title": douban_info.get("title") or item.title,
                 "douban_year": douban_info.get("year") or item.year or "",
                 "douban_total": total_episode,
+                "imdb_id": imdb_id or "",
                 "airing_started": airing_started,
                 "total_pending": not bool(total_episode),
                 "category": category,
@@ -1528,6 +1549,51 @@ class DoubanSubscribe(_PluginBase):
             detail["id"] = str(detail.get("id") or douban_id)
         return detail
 
+    def _resolve_douban_imdb_id(self, douban_info: Dict[str, Any]) -> Optional[str]:
+        """优先读取豆瓣详情字段，缺失时再查询完整信息页。"""
+        for field_name in ("imdb_id", "imdbid", "imdb", "extra"):
+            imdb_id = self._extract_imdb_id(douban_info.get(field_name))
+            if imdb_id:
+                return imdb_id
+
+        douban_id = str(douban_info.get("id") or "").strip()
+        if douban_id and douban_id in self._douban_imdb_cache:
+            return self._douban_imdb_cache[douban_id]
+
+        info_url = str(douban_info.get("info_url") or "").strip()
+        parsed = urlparse(info_url)
+        hostname = str(parsed.hostname or "").casefold()
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not hostname
+            or hostname != "douban.com" and not hostname.endswith(".douban.com")
+        ):
+            return None
+
+        try:
+            response = self._run_douban_request(
+                lambda: RequestUtils(
+                    ua=getattr(settings, "NORMAL_USER_AGENT", None),
+                    proxies=settings.PROXY if self._proxy else None,
+                ).get_res(info_url)
+            )
+            if not response or getattr(response, "status_code", 200) != 200:
+                return None
+            imdb_id = self._extract_imdb_id(getattr(response, "text", ""))
+            if imdb_id and douban_id:
+                self._douban_imdb_cache[douban_id] = imdb_id
+            return imdb_id
+        except Exception as error:
+            logger.warning(
+                f"豆瓣订阅助手：读取豆瓣 {douban_id or '未知'} 的 IMDb ID 失败：{error}"
+            )
+            return None
+
+    @staticmethod
+    def _extract_imdb_id(value: Any) -> Optional[str]:
+        match = IMDB_ID_PATTERN.search(str(value or ""))
+        return match.group(0).lower() if match else None
+
     @staticmethod
     def _douban_search_attempts(item: FeedItem) -> List[Tuple[str, Optional[str]]]:
         """生成豆瓣标题搜索的去重降级路径。"""
@@ -1548,13 +1614,19 @@ class DoubanSubscribe(_PluginBase):
 
     def _call_douban(self, method, **kwargs):
         """统一控制插件豆瓣查询间隔，并透传限流异常。"""
+        return self._run_douban_request(
+            lambda: method(**kwargs, raise_exception=True)
+        )
+
+    def _run_douban_request(self, callable_):
+        """串行执行豆瓣请求，并保证相邻请求至少间隔三秒。"""
         with self._douban_query_lock:
             elapsed = time.monotonic() - self._last_douban_query_at
             wait_seconds = DOUBAN_QUERY_INTERVAL_SECONDS - elapsed
             if self._last_douban_query_at and wait_seconds > 0:
                 time.sleep(wait_seconds)
             try:
-                return method(**kwargs, raise_exception=True)
+                return callable_()
             finally:
                 self._last_douban_query_at = time.monotonic()
 
@@ -1592,11 +1664,24 @@ class DoubanSubscribe(_PluginBase):
         search_errors: List[str] = []
         detail_errors: List[str] = []
         tmdb_chain = TmdbChain()
-        for hypothesis in build_search_hypotheses(
+        hypotheses = build_search_hypotheses(
             title=title,
             original_title=str(douban_info.get("original_title") or ""),
             aliases=tuple(str(value) for value in (douban_info.get("aka") or []) if value),
-        ):
+        )
+        imdb_id = self._extract_imdb_id(douban_info.get("imdb_id"))
+        if imdb_id:
+            imdb_match = self._match_tmdb_by_imdb(
+                imdb_id=imdb_id,
+                source=source,
+                hypotheses=hypotheses,
+                tmdb_chain=tmdb_chain,
+                search_attempts=search_attempts,
+            )
+            if imdb_match is not None:
+                return imdb_match
+
+        for hypothesis in hypotheses:
             meta = MetaInfo(hypothesis.title)
             meta.type = MediaType.TV
             if hypothesis.mode not in {"base_and_season", "arc_title"} and year:
@@ -1740,8 +1825,185 @@ class DoubanSubscribe(_PluginBase):
                     "no_candidate",
                     "找到 TMDB 作品，但没有满足标题或分季名规则的候选",
                 )
-            return decision, media_by_key, search_attempts
-        return choose_match(scored), media_by_key, search_attempts
+            return (
+                self._with_imdb_fallback_context(decision, imdb_id, search_attempts),
+                media_by_key,
+                search_attempts,
+            )
+        decision = choose_match(scored)
+        return (
+            self._with_imdb_fallback_context(decision, imdb_id, search_attempts),
+            media_by_key,
+            search_attempts,
+        )
+
+    @staticmethod
+    def _with_imdb_fallback_context(
+        decision: MatchDecision,
+        imdb_id: Optional[str],
+        search_attempts: List[Dict[str, Any]],
+    ) -> MatchDecision:
+        if decision.accepted or not imdb_id:
+            return decision
+        attempt = next(
+            (item for item in search_attempts if item.get("mode") == "imdb_exact"),
+            None,
+        )
+        if not attempt:
+            return decision
+        if attempt.get("error"):
+            prefix = f"IMDb {imdb_id} 反查 TMDB 失败"
+        elif not attempt.get("result_count"):
+            prefix = f"TMDB 未收录 IMDb {imdb_id}"
+        else:
+            return decision
+        return MatchDecision(
+            decision.accepted,
+            decision.status,
+            f"{prefix}；{decision.reason}",
+            decision.winner,
+            decision.alternatives,
+        )
+
+    def _match_tmdb_by_imdb(
+        self,
+        imdb_id: str,
+        source: Dict[str, Any],
+        hypotheses: List[Any],
+        tmdb_chain: TmdbChain,
+        search_attempts: List[Dict[str, Any]],
+    ) -> Optional[Tuple[
+        MatchDecision,
+        Dict[Tuple[int, int], Any],
+        List[Dict[str, Any]],
+    ]]:
+        """IMDb 精确反查；无结果或接口失败时返回 None 走标题兜底。"""
+        payload, error, request_count = self._tmdb_call_with_retry(
+            lambda: self._tmdb_find_by_imdb_id(imdb_id)
+        )
+        tv_results = list((payload or {}).get("tv_results") or [])
+        attempt = {
+            "query": imdb_id,
+            "season": None,
+            "mode": "imdb_exact",
+            "result_count": len(tv_results),
+            "hydrated_count": 0,
+            "request_count": request_count,
+            "error": error,
+        }
+        search_attempts.append(attempt)
+        if error or not tv_results:
+            return None
+
+        structural_hypotheses = [
+            hypothesis for hypothesis in hypotheses
+            if hypothesis.mode in {"base_and_season", "arc_title"}
+        ]
+        selected_hypotheses = structural_hypotheses or hypotheses[:1]
+        scored: List[ScoredCandidate] = []
+        media_by_key: Dict[Tuple[int, int], Any] = {}
+        detail_errors: List[str] = []
+        hydrated_ids = set()
+
+        for raw_result in tv_results[:self._candidate_limit]:
+            tmdb_id = self._result_value(raw_result, "id")
+            try:
+                tmdb_id = int(tmdb_id)
+            except (TypeError, ValueError):
+                continue
+            detail_meta = MetaInfo(str(source.get("title") or ""))
+            detail_meta.type = MediaType.TV
+            mediainfo, detail_error, _ = self._tmdb_call_with_retry(
+                lambda tmdb_id=tmdb_id: self.chain.recognize_media(
+                    meta=detail_meta,
+                    mtype=MediaType.TV,
+                    tmdbid=tmdb_id,
+                    cache=False,
+                )
+            )
+            if detail_error:
+                detail_errors.append(detail_error)
+            if not mediainfo:
+                continue
+            hydrated_ids.add(tmdb_id)
+
+            for hypothesis in selected_hypotheses:
+                if hypothesis.mode == "arc_title":
+                    season_rows, season_error, _ = self._tmdb_call_with_retry(
+                        lambda tmdb_id=tmdb_id: tmdb_chain.tmdb_seasons(tmdb_id)
+                    )
+                    if season_error:
+                        detail_errors.append(season_error)
+                    for season_row in season_rows or []:
+                        season = self._season_value(season_row, "season_number")
+                        season_name = str(
+                            self._season_value(season_row, "name") or ""
+                        ).strip()
+                        if not season or season <= 0:
+                            continue
+                        if not arc_name_match_score(hypothesis.arc_title, season_name):
+                            continue
+                        air_date = str(
+                            self._season_value(season_row, "air_date") or ""
+                        )
+                        episode_count = self._safe_int(
+                            self._season_value(season_row, "episode_count"),
+                            0,
+                        ) or None
+                        candidate = self._build_tmdb_candidate(
+                            mediainfo,
+                            hypothesis,
+                            season,
+                            season_name=season_name,
+                            season_episode_count=episode_count,
+                            season_year=air_date[:4] if air_date else None,
+                            imdb_exact=True,
+                        )
+                        scored.append(score_candidate(source, candidate))
+                        media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
+                    continue
+
+                season = hypothesis.season if hypothesis.season is not None else 1
+                candidate = self._build_tmdb_candidate(
+                    mediainfo,
+                    hypothesis,
+                    season,
+                    imdb_exact=True,
+                )
+                scored.append(score_candidate(source, candidate))
+                media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
+
+        attempt["hydrated_count"] = len(hydrated_ids)
+        if scored:
+            return choose_match(scored), media_by_key, search_attempts
+        if detail_errors:
+            decision = MatchDecision(
+                False,
+                "tmdb_detail_missing",
+                f"IMDb 已关联 TMDB，但详情加载失败：{detail_errors[-1]}",
+            )
+        else:
+            decision = MatchDecision(
+                False,
+                "no_candidate",
+                "IMDb 已关联 TMDB 电视剧，但没有满足季度结构的候选",
+            )
+        return decision, media_by_key, search_attempts
+
+    @staticmethod
+    def _result_value(result: Any, field: str) -> Any:
+        return result.get(field) if isinstance(result, dict) else getattr(result, field, None)
+
+    @staticmethod
+    def _tmdb_find_by_imdb_id(imdb_id: str) -> Dict[str, Any]:
+        """使用 MoviePilot 内置 TMDB 客户端执行外部 ID 反查。"""
+        from app.modules.themoviedb.tmdbv3api import Find
+
+        finder = Find(language=getattr(settings, "TMDB_LOCALE", None))
+        try:
+            return finder.find_by_imdb_id(imdb_id) or {}
+        finally:
+            finder.close()
 
     @staticmethod
     def _tmdb_call_with_retry(callable_):
@@ -1780,6 +2042,7 @@ class DoubanSubscribe(_PluginBase):
         season_name: str = "",
         season_episode_count: Optional[int] = None,
         season_year: Optional[str] = None,
+        imdb_exact: bool = False,
     ) -> TmdbCandidate:
         seasons = getattr(mediainfo, "seasons", {}) or {}
         episodes = seasons.get(season)
@@ -1808,6 +2071,7 @@ class DoubanSubscribe(_PluginBase):
             hypothesis_title=hypothesis.title,
             season_name=season_name,
             arc_title=hypothesis.arc_title,
+            imdb_exact=imdb_exact,
         )
 
     def _create_subscription(
@@ -1912,7 +2176,7 @@ class DoubanSubscribe(_PluginBase):
             manual_total_episode=1,
             exist_ok=True,
             username=PLUGIN_USERNAME,
-            message=False,
+            message=self._notify_subscription,
         )
         if not subscribe_id:
             return {

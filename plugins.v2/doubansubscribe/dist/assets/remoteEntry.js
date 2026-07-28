@@ -5,8 +5,8 @@ const currentImports = {};
       dynamicLoadingCss(["__federation_expose_Page-BSmPC0YO.css"], false, './Page');
       return __federation_import('./__federation_expose_Page-BxzGhs8D.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},
 "./Config":()=>{
-      dynamicLoadingCss(["__federation_expose_Config-B7nQAGvb.css"], false, './Config');
-      return __federation_import('./__federation_expose_Config-ByXqeV27.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
+      dynamicLoadingCss(["__federation_expose_Config-CakT7yZy.css"], false, './Config');
+      return __federation_import('./__federation_expose_Config-CW2M0Lnc.js').then(module =>Object.keys(module).every(item => exportSet.has(item)) ? () => module.default : () => module)},};
       const seen = {};
       const dynamicLoadingCss = (cssFilePaths, dontAppendStylesToHead, exposeItemName) => {
         const metaUrl = import.meta.url;
@@ -44,9 +44,9 @@ const currentImports = {};
            }
          } else {
            href = cssPath;
-         }
+        }
 
-          if (dontAppendStylesToHead) {
+         if (dontAppendStylesToHead) {
             const key = 'css__DoubanSubscribe__' + exposeItemName;
             window[key] = window[key] || [];
             window[key].push(href);

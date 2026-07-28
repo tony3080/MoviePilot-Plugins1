@@ -23,6 +23,7 @@ const defaults = {
   max_items: 50,
   candidate_limit: 10,
   confirmation_days: 7,
+  notify_subscription: true,
   media_categories: ['domestic', 'western', 'japan_korea', 'other'],
 }
 
@@ -89,14 +90,21 @@ onMounted(() => {
 
     <VForm class="config-form">
       <VRow>
-        <VCol cols="12" md="4">
+        <VCol cols="12" md="3">
           <VSwitch v-model="config.enabled" label="启用插件" color="primary" />
         </VCol>
-        <VCol cols="12" md="4">
+        <VCol cols="12" md="3">
           <VSwitch v-model="config.onlyonce" label="立即运行一次" color="primary" />
         </VCol>
-        <VCol cols="12" md="4">
+        <VCol cols="12" md="3">
           <VSwitch v-model="config.proxy" label="内容源使用代理" color="primary" />
+        </VCol>
+        <VCol cols="12" md="3">
+          <VSwitch
+            v-model="config.notify_subscription"
+            label="订阅成功通知"
+            color="primary"
+          />
         </VCol>
         <VCol cols="12">
           <VTextarea

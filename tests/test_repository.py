@@ -110,6 +110,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn('"state": "S"', source)
         self.assertIn('"model": "confirmation_days"', source)
         self.assertIn('"model": "media_categories"', source)
+        self.assertIn('"model": "notify_subscription"', source)
         self.assertNotIn('"model": "minimum_score"', source)
         self.assertNotIn('"model": "minimum_margin"', source)
 

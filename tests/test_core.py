@@ -208,6 +208,46 @@ class CandidateScoringTest(unittest.TestCase):
         self.assertFalse(decision.accepted)
         self.assertEqual(decision.status, "low_score")
 
+    def test_exact_title_year_and_multiple_actors_reaches_trust_line(self) -> None:
+        source = {
+            "title": "九个弹孔",
+            "year": "2026",
+            "actors": ["张桐", "何雨虹"],
+            "directors": ["白涛"],
+        }
+        candidate = core.TmdbCandidate(
+            tmdb_id=327506,
+            title="九个弹孔",
+            year="2026",
+            season=1,
+            actors=("张桐", "何雨虹"),
+            directors=(),
+        )
+
+        scored = core.score_candidate(source, candidate)
+        decision = core.choose_match([scored])
+
+        self.assertEqual(scored.score, 80)
+        self.assertIn("强身份组合", "".join(scored.evidence))
+        self.assertTrue(decision.accepted)
+
+    def test_imdb_exact_is_strong_but_severe_year_conflict_is_rejected(self) -> None:
+        source = {"title": "测试剧", "year": "2026"}
+        candidate = core.TmdbCandidate(
+            tmdb_id=99,
+            title="完全不同",
+            year="2018",
+            season=1,
+            imdb_exact=True,
+        )
+
+        scored = core.score_candidate(source, candidate)
+        decision = core.choose_match([scored])
+
+        self.assertIn("IMDb ID 精确关联", scored.evidence)
+        self.assertIn("IMDb 候选年份严重冲突", scored.evidence)
+        self.assertFalse(decision.accepted)
+
     def test_close_top_candidates_are_not_accepted(self) -> None:
         candidates = [
             core.TmdbCandidate(

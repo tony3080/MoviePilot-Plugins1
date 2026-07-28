@@ -97,6 +97,7 @@ class TmdbCandidate:
     hypothesis_title: str = ""
     season_name: str = ""
     arc_title: str = ""
+    imdb_exact: bool = False
 
 
 @dataclass(frozen=True)
@@ -582,7 +583,8 @@ def score_candidate(source: Dict[str, Any], candidate: TmdbCandidate) -> ScoredC
         (candidate.title, candidate.original_title, *candidate.names)
     )
 
-    if source_title and source_title in candidate_titles:
+    title_exact = bool(source_title and source_title in candidate_titles)
+    if title_exact:
         identity_score += 35
         evidence.append("主标题一致")
     if source_original and source_original != source_title and source_original in candidate_titles:
@@ -594,8 +596,9 @@ def score_candidate(source: Dict[str, Any], candidate: TmdbCandidate) -> ScoredC
 
     source_year = _year_number(source.get("year"))
     candidate_year = _year_number(candidate.year)
+    year_exact = bool(source_year and candidate_year == source_year)
     if candidate.mode != "base_and_season":
-        if source_year and candidate_year == source_year:
+        if year_exact:
             identity_score += 25
             evidence.append("作品年份一致")
         elif source_year and candidate_year and abs(source_year - candidate_year) > 1:
@@ -614,6 +617,17 @@ def score_candidate(source: Dict[str, Any], candidate: TmdbCandidate) -> ScoredC
     if source_directors.intersection(_normalized_set(candidate.directors)):
         identity_score += 10
         evidence.append("主创重合")
+
+    if title_exact and year_exact and len(actor_overlap) >= 2:
+        identity_score += 5
+        evidence.append("标题年份及主要演员形成强身份组合")
+
+    if candidate.imdb_exact:
+        identity_score += 100
+        evidence.append("IMDb ID 精确关联")
+        if source_year and candidate_year and abs(source_year - candidate_year) > 1:
+            identity_score -= 100
+            evidence.append("IMDb 候选年份严重冲突")
 
     if candidate.mode == "arc_title":
         hypothesis_title = normalize_title(candidate.hypothesis_title)
