@@ -58,6 +58,7 @@ DOUBAN_QUERY_INTERVAL_SECONDS = 3
 IMDB_ID_PATTERN = re.compile(r"\btt\d{7,10}\b", re.IGNORECASE)
 ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
+CATEGORY_SKIP_DATA_KEY = "category_skip_items"
 PLUGIN_USERNAME = "豆瓣订阅助手"
 SUCCESS_STATUSES = {"subscribed", "existing", "history_existing"}
 SKIPPED_STATUSES = {"category_skipped"}
@@ -97,7 +98,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.2"
+    plugin_version = "0.5.3"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1416,6 +1417,11 @@ class DoubanSubscribe(_PluginBase):
             if item.key in completed_keys:
                 summary["skipped"] += 1
                 continue
+            cached_skip = self._cached_category_skip(item)
+            if cached_skip:
+                self._record_history(history, cached_skip)
+                summary["skipped"] += 1
+                continue
             record = self._process_item(item)
             self._record_history(history, record)
             status = record.get("status")
@@ -1447,9 +1453,6 @@ class DoubanSubscribe(_PluginBase):
             if not douban_info:
                 return self._failed_record(base_record, "douban_not_found", "未匹配到豆瓣电视剧条目")
             douban_id = str(douban_info.get("id") or item.douban_id or "")
-            imdb_id = self._resolve_douban_imdb_id(douban_info)
-            if imdb_id:
-                douban_info["imdb_id"] = imdb_id
             total_episode = extract_total_episode(douban_info)
             airing_started = has_started_airing(douban_info)
             category = classify_media_region(douban_info)
@@ -1458,18 +1461,24 @@ class DoubanSubscribe(_PluginBase):
                 "douban_title": douban_info.get("title") or item.title,
                 "douban_year": douban_info.get("year") or item.year or "",
                 "douban_total": total_episode,
-                "imdb_id": imdb_id or "",
+                "imdb_id": "",
                 "airing_started": airing_started,
                 "total_pending": not bool(total_episode),
                 "category": category,
                 "countries": douban_info.get("countries") or [],
             })
             if category not in self._media_categories:
-                return self._failed_record(
+                record = self._failed_record(
                     base_record,
                     "category_skipped",
                     f"{MEDIA_CATEGORY_LABELS.get(category, category)}未在订阅类型中启用",
                 )
+                self._remember_category_skip(item, record)
+                return record
+            imdb_id = self._resolve_douban_imdb_id(douban_info)
+            if imdb_id:
+                douban_info["imdb_id"] = imdb_id
+                base_record["imdb_id"] = imdb_id
             if not total_episode and not airing_started:
                 return self._failed_record(
                     base_record,
@@ -2845,6 +2854,102 @@ class DoubanSubscribe(_PluginBase):
             if changed or not isinstance(raw, dict):
                 self.save_data("processed_items", processed)
             return processed
+
+    def _cached_category_skip(self, item: FeedItem) -> Optional[Dict[str, Any]]:
+        """Return a fresh skip record when the cached category remains disabled."""
+        index = self._category_skip_index()
+        cached = None
+        for key in self._category_skip_keys(item):
+            value = index.get(key)
+            if isinstance(value, dict):
+                cached = value
+                break
+        if not cached:
+            return None
+        category = str(cached.get("category") or "")
+        if not category or category in self._media_categories:
+            return None
+        return {
+            **item.to_dict(),
+            "douban_id": str(cached.get("douban_id") or item.douban_id or ""),
+            "douban_title": cached.get("douban_title") or item.title,
+            "douban_year": cached.get("douban_year") or item.year or "",
+            "douban_total": cached.get("douban_total"),
+            "imdb_id": cached.get("imdb_id") or "",
+            "airing_started": bool(cached.get("airing_started")),
+            "total_pending": bool(cached.get("total_pending")),
+            "category": category,
+            "countries": cached.get("countries") or [],
+            "status": "category_skipped",
+            "reason": (
+                f"{MEDIA_CATEGORY_LABELS.get(category, category)}未在订阅类型中启用"
+                "（地区缓存命中，未请求豆瓣）"
+            ),
+            "time": self._now(),
+        }
+
+    def _category_skip_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load the category cache and migrate disabled-category history."""
+        with self._data_lock:
+            raw = self.get_data(CATEGORY_SKIP_DATA_KEY) or {}
+            index = {
+                str(key): dict(value)
+                for key, value in raw.items()
+                if key and isinstance(value, dict)
+            } if isinstance(raw, dict) else {}
+            changed = not isinstance(raw, dict)
+            for record in self.get_data("history") or []:
+                if not isinstance(record, dict) or record.get("status") != "category_skipped":
+                    continue
+                cached = self._category_skip_cache_record(record)
+                keys = [str(record.get("key") or "")]
+                douban_id = str(record.get("douban_id") or "").strip()
+                if douban_id:
+                    keys.append(f"douban:{douban_id}")
+                for key in dict.fromkeys(value for value in keys if value):
+                    if key not in index:
+                        index[key] = dict(cached)
+                        changed = True
+            if changed:
+                self.save_data(CATEGORY_SKIP_DATA_KEY, index)
+            return index
+
+    def _remember_category_skip(
+        self,
+        item: FeedItem,
+        record: Dict[str, Any],
+    ) -> None:
+        """Persist one disabled-category result under source and Douban aliases."""
+        cached = self._category_skip_cache_record(record)
+        with self._data_lock:
+            index = self._category_skip_index()
+            for key in self._category_skip_keys(
+                item,
+                douban_id=str(record.get("douban_id") or ""),
+            ):
+                index[key] = dict(cached)
+            self.save_data(CATEGORY_SKIP_DATA_KEY, index)
+
+    @staticmethod
+    def _category_skip_cache_record(record: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep only fields needed to rebuild a cached category result."""
+        return {
+            field: record.get(field)
+            for field in (
+                "title", "douban_id", "douban_title", "douban_year",
+                "douban_total", "imdb_id", "airing_started", "total_pending",
+                "category", "countries", "time",
+            )
+        }
+
+    @staticmethod
+    def _category_skip_keys(item: FeedItem, douban_id: str = "") -> List[str]:
+        """Build stable source and Douban aliases for a category skip."""
+        keys = [item.key]
+        resolved_douban_id = str(douban_id or item.douban_id or "").strip()
+        if resolved_douban_id:
+            keys.append(f"douban:{resolved_douban_id}")
+        return list(dict.fromkeys(keys))
 
     def _mark_processed(
         self,

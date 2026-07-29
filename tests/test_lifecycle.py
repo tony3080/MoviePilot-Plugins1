@@ -392,6 +392,152 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(captured["total_episode"], 100)
         self.assertTrue(captured["total_pending"])
 
+    def test_disabled_category_is_cached_before_imdb_and_tmdb(self) -> None:
+        item = plugin_module.FeedItem(
+            title="碧蓝之海 第三季",
+            guid="maoyan:tv:37425956",
+            source_url="https://piaofang.maoyan.com/test",
+        )
+        self.plugin._media_categories = ["domestic"]
+        self.plugin._resolve_douban = lambda _item: {
+            "id": "37425956",
+            "title": "碧蓝之海 第三季",
+            "year": "2026",
+            "episodes_count": 12,
+            "countries": ["日本"],
+        }
+        self.plugin._resolve_douban_imdb_id = lambda _info: self.fail(
+            "地区跳过前不应读取 IMDb 信息页"
+        )
+        self.plugin._match_tmdb = lambda *_args: self.fail(
+            "地区跳过后不应查询 TMDB"
+        )
+
+        record = self.plugin._process_item(item)
+
+        self.assertEqual(record["status"], "category_skipped")
+        self.assertEqual(record["category"], "japan_korea")
+        cached = self.plugin.get_data(plugin_module.CATEGORY_SKIP_DATA_KEY)
+        self.assertEqual(cached[item.key]["douban_id"], "37425956")
+        self.assertEqual(cached["douban:37425956"]["category"], "japan_korea")
+
+    def test_category_cache_skips_next_source_run_without_processing(self) -> None:
+        item = plugin_module.FeedItem(
+            title="X战警97 第二季",
+            guid="maoyan:tv:36010991",
+            source_url="https://piaofang.maoyan.com/test",
+        )
+        self.plugin._media_categories = ["domestic"]
+        previous_history = [{
+            **item.to_dict(),
+            "status": "category_skipped",
+            "reason": "欧美剧未在订阅类型中启用",
+            "time": "2026-07-29T09:01:49+08:00",
+            "douban_id": "36010991",
+            "douban_title": item.title,
+            "douban_total": 9,
+            "category": "western",
+            "countries": ["美国"],
+        }]
+        self.plugin.save_data("history", previous_history)
+        self.assertIsNone(self.plugin.get_data(plugin_module.CATEGORY_SKIP_DATA_KEY))
+        self.plugin._process_item = lambda _item: self.fail(
+            "历史迁移后的地区缓存不应进入豆瓣处理流程"
+        )
+        summary = {
+            "items": 0,
+            "subscribed": 0,
+            "existing": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        stopped = self.plugin._process_source_items(
+            items=[item],
+            history=previous_history,
+            processed_items={},
+            completed_keys=set(),
+            summary=summary,
+        )
+
+        self.assertFalse(stopped)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(previous_history[0]["status"], "category_skipped")
+        self.assertIn("地区缓存命中，未请求豆瓣", previous_history[0]["reason"])
+        migrated = self.plugin.get_data(plugin_module.CATEGORY_SKIP_DATA_KEY)
+        self.assertEqual(migrated[item.key]["douban_id"], "36010991")
+        self.assertEqual(migrated["douban:36010991"]["category"], "western")
+
+    def test_enabling_cached_category_reenters_processing(self) -> None:
+        item = plugin_module.FeedItem(
+            title="穹庐下的魔女",
+            douban_id="37315819",
+        )
+        self.plugin.save_data(plugin_module.CATEGORY_SKIP_DATA_KEY, {
+            item.key: {
+                "douban_id": "37315819",
+                "category": "japan_korea",
+            },
+        })
+        self.plugin._media_categories = ["domestic", "japan_korea"]
+        calls = []
+
+        def process_item(value):
+            calls.append(value.key)
+            return {
+                **value.to_dict(),
+                "status": "no_candidate",
+                "reason": "test",
+            }
+
+        self.plugin._process_item = process_item
+        summary = {
+            "items": 0,
+            "subscribed": 0,
+            "existing": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+        self.plugin._process_source_items(
+            items=[item],
+            history=[],
+            processed_items={},
+            completed_keys=set(),
+            summary=summary,
+        )
+
+        self.assertEqual(calls, [item.key])
+        self.assertEqual(summary["failed"], 1)
+
+    def test_douban_alias_reuses_category_skip_across_sources(self) -> None:
+        maoyan_item = plugin_module.FeedItem(
+            title="斯图尔特未能拯救宇宙",
+            guid="maoyan:web:36358245",
+        )
+        self.plugin._media_categories = ["domestic"]
+        self.plugin._remember_category_skip(maoyan_item, {
+            "title": maoyan_item.title,
+            "douban_id": "36358245",
+            "douban_title": maoyan_item.title,
+            "douban_total": 10,
+            "category": "western",
+            "countries": ["美国"],
+            "status": "category_skipped",
+            "time": "2026-07-29T09:01:43+08:00",
+        })
+        rss_item = plugin_module.FeedItem(
+            title="Stuart Fails to Save the Universe",
+            douban_id="36358245",
+            source_url="https://example.test/feed",
+        )
+
+        cached = self.plugin._cached_category_skip(rss_item)
+
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["douban_id"], "36358245")
+        self.assertEqual(cached["category"], "western")
+
     def test_pending_total_is_replaced_and_progress_is_preserved(self) -> None:
         subscribe = FakeSubscribe(8)
         subscribe.total_episode = 100
