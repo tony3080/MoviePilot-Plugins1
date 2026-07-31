@@ -996,6 +996,170 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(decision.winner.candidate.season, 2)
         self.assertTrue(any(item["mode"] == "arc_title" for item in attempts))
 
+    def test_numeric_suffix_finds_parent_through_explicit_season_query(self) -> None:
+        parent = types.SimpleNamespace(
+            tmdb_id=374627,
+            title="二龙湖·村暖花开",
+            original_title="",
+            names=["二龙湖·村暖花开3"],
+            year="2024",
+            seasons={1: [object()], 2: [object()], 3: [object()] * 24},
+            season_years={3: "2026"},
+            actors=["张浩", "朱丽岚"],
+            directors=["张浩"],
+        )
+        queries = []
+
+        def search_medias(meta, **_kwargs):
+            queries.append(meta.name)
+            if meta.name == "二龙湖·村暖花开 第三季":
+                return [types.SimpleNamespace(tmdb_id=374627)]
+            return []
+
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=search_medias,
+            recognize_media=lambda **_kwargs: parent,
+        )
+
+        decision, media_by_key, _attempts = self.plugin._match_tmdb({
+            "title": "二龙湖·村暖花开3",
+            "year": "2026",
+            "episodes_count": 24,
+            "actors": [{"name": "张浩"}, {"name": "朱丽岚"}],
+            "directors": [{"name": "张浩"}],
+        }, 24)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.tmdb_id, 374627)
+        self.assertEqual(decision.winner.candidate.season, 3)
+        self.assertIn((374627, 3), media_by_key)
+        self.assertIn("二龙湖·村暖花开", queries)
+        self.assertIn("二龙湖·村暖花开 第3季", queries)
+        self.assertIn("二龙湖·村暖花开 第三季", queries)
+
+    def test_numeric_suffix_rejects_standalone_sequel_s01(self) -> None:
+        standalone = types.SimpleNamespace(
+            tmdb_id=999003,
+            title="二龙湖·村暖花开 第三季",
+            original_title="",
+            names=["二龙湖·村暖花开3"],
+            year="2026",
+            seasons={1: [object()] * 24},
+            season_years={1: "2026"},
+            actors=["张浩", "朱丽岚"],
+            directors=["张浩"],
+        )
+
+        def search_medias(meta, **_kwargs):
+            if meta.name == "二龙湖·村暖花开 第三季":
+                return [types.SimpleNamespace(tmdb_id=999003)]
+            return []
+
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=search_medias,
+            recognize_media=lambda **_kwargs: standalone,
+        )
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb({
+            "title": "二龙湖·村暖花开3",
+            "year": "2026",
+            "episodes_count": 24,
+            "actors": [{"name": "张浩"}, {"name": "朱丽岚"}],
+            "directors": [{"name": "张浩"}],
+        }, 24)
+
+        self.assertFalse(decision.accepted)
+        self.assertEqual(decision.status, "no_candidate")
+        self.assertIn("父剧不存在目标季度 S03", decision.reason)
+        self.assertIn("独立续季条目的 S01", decision.reason)
+        self.assertEqual(media_by_key, {})
+        self.assertTrue(any(
+            item["parent_season_rejections"] for item in attempts
+        ))
+
+    def test_standalone_imdb_match_falls_back_to_parent_season(self) -> None:
+        standalone = types.SimpleNamespace(
+            tmdb_id=999003,
+            title="二龙湖·村暖花开 第三季",
+            original_title="",
+            names=["二龙湖·村暖花开3"],
+            year="2026",
+            seasons={1: [object()] * 24},
+            season_years={1: "2026"},
+            actors=["张浩", "朱丽岚"],
+            directors=["张浩"],
+        )
+        parent = types.SimpleNamespace(
+            tmdb_id=374627,
+            title="二龙湖·村暖花开",
+            original_title="",
+            names=["二龙湖·村暖花开3"],
+            year="2024",
+            seasons={1: [object()], 2: [object()], 3: [object()] * 24},
+            season_years={3: "2026"},
+            actors=["张浩", "朱丽岚"],
+            directors=["张浩"],
+        )
+        self.plugin._tmdb_find_by_imdb_id = lambda _imdb_id: {
+            "tv_results": [{"id": 999003}],
+        }
+
+        def search_medias(meta, **_kwargs):
+            if meta.name == "二龙湖·村暖花开 第三季":
+                return [types.SimpleNamespace(tmdb_id=374627)]
+            return []
+
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=search_medias,
+            recognize_media=lambda tmdbid, **_kwargs: (
+                standalone if tmdbid == 999003 else parent
+            ),
+        )
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb({
+            "title": "二龙湖·村暖花开3",
+            "year": "2026",
+            "episodes_count": 24,
+            "actors": [{"name": "张浩"}, {"name": "朱丽岚"}],
+            "directors": [{"name": "张浩"}],
+            "imdb_id": "tt9999003",
+        }, 24)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.tmdb_id, 374627)
+        self.assertEqual(decision.winner.candidate.season, 3)
+        self.assertNotIn((999003, 1), media_by_key)
+        self.assertEqual(attempts[0]["mode"], "imdb_exact")
+        self.assertEqual(attempts[0]["rejected_parent_seasons"], [3])
+
+    def test_first_season_can_still_match_a_new_tmdb_show(self) -> None:
+        media = types.SimpleNamespace(
+            tmdb_id=100001,
+            title="测试新剧 第一季",
+            original_title="",
+            names=[],
+            year="2026",
+            seasons={1: [object()] * 12},
+            season_years={1: "2026"},
+            actors=["演员甲", "演员乙"],
+            directors=[],
+        )
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=lambda **_kwargs: [types.SimpleNamespace(tmdb_id=100001)],
+            recognize_media=lambda **_kwargs: media,
+        )
+
+        decision, media_by_key, _attempts = self.plugin._match_tmdb({
+            "title": "测试新剧 第一季",
+            "year": "2026",
+            "episodes_count": 12,
+            "actors": [{"name": "演员甲"}, {"name": "演员乙"}],
+        }, 12)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 1)
+        self.assertIn((100001, 1), media_by_key)
+
     def test_tmdb_search_error_retries_and_records_diagnostics(self) -> None:
         calls = []
 

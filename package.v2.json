@@ -3,7 +3,7 @@
     "name": "豆瓣订阅助手",
     "description": "从 RSS 和猫眼榜单发现剧集，锁定豆瓣总集数，并补搜今日未更新订阅。",
     "labels": "订阅",
-    "version": "0.5.4",
+    "version": "0.5.5",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -11,6 +11,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.5.5": "增强末尾数字续季的 TMDB 搜索，补充基础名、第N季和中文季名查询；第二季以后只接受父剧真实分季，拒绝将独立续季条目的 S01 自动订阅",
       "v0.5.4": "修复带明确季数的猫眼条目被 MoviePilot 豆瓣严格匹配误判为未找到的问题；自动拆分主剧名与真实季数，并保留年份降级重试",
       "v0.5.3": "将地区过滤提前到 IMDb/TMDB 之前，自动迁移现有跳过历史，并按内容源 key 与豆瓣 ID 持久缓存；未启用地区重复出现时不再请求豆瓣，启用对应地区后自动恢复处理",
       "v0.5.2": "优先从豆瓣完整信息页提取 IMDb ID 并反查 TMDB，无结果时保留诊断后回退标题匹配；精确标题、年份和多名演员组合达到可信线，并恢复可配置的订阅成功通知",

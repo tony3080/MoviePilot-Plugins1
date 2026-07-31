@@ -98,7 +98,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.4"
+    plugin_version = "0.5.5"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1682,6 +1682,7 @@ class DoubanSubscribe(_PluginBase):
         any_hydrated = False
         any_season_detail = False
         arc_season_requested = False
+        rejected_parent_seasons = set()
         search_errors: List[str] = []
         detail_errors: List[str] = []
         tmdb_chain = TmdbChain()
@@ -1690,6 +1691,11 @@ class DoubanSubscribe(_PluginBase):
             original_title=str(douban_info.get("original_title") or ""),
             aliases=tuple(str(value) for value in (douban_info.get("aka") or []) if value),
         )
+        parent_season_hypotheses = [
+            hypothesis for hypothesis in hypotheses
+            if hypothesis.mode == "base_and_season"
+            and (hypothesis.season or 0) >= 2
+        ]
         imdb_id = self._extract_imdb_id(douban_info.get("imdb_id"))
         if imdb_id:
             imdb_match = self._match_tmdb_by_imdb(
@@ -1701,121 +1707,167 @@ class DoubanSubscribe(_PluginBase):
             )
             if imdb_match is not None:
                 return imdb_match
-
-        for hypothesis in hypotheses:
-            meta = MetaInfo(hypothesis.title)
-            meta.type = MediaType.TV
-            if hypothesis.mode not in {"base_and_season", "arc_title"} and year:
-                meta.year = year
-            results, search_error, request_count = self._tmdb_call_with_retry(
-                lambda: self.chain.search_medias(meta=meta, source="themoviedb"),
+            rejected_parent_seasons.update(
+                search_attempts[-1].get("rejected_parent_seasons") or []
             )
-            results = results or []
-            attempt = {
-                "query": hypothesis.title,
-                "season": hypothesis.season,
-                "mode": hypothesis.mode,
-                "result_count": len(results),
-                "hydrated_count": 0,
-                "request_count": request_count,
-                "error": search_error,
-            }
-            search_attempts.append(attempt)
-            if search_error:
-                search_errors.append(search_error)
-                continue
-            search_succeeded = True
-            if results:
-                any_results = True
-            hydrated_in_attempt = set()
-            for search_result in results:
-                tmdb_id = getattr(search_result, "tmdb_id", None)
-                if not tmdb_id:
+
+        requested_queries = set()
+        for hypothesis in hypotheses:
+            for query_title in self._tmdb_query_titles(hypothesis):
+                query_year = (
+                    year
+                    if hypothesis.mode not in {"base_and_season", "arc_title"}
+                    else None
+                )
+                query_key = (query_title.casefold(), query_year)
+                if query_key in requested_queries:
                     continue
-                tmdb_id = int(tmdb_id)
-                if len(hydrated_by_id) >= self._candidate_limit and tmdb_id not in hydrated_by_id:
+                requested_queries.add(query_key)
+                meta = MetaInfo(query_title)
+                # MoviePilot's MetaInfo may strip season suffixes before TMDB search.
+                # Keep the actual query intact; parent-season validation happens below.
+                meta.name = query_title
+                meta.type = MediaType.TV
+                if query_year:
+                    meta.year = query_year
+                results, search_error, request_count = self._tmdb_call_with_retry(
+                    lambda: self.chain.search_medias(meta=meta, source="themoviedb"),
+                )
+                results = results or []
+                attempt = {
+                    "query": query_title,
+                    "season": hypothesis.season,
+                    "mode": hypothesis.mode,
+                    "result_count": len(results),
+                    "hydrated_count": 0,
+                    "parent_season_rejections": 0,
+                    "request_count": request_count,
+                    "error": search_error,
+                }
+                search_attempts.append(attempt)
+                if search_error:
+                    search_errors.append(search_error)
                     continue
-                mediainfo = hydrated_by_id.get(tmdb_id)
-                if mediainfo is None:
-                    detail_meta = MetaInfo(hypothesis.title)
-                    detail_meta.type = MediaType.TV
-                    mediainfo, detail_error, _ = self._tmdb_call_with_retry(
-                        lambda: self.chain.recognize_media(
-                            meta=detail_meta,
-                            mtype=MediaType.TV,
-                            tmdbid=tmdb_id,
-                            cache=False,
-                        ),
-                    )
-                    if detail_error:
-                        detail_errors.append(detail_error)
-                    if not mediainfo:
+                search_succeeded = True
+                if results:
+                    any_results = True
+                hydrated_in_attempt = set()
+                for search_result in results:
+                    tmdb_id = getattr(search_result, "tmdb_id", None)
+                    if not tmdb_id:
                         continue
-                    hydrated_by_id[tmdb_id] = mediainfo
-                any_hydrated = True
-                hydrated_in_attempt.add(tmdb_id)
-                if hypothesis.mode == "arc_title":
-                    arc_season_requested = True
-                    if tmdb_id not in seasons_by_id:
-                        season_rows, season_error, _ = self._tmdb_call_with_retry(
-                            lambda: tmdb_chain.tmdb_seasons(tmdb_id),
+                    tmdb_id = int(tmdb_id)
+                    if len(hydrated_by_id) >= self._candidate_limit and tmdb_id not in hydrated_by_id:
+                        continue
+                    mediainfo = hydrated_by_id.get(tmdb_id)
+                    if mediainfo is None:
+                        detail_meta = MetaInfo(hypothesis.title)
+                        detail_meta.type = MediaType.TV
+                        mediainfo, detail_error, _ = self._tmdb_call_with_retry(
+                            lambda: self.chain.recognize_media(
+                                meta=detail_meta,
+                                mtype=MediaType.TV,
+                                tmdbid=tmdb_id,
+                                cache=False,
+                            ),
                         )
-                        seasons_by_id[tmdb_id] = list(season_rows or [])
-                        if season_error:
-                            detail_errors.append(season_error)
-                    season_rows = seasons_by_id[tmdb_id]
-                    if season_rows:
-                        any_season_detail = True
-                    for season_row in season_rows:
-                        season = self._season_value(season_row, "season_number")
-                        season_name = str(
-                            self._season_value(season_row, "name") or ""
-                        ).strip()
-                        if not season or season <= 0:
+                        if detail_error:
+                            detail_errors.append(detail_error)
+                        if not mediainfo:
                             continue
-                        if not arc_name_match_score(hypothesis.arc_title, season_name):
+                        hydrated_by_id[tmdb_id] = mediainfo
+                    any_hydrated = True
+                    hydrated_in_attempt.add(tmdb_id)
+                    if hypothesis.mode == "arc_title":
+                        arc_season_requested = True
+                        if tmdb_id not in seasons_by_id:
+                            season_rows, season_error, _ = self._tmdb_call_with_retry(
+                                lambda: tmdb_chain.tmdb_seasons(tmdb_id),
+                            )
+                            seasons_by_id[tmdb_id] = list(season_rows or [])
+                            if season_error:
+                                detail_errors.append(season_error)
+                        season_rows = seasons_by_id[tmdb_id]
+                        if season_rows:
+                            any_season_detail = True
+                        for season_row in season_rows:
+                            season = self._season_value(season_row, "season_number")
+                            season_name = str(
+                                self._season_value(season_row, "name") or ""
+                            ).strip()
+                            if not season or season <= 0:
+                                continue
+                            if not arc_name_match_score(hypothesis.arc_title, season_name):
+                                continue
+                            search_key = (
+                                tmdb_id,
+                                season,
+                                hypothesis.mode,
+                                hypothesis.arc_title,
+                            )
+                            if search_key in searched_keys:
+                                continue
+                            searched_keys.add(search_key)
+                            air_date = str(
+                                self._season_value(season_row, "air_date") or ""
+                            )
+                            episode_count = self._season_value(
+                                season_row,
+                                "episode_count",
+                            )
+                            try:
+                                episode_count = int(episode_count)
+                            except (TypeError, ValueError):
+                                episode_count = None
+                            candidate = self._build_tmdb_candidate(
+                                mediainfo,
+                                hypothesis,
+                                season,
+                                season_name=season_name,
+                                season_episode_count=episode_count,
+                                season_year=air_date[:4] if air_date else None,
+                            )
+                            scored.append(score_candidate(source, candidate))
+                            media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
+                        continue
+
+                    candidate_hypotheses = (
+                        parent_season_hypotheses
+                        if parent_season_hypotheses
+                        and hypothesis.mode != "base_and_season"
+                        else [hypothesis]
+                    )
+                    for candidate_hypothesis in candidate_hypotheses:
+                        season = (
+                            candidate_hypothesis.season
+                            if candidate_hypothesis.season is not None
+                            else 1
+                        )
+                        if (
+                            candidate_hypothesis.mode == "base_and_season"
+                            and season >= 2
+                            and not self._media_has_season(mediainfo, season)
+                        ):
+                            rejected_parent_seasons.add(season)
+                            attempt["parent_season_rejections"] += 1
                             continue
                         search_key = (
                             tmdb_id,
                             season,
-                            hypothesis.mode,
-                            hypothesis.arc_title,
+                            candidate_hypothesis.mode,
+                            "",
                         )
                         if search_key in searched_keys:
                             continue
                         searched_keys.add(search_key)
-                        air_date = str(
-                            self._season_value(season_row, "air_date") or ""
-                        )
-                        episode_count = self._season_value(
-                            season_row,
-                            "episode_count",
-                        )
-                        try:
-                            episode_count = int(episode_count)
-                        except (TypeError, ValueError):
-                            episode_count = None
                         candidate = self._build_tmdb_candidate(
                             mediainfo,
-                            hypothesis,
+                            candidate_hypothesis,
                             season,
-                            season_name=season_name,
-                            season_episode_count=episode_count,
-                            season_year=air_date[:4] if air_date else None,
                         )
                         scored.append(score_candidate(source, candidate))
                         media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
-                    continue
-
-                season = hypothesis.season if hypothesis.season is not None else 1
-                search_key = (tmdb_id, season, hypothesis.mode, "")
-                if search_key in searched_keys:
-                    continue
-                searched_keys.add(search_key)
-                candidate = self._build_tmdb_candidate(mediainfo, hypothesis, season)
-                scored.append(score_candidate(source, candidate))
-                media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
-            attempt["hydrated_count"] = len(hydrated_in_attempt)
+                attempt["hydrated_count"] = len(hydrated_in_attempt)
 
         if not scored:
             if search_errors and not search_succeeded:
@@ -1823,6 +1875,15 @@ class DoubanSubscribe(_PluginBase):
                     False,
                     "tmdb_search_error",
                     f"TMDB 搜索接口连续失败：{search_errors[-1]}",
+                )
+            elif rejected_parent_seasons:
+                season_text = ", ".join(
+                    f"S{season:02d}" for season in sorted(rejected_parent_seasons)
+                )
+                decision = MatchDecision(
+                    False,
+                    "no_candidate",
+                    f"候选父剧不存在目标季度 {season_text}，已拒绝按独立续季条目的 S01 自动订阅",
                 )
             elif not any_results:
                 decision = MatchDecision(
@@ -1856,6 +1917,34 @@ class DoubanSubscribe(_PluginBase):
             self._with_imdb_fallback_context(decision, imdb_id, search_attempts),
             media_by_key,
             search_attempts,
+        )
+
+    @classmethod
+    def _tmdb_query_titles(cls, hypothesis: Any) -> Tuple[str, ...]:
+        """Return real TMDB queries while keeping sequel-season intent separate."""
+        titles = [str(hypothesis.title or "").strip()]
+        season = hypothesis.season
+        if hypothesis.mode == "base_and_season" and season and season >= 2:
+            titles.extend((
+                f"{hypothesis.title} 第{season}季",
+                f"{hypothesis.title} 第{cls._chinese_number(season)}季",
+            ))
+        return tuple(dict.fromkeys(title for title in titles if title))
+
+    @staticmethod
+    def _chinese_number(value: int) -> str:
+        digits = "零一二三四五六七八九"
+        if value < 10:
+            return digits[value]
+        tens, units = divmod(value, 10)
+        prefix = "十" if tens == 1 else f"{digits[tens]}十"
+        return prefix if units == 0 else f"{prefix}{digits[units]}"
+
+    @staticmethod
+    def _media_has_season(mediainfo: Any, season: int) -> bool:
+        seasons = getattr(mediainfo, "seasons", {}) or {}
+        return isinstance(seasons, dict) and (
+            season in seasons or str(season) in seasons
         )
 
     @staticmethod
@@ -1909,6 +1998,8 @@ class DoubanSubscribe(_PluginBase):
             "mode": "imdb_exact",
             "result_count": len(tv_results),
             "hydrated_count": 0,
+            "parent_season_rejections": 0,
+            "rejected_parent_seasons": [],
             "request_count": request_count,
             "error": error,
         }
@@ -1925,6 +2016,7 @@ class DoubanSubscribe(_PluginBase):
         media_by_key: Dict[Tuple[int, int], Any] = {}
         detail_errors: List[str] = []
         hydrated_ids = set()
+        rejected_parent_seasons = set()
 
         for raw_result in tv_results[:self._candidate_limit]:
             tmdb_id = self._result_value(raw_result, "id")
@@ -1985,6 +2077,14 @@ class DoubanSubscribe(_PluginBase):
                     continue
 
                 season = hypothesis.season if hypothesis.season is not None else 1
+                if (
+                    hypothesis.mode == "base_and_season"
+                    and season >= 2
+                    and not self._media_has_season(mediainfo, season)
+                ):
+                    rejected_parent_seasons.add(season)
+                    attempt["parent_season_rejections"] += 1
+                    continue
                 candidate = self._build_tmdb_candidate(
                     mediainfo,
                     hypothesis,
@@ -1995,8 +2095,11 @@ class DoubanSubscribe(_PluginBase):
                 media_by_key[(candidate.tmdb_id, candidate.season)] = mediainfo
 
         attempt["hydrated_count"] = len(hydrated_ids)
+        attempt["rejected_parent_seasons"] = sorted(rejected_parent_seasons)
         if scored:
             return choose_match(scored), media_by_key, search_attempts
+        if rejected_parent_seasons and not detail_errors:
+            return None
         if detail_errors:
             decision = MatchDecision(
                 False,
