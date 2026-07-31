@@ -98,7 +98,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.3"
+    plugin_version = "0.5.4"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1536,13 +1536,13 @@ class DoubanSubscribe(_PluginBase):
     def _resolve_douban(self, item: FeedItem) -> Optional[Dict[str, Any]]:
         douban_id = item.douban_id
         if not douban_id:
-            for title, year in self._douban_search_attempts(item):
+            for title, year, season in self._douban_search_attempts(item):
                 matched = self._call_douban(
                     self.chain.match_doubaninfo,
                     name=title,
                     mtype=MediaType.TV,
                     year=year,
-                    season=None,
+                    season=season,
                 )
                 if matched and matched.get("id"):
                     douban_id = str(matched["id"])
@@ -1604,21 +1604,33 @@ class DoubanSubscribe(_PluginBase):
         return match.group(0).lower() if match else None
 
     @staticmethod
-    def _douban_search_attempts(item: FeedItem) -> List[Tuple[str, Optional[str]]]:
-        """生成豆瓣标题搜索的去重降级路径。"""
+    def _douban_search_attempts(
+        item: FeedItem,
+    ) -> List[Tuple[str, Optional[str], Optional[int]]]:
+        """生成豆瓣标题、年份及明确季数的去重降级路径。"""
         source_title = str(item.title or "").strip()
         dequoted_title = re.sub(r"[\"'“”‘’「」『』]", "", source_title)
         dequoted_title = re.sub(r"\s+", " ", dequoted_title).strip()
         titles = list(dict.fromkeys(
             title for title in (source_title, dequoted_title) if title
         ))
+        queries = []
+        for title in titles:
+            season_queries = [
+                (hypothesis.title, hypothesis.season)
+                for hypothesis in build_title_hypotheses(title)
+                if hypothesis.mode == "base_and_season"
+                and hypothesis.strength == "strong"
+            ]
+            queries.extend(season_queries or [(title, None)])
+        queries = list(dict.fromkeys(queries))
         years = [item.year] if item.year else [None]
         if item.year:
             years.append(None)
         return [
-            (title, year)
+            (title, year, season)
             for year in years
-            for title in titles
+            for title, season in queries
         ]
 
     def _call_douban(self, method, **kwargs):

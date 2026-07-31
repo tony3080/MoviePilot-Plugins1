@@ -1271,15 +1271,64 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
 
         self.assertEqual(result["id"], "123456")
         self.assertEqual(
-            [(call["name"], call["year"]) for call in search_calls],
             [
-                ("二龙湖·“村”暖花开3", "2026"),
-                ("二龙湖·村暖花开3", "2026"),
-                ("二龙湖·“村”暖花开3", None),
-                ("二龙湖·村暖花开3", None),
+                (call["name"], call["year"], call["season"])
+                for call in search_calls
+            ],
+            [
+                ("二龙湖·“村”暖花开3", "2026", None),
+                ("二龙湖·村暖花开3", "2026", None),
+                ("二龙湖·“村”暖花开3", None, None),
+                ("二龙湖·村暖花开3", None, None),
             ],
         )
         self.assertTrue(all(call["raise_exception"] for call in search_calls))
+
+    def test_douban_search_uses_base_title_and_explicit_season(self) -> None:
+        cases = (
+            ("中餐厅 第十季", "中餐厅", 10, "37814458"),
+            ("半熟恋人 第五季", "半熟恋人", 5, "37815127"),
+        )
+
+        for source_title, base_title, season, douban_id in cases:
+            with self.subTest(title=source_title):
+                item = plugin_module.FeedItem(
+                    title=source_title,
+                    guid=f"maoyan:tv:{douban_id}",
+                    year="2026",
+                )
+                search_calls = []
+
+                def match_doubaninfo(**kwargs):
+                    search_calls.append(kwargs)
+                    if (
+                        kwargs["name"] == base_title
+                        and kwargs["year"] == "2026"
+                        and kwargs["season"] == season
+                    ):
+                        return {"id": douban_id}
+                    return None
+
+                self.plugin.chain = types.SimpleNamespace(
+                    match_doubaninfo=match_doubaninfo,
+                    douban_info=lambda **_kwargs: {
+                        "id": douban_id,
+                        "title": source_title,
+                    },
+                )
+
+                with patch.object(plugin_module.time, "sleep"):
+                    result = self.plugin._resolve_douban(item)
+
+                self.assertEqual(result["id"], douban_id)
+                self.assertEqual(
+                    (
+                        search_calls[0]["name"],
+                        search_calls[0]["year"],
+                        search_calls[0]["season"],
+                    ),
+                    (base_title, "2026", season),
+                )
 
     def test_durable_processed_index_survives_history_removal(self) -> None:
         record = {
