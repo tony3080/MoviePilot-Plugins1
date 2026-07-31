@@ -299,6 +299,7 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
             "confirmation_days": 7,
             "rss_urls": "https://example.test/feed",
         })
+        self.plugin._tmdb_raw_tv_search = lambda _title, _year: []
 
     def _complete(self, subscribe: FakeSubscribe):
         FakeSubscribeOper.records[subscribe.id] = subscribe
@@ -1036,6 +1037,83 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertIn("二龙湖·村暖花开", queries)
         self.assertIn("二龙湖·村暖花开 第3季", queries)
         self.assertIn("二龙湖·村暖花开 第三季", queries)
+
+    def test_raw_tmdb_fallback_recovers_moviepilot_filtered_parent(self) -> None:
+        parent = types.SimpleNamespace(
+            tmdb_id=270845,
+            title="二龙湖·“村”暖花开",
+            original_title="",
+            names=[],
+            year="2024",
+            seasons={1: [object()] * 24, 2: [object()] * 28, 3: [object()] * 24},
+            season_years={1: "2024", 2: "2025", 3: "2026"},
+            actors=["张浩", "朱丽岚"],
+            directors=["张浩"],
+        )
+        raw_calls = []
+
+        def raw_search(title, year):
+            raw_calls.append((title, year))
+            if title == "二龙湖·村暖花开":
+                return [{"tmdb_id": 270845}]
+            return []
+
+        self.plugin._tmdb_raw_tv_search = raw_search
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=lambda **_kwargs: [],
+            recognize_media=lambda **_kwargs: parent,
+        )
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb({
+            "title": "二龙湖·村暖花开3",
+            "year": "2026",
+            "episodes_count": 24,
+            "actors": [{"name": "张浩"}, {"name": "朱丽岚"}],
+            "directors": [{"name": "张浩"}],
+        }, 24)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.tmdb_id, 270845)
+        self.assertEqual(decision.winner.candidate.season, 3)
+        self.assertIn((270845, 3), media_by_key)
+        self.assertEqual(raw_calls, [("二龙湖·村暖花开", None)])
+        fallback_attempt = next(
+            item for item in attempts if item["raw_fallback"]
+        )
+        self.assertEqual(fallback_attempt["query"], "二龙湖·村暖花开")
+        self.assertEqual(fallback_attempt["result_count"], 1)
+        self.assertEqual(fallback_attempt["error"], "")
+
+    def test_raw_tmdb_search_uses_moviepilot_client_and_closes_it(self) -> None:
+        calls = []
+
+        class Search:
+            def __init__(self, language=None):
+                calls.append(("init", language))
+
+            def tv_shows(self, term, release_year=None):
+                calls.append(("search", term, release_year))
+                return [{"id": 270845}, {"name": "missing id"}]
+
+            def close(self):
+                calls.append(("close",))
+
+        tmdb_module = types.ModuleType("app.modules.themoviedb.tmdbv3api")
+        tmdb_module.Search = Search
+        with patch.dict(sys.modules, {
+            "app.modules.themoviedb.tmdbv3api": tmdb_module,
+        }):
+            results = plugin_module.DoubanSubscribe._tmdb_raw_tv_search(
+                "二龙湖·村暖花开",
+                None,
+            )
+
+        self.assertEqual(results, [{"tmdb_id": 270845}])
+        self.assertEqual(calls, [
+            ("init", None),
+            ("search", "二龙湖·村暖花开", None),
+            ("close",),
+        ])
 
     def test_numeric_suffix_rejects_standalone_sequel_s01(self) -> None:
         standalone = types.SimpleNamespace(

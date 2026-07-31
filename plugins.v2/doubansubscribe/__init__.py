@@ -98,7 +98,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.5"
+    plugin_version = "0.5.6"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1734,15 +1734,30 @@ class DoubanSubscribe(_PluginBase):
                     lambda: self.chain.search_medias(meta=meta, source="themoviedb"),
                 )
                 results = results or []
+                raw_fallback = False
+                raw_error = ""
+                if (
+                    not search_error
+                    and not results
+                    and hypothesis.mode == "base_and_season"
+                    and query_title == hypothesis.title
+                ):
+                    raw_fallback = True
+                    raw_results, raw_error, raw_request_count = self._tmdb_call_with_retry(
+                        lambda: self._tmdb_raw_tv_search(query_title, query_year),
+                    )
+                    request_count += raw_request_count
+                    results = raw_results or []
                 attempt = {
                     "query": query_title,
                     "season": hypothesis.season,
                     "mode": hypothesis.mode,
+                    "raw_fallback": raw_fallback,
                     "result_count": len(results),
                     "hydrated_count": 0,
                     "parent_season_rejections": 0,
                     "request_count": request_count,
-                    "error": search_error,
+                    "error": search_error or raw_error,
                 }
                 search_attempts.append(attempt)
                 if search_error:
@@ -1753,7 +1768,10 @@ class DoubanSubscribe(_PluginBase):
                     any_results = True
                 hydrated_in_attempt = set()
                 for search_result in results:
-                    tmdb_id = getattr(search_result, "tmdb_id", None)
+                    tmdb_id = (
+                        self._result_value(search_result, "tmdb_id")
+                        or self._result_value(search_result, "id")
+                    )
                     if not tmdb_id:
                         continue
                     tmdb_id = int(tmdb_id)
@@ -2128,6 +2146,25 @@ class DoubanSubscribe(_PluginBase):
             return finder.find_by_imdb_id(imdb_id) or {}
         finally:
             finder.close()
+
+    @staticmethod
+    def _tmdb_raw_tv_search(title: str, year: Optional[str]) -> List[Dict[str, Any]]:
+        """绕过 MoviePilot 对 TMDB 搜索结果的严格标题子串过滤。"""
+        from app.modules.themoviedb.tmdbv3api import Search
+
+        searcher = Search(language=getattr(settings, "TMDB_LOCALE", None))
+        try:
+            results = searcher.tv_shows(
+                term=title,
+                release_year=year,
+            ) or []
+            return [
+                {"tmdb_id": result.get("id")}
+                for result in results
+                if result.get("id")
+            ]
+        finally:
+            searcher.close()
 
     @staticmethod
     def _tmdb_call_with_retry(callable_):
