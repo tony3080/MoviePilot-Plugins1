@@ -56,12 +56,14 @@ DEFAULT_SUPPLEMENT_CRON = "0 23 * * *"
 SUPPLEMENT_SEARCH_INTERVAL_SECONDS = 120
 DOUBAN_QUERY_INTERVAL_SECONDS = 3
 IMDB_ID_PATTERN = re.compile(r"\btt\d{7,10}\b", re.IGNORECASE)
+RELEASE_YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 CATEGORY_SKIP_DATA_KEY = "category_skip_items"
+YEAR_SKIP_DATA_KEY = "year_skip_items"
 PLUGIN_USERNAME = "豆瓣订阅助手"
 SUCCESS_STATUSES = {"subscribed", "existing", "history_existing"}
-SKIPPED_STATUSES = {"category_skipped"}
+SKIPPED_STATUSES = {"category_skipped", "year_skipped"}
 FAILURE_STATUSES = {
     "ambiguous",
     "douban_not_found",
@@ -98,7 +100,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.6"
+    plugin_version = "0.5.7"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -117,6 +119,7 @@ class DoubanSubscribe(_PluginBase):
     _max_items = 50
     _candidate_limit = 10
     _confirmation_days = 7
+    _minimum_year = 0
     _notify_subscription = True
     _media_categories = list(DEFAULT_MEDIA_CATEGORIES)
 
@@ -163,6 +166,7 @@ class DoubanSubscribe(_PluginBase):
         self._confirmation_days = self._bounded_int(
             config.get("confirmation_days"), 7, 1, 365,
         )
+        self._minimum_year = self._bounded_year(config.get("minimum_year"))
         self._notify_subscription = bool(config.get("notify_subscription", True))
         categories = config.get("media_categories", list(DEFAULT_MEDIA_CATEGORIES))
         if isinstance(categories, str):
@@ -185,6 +189,16 @@ class DoubanSubscribe(_PluginBase):
             number = default
         return max(minimum, min(number, maximum))
 
+    @staticmethod
+    def _bounded_year(value: Any) -> int:
+        try:
+            year = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        if year <= 0:
+            return 0
+        return max(1900, min(year, 2100))
+
     def _save_config(self) -> None:
         self.update_config({
             "enabled": self._enabled,
@@ -199,6 +213,7 @@ class DoubanSubscribe(_PluginBase):
             "max_items": self._max_items,
             "candidate_limit": self._candidate_limit,
             "confirmation_days": self._confirmation_days,
+            "minimum_year": self._minimum_year,
             "notify_subscription": self._notify_subscription,
             "media_categories": self._media_categories,
         })
@@ -526,6 +541,22 @@ class DoubanSubscribe(_PluginBase):
                             },
                             {
                                 "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "minimum_year",
+                                        "label": "首播年份下限",
+                                        "type": "number",
+                                        "min": 0,
+                                        "max": 2100,
+                                        "hint": "0 表示不限制；设置 2026 时仅订阅 2026 年及以后首播的剧集",
+                                        "persistent-hint": True,
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
                                 "props": {"cols": 12},
                                 "content": [{
                                     "component": "VSelect",
@@ -566,6 +597,7 @@ class DoubanSubscribe(_PluginBase):
             "max_items": 50,
             "candidate_limit": 10,
             "confirmation_days": 7,
+            "minimum_year": 0,
             "notify_subscription": True,
             "media_categories": list(DEFAULT_MEDIA_CATEGORIES),
         }
@@ -1422,6 +1454,11 @@ class DoubanSubscribe(_PluginBase):
                 self._record_history(history, cached_skip)
                 summary["skipped"] += 1
                 continue
+            cached_year_skip = self._cached_year_skip(item)
+            if cached_year_skip:
+                self._record_history(history, cached_year_skip)
+                summary["skipped"] += 1
+                continue
             record = self._process_item(item)
             self._record_history(history, record)
             status = record.get("status")
@@ -1456,10 +1493,11 @@ class DoubanSubscribe(_PluginBase):
             total_episode = extract_total_episode(douban_info)
             airing_started = has_started_airing(douban_info)
             category = classify_media_region(douban_info)
+            release_year = self._douban_release_year(douban_info)
             base_record.update({
                 "douban_id": douban_id,
                 "douban_title": douban_info.get("title") or item.title,
-                "douban_year": douban_info.get("year") or item.year or "",
+                "douban_year": release_year or douban_info.get("year") or item.year or "",
                 "douban_total": total_episode,
                 "imdb_id": "",
                 "airing_started": airing_started,
@@ -1467,6 +1505,18 @@ class DoubanSubscribe(_PluginBase):
                 "category": category,
                 "countries": douban_info.get("countries") or [],
             })
+            if (
+                self._minimum_year
+                and release_year
+                and release_year < self._minimum_year
+            ):
+                record = self._failed_record(
+                    base_record,
+                    "year_skipped",
+                    f"首播年份 {release_year} 早于设定下限 {self._minimum_year}",
+                )
+                self._remember_year_skip(item, record)
+                return record
             if category not in self._media_categories:
                 record = self._failed_record(
                     base_record,
@@ -3040,6 +3090,102 @@ class DoubanSubscribe(_PluginBase):
             "time": self._now(),
         }
 
+    def _cached_year_skip(self, item: FeedItem) -> Optional[Dict[str, Any]]:
+        """Return a fresh skip record while the cached year remains too old."""
+        if not self._minimum_year:
+            return None
+        index = self._year_skip_index()
+        cached = None
+        for key in self._year_skip_keys(item):
+            value = index.get(key)
+            if isinstance(value, dict):
+                cached = value
+                break
+        if not cached:
+            return None
+        release_year = self._safe_int(cached.get("douban_year"), 0)
+        if not release_year or release_year >= self._minimum_year:
+            return None
+        return {
+            **item.to_dict(),
+            "douban_id": str(cached.get("douban_id") or item.douban_id or ""),
+            "douban_title": cached.get("douban_title") or item.title,
+            "douban_year": release_year,
+            "douban_total": cached.get("douban_total"),
+            "imdb_id": cached.get("imdb_id") or "",
+            "airing_started": bool(cached.get("airing_started")),
+            "total_pending": bool(cached.get("total_pending")),
+            "category": cached.get("category") or "",
+            "countries": cached.get("countries") or [],
+            "status": "year_skipped",
+            "reason": (
+                f"首播年份 {release_year} 早于设定下限 {self._minimum_year}"
+                "（年份缓存命中，未请求豆瓣）"
+            ),
+            "time": self._now(),
+        }
+
+    def _year_skip_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load the year cache and migrate earlier year-skipped history."""
+        with self._data_lock:
+            raw = self.get_data(YEAR_SKIP_DATA_KEY) or {}
+            index = {
+                str(key): dict(value)
+                for key, value in raw.items()
+                if key and isinstance(value, dict)
+            } if isinstance(raw, dict) else {}
+            changed = not isinstance(raw, dict)
+            for record in self.get_data("history") or []:
+                if not isinstance(record, dict) or record.get("status") != "year_skipped":
+                    continue
+                cached = self._year_skip_cache_record(record)
+                keys = [str(record.get("key") or "")]
+                douban_id = str(record.get("douban_id") or "").strip()
+                if douban_id:
+                    keys.append(f"douban:{douban_id}")
+                for key in dict.fromkeys(value for value in keys if value):
+                    if key not in index:
+                        index[key] = dict(cached)
+                        changed = True
+            if changed:
+                self.save_data(YEAR_SKIP_DATA_KEY, index)
+            return index
+
+    def _remember_year_skip(
+        self,
+        item: FeedItem,
+        record: Dict[str, Any],
+    ) -> None:
+        """Persist one year-filtered result under source and Douban aliases."""
+        cached = self._year_skip_cache_record(record)
+        with self._data_lock:
+            index = self._year_skip_index()
+            for key in self._year_skip_keys(
+                item,
+                douban_id=str(record.get("douban_id") or ""),
+            ):
+                index[key] = dict(cached)
+            self.save_data(YEAR_SKIP_DATA_KEY, index)
+
+    @staticmethod
+    def _year_skip_cache_record(record: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            field: record.get(field)
+            for field in (
+                "title", "douban_id", "douban_title", "douban_year",
+                "douban_total", "imdb_id", "airing_started", "total_pending",
+                "category", "countries", "time",
+            )
+        }
+
+    @staticmethod
+    def _year_skip_keys(item: FeedItem, douban_id: str = "") -> List[str]:
+        keys = [item.key]
+        resolved_douban_id = str(douban_id or item.douban_id or "").strip()
+        if resolved_douban_id:
+            keys.append(f"douban:{resolved_douban_id}")
+        return list(dict.fromkeys(keys))
+
     def _category_skip_index(self) -> Dict[str, Dict[str, Any]]:
         """Load the category cache and migrate disabled-category history."""
         with self._data_lock:
@@ -3114,6 +3260,23 @@ class DoubanSubscribe(_PluginBase):
         processed[str(key)] = self._processed_record(str(key), record)
         with self._data_lock:
             self.save_data("processed_items", processed)
+
+    @staticmethod
+    def _douban_release_year(douban_info: Dict[str, Any]) -> Optional[int]:
+        """Extract the earliest reliable four-digit premiere year from Douban."""
+        values = (
+            douban_info.get("year"),
+            douban_info.get("pubdate"),
+            douban_info.get("release_date"),
+            douban_info.get("card_subtitle"),
+        )
+        for value in values:
+            candidates = value if isinstance(value, (list, tuple, set)) else (value,)
+            for candidate in candidates:
+                match = RELEASE_YEAR_PATTERN.search(str(candidate or ""))
+                if match:
+                    return int(match.group(0))
+        return None
 
     @staticmethod
     def _processed_record(key: str, record: Dict[str, Any]) -> Dict[str, Any]:

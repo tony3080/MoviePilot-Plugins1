@@ -23,6 +23,7 @@ const defaults = {
   max_items: 50,
   candidate_limit: 10,
   confirmation_days: 7,
+  minimum_year: 0,
   notify_subscription: true,
   media_categories: ['domestic', 'western', 'japan_korea', 'other'],
 }
@@ -178,6 +179,17 @@ onMounted(() => {
             type="number"
             min="1"
             max="365"
+          />
+        </VCol>
+        <VCol cols="12" md="4">
+          <VTextField
+            v-model.number="config.minimum_year"
+            label="首播年份下限"
+            type="number"
+            min="0"
+            max="2100"
+            hint="0 表示不限制；设置 2026 时仅订阅 2026 年及以后首播的剧集"
+            persistent-hint
           />
         </VCol>
         <VCol cols="12">

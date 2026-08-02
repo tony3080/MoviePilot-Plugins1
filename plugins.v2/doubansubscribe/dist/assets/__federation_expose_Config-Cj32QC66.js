@@ -38,6 +38,7 @@ const defaults = {
   max_items: 50,
   candidate_limit: 10,
   confirmation_days: 7,
+  minimum_year: 0,
   notify_subscription: true,
   media_categories: ['domestic', 'western', 'japan_korea', 'other'],
 };
@@ -93,7 +94,7 @@ return (_ctx, _cache) => {
       color: "transparent"
     }, {
       default: _withCtx(() => [
-        _cache[15] || (_cache[15] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手配置", -1)),
+        _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-h6 ms-3" }, "豆瓣订阅助手配置", -1)),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "保存" }, {
           activator: _withCtx(({ props: tooltipProps }) => [
@@ -321,11 +322,30 @@ return (_ctx, _cache) => {
               ]),
               _: 1
             }),
+            _createVNode(_component_VCol, {
+              cols: "12",
+              md: "4"
+            }, {
+              default: _withCtx(() => [
+                _createVNode(_component_VTextField, {
+                  modelValue: config.value.minimum_year,
+                  "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((config.value.minimum_year) = $event)),
+                  modelModifiers: { number: true },
+                  label: "首播年份下限",
+                  type: "number",
+                  min: "0",
+                  max: "2100",
+                  hint: "0 表示不限制；设置 2026 时仅订阅 2026 年及以后首播的剧集",
+                  "persistent-hint": ""
+                }, null, 8, ["modelValue"])
+              ]),
+              _: 1
+            }),
             _createVNode(_component_VCol, { cols: "12" }, {
               default: _withCtx(() => [
                 _createVNode(_component_VSelect, {
                   modelValue: config.value.media_categories,
-                  "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((config.value.media_categories) = $event)),
+                  "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((config.value.media_categories) = $event)),
                   items: categories,
                   label: "需要订阅的剧集类型",
                   multiple: "",
@@ -346,6 +366,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4b2b8e32"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-276307f1"]]);
 
 export { Config as default };

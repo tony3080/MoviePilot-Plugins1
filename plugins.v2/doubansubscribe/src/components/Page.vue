@@ -77,6 +77,7 @@ const historyStatusLabels = {
   existing: '活动订阅已存在',
   history_existing: '订阅历史已存在',
   category_skipped: '地区已跳过',
+  year_skipped: '年份已跳过',
   douban_not_found: '未找到豆瓣条目',
   douban_rate_limited: '豆瓣请求受限',
   douban_total_missing: '豆瓣总集数缺失',
@@ -153,7 +154,7 @@ function notify(text, color = 'success') {
 
 function statusColor(status) {
   if (['subscribed', 'existing', 'history_existing'].includes(status)) return 'success'
-  if (status === 'category_skipped') return 'warning'
+  if (status === 'category_skipped' || status === 'year_skipped') return 'warning'
   return 'error'
 }
 

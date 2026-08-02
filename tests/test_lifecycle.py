@@ -422,6 +422,134 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(cached[item.key]["douban_id"], "37425956")
         self.assertEqual(cached["douban:37425956"]["category"], "japan_korea")
 
+    def test_minimum_year_skips_old_show_before_imdb_and_tmdb(self) -> None:
+        item = plugin_module.FeedItem(
+            title="旧剧",
+            guid="maoyan:tv:old-2025",
+        )
+        self.plugin._minimum_year = 2026
+        self.plugin._resolve_douban = lambda _item: {
+            "id": "20250001",
+            "title": "旧剧",
+            "year": "2025",
+            "episodes_count": 20,
+            "countries": ["中国大陆"],
+        }
+        self.plugin._resolve_douban_imdb_id = lambda _info: self.fail(
+            "年份跳过前不应读取 IMDb 信息页"
+        )
+        self.plugin._match_tmdb = lambda *_args: self.fail(
+            "年份跳过后不应查询 TMDB"
+        )
+
+        record = self.plugin._process_item(item)
+
+        self.assertEqual(record["status"], "year_skipped")
+        self.assertEqual(record["douban_year"], 2025)
+        self.assertIn("早于设定下限 2026", record["reason"])
+        cached = self.plugin.get_data(plugin_module.YEAR_SKIP_DATA_KEY)
+        self.assertEqual(cached[item.key]["douban_year"], 2025)
+        self.assertEqual(cached["douban:20250001"]["douban_id"], "20250001")
+
+    def test_minimum_year_is_inclusive(self) -> None:
+        item = plugin_module.FeedItem(title="当年新剧", douban_id="20260001")
+        self.plugin._minimum_year = 2026
+        self.plugin._resolve_douban = lambda _item: {
+            "id": "20260001",
+            "title": "当年新剧",
+            "year": "2026",
+            "episodes_count": 12,
+            "countries": ["中国大陆"],
+        }
+        self.plugin._resolve_douban_imdb_id = lambda _info: None
+        tmdb_calls = []
+
+        def match_tmdb(*_args):
+            tmdb_calls.append(True)
+            return (
+                plugin_module.MatchDecision(False, "no_candidate", "test"),
+                {},
+                [],
+            )
+
+        self.plugin._match_tmdb = match_tmdb
+
+        record = self.plugin._process_item(item)
+
+        self.assertEqual(record["status"], "no_candidate")
+        self.assertEqual(tmdb_calls, [True])
+
+    def test_release_year_falls_back_to_douban_pubdate(self) -> None:
+        self.assertEqual(
+            self.plugin._douban_release_year({
+                "pubdate": ["2026-08-01(中国大陆)"],
+            }),
+            2026,
+        )
+        self.assertIsNone(self.plugin._douban_release_year({"year": "未知"}))
+
+    def test_year_cache_skips_until_minimum_is_lowered(self) -> None:
+        item = plugin_module.FeedItem(
+            title="缓存旧剧",
+            douban_id="20250002",
+        )
+        self.plugin._minimum_year = 2026
+        self.plugin.save_data(plugin_module.YEAR_SKIP_DATA_KEY, {
+            item.key: {
+                "douban_id": "20250002",
+                "douban_title": item.title,
+                "douban_year": 2025,
+                "category": "domestic",
+            },
+        })
+        self.plugin._process_item = lambda _item: self.fail(
+            "年份缓存命中时不应重新处理"
+        )
+        first_summary = {
+            "items": 0,
+            "subscribed": 0,
+            "existing": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        history = []
+
+        self.plugin._process_source_items(
+            items=[item],
+            history=history,
+            processed_items={},
+            completed_keys=set(),
+            summary=first_summary,
+        )
+
+        self.assertEqual(first_summary["skipped"], 1)
+        self.assertEqual(history[0]["status"], "year_skipped")
+        self.assertIn("年份缓存命中，未请求豆瓣", history[0]["reason"])
+
+        calls = []
+        self.plugin._minimum_year = 2025
+        self.plugin._process_item = lambda value: (
+            calls.append(value.key)
+            or {**value.to_dict(), "status": "no_candidate", "reason": "test"}
+        )
+        second_summary = {
+            "items": 0,
+            "subscribed": 0,
+            "existing": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+        self.plugin._process_source_items(
+            items=[item],
+            history=[],
+            processed_items={},
+            completed_keys=set(),
+            summary=second_summary,
+        )
+
+        self.assertEqual(calls, [item.key])
+        self.assertEqual(second_summary["failed"], 1)
+
     def test_category_cache_skips_next_source_run_without_processing(self) -> None:
         item = plugin_module.FeedItem(
             title="X战警97 第二季",
