@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import threading
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
@@ -247,16 +248,18 @@ class MoviePilotQbGateway:
     def plan_inventory_files(
         media: Any,
         torrent_files: Sequence[Any],
+        title_override: str = "",
     ) -> Dict[str, Any]:
-        """Use MoviePilot naming to produce exact relative paths to check locally."""
+        """Use the complete MoviePilot naming pipeline for media and STRM paths."""
 
         from app.core.config import settings
-        from app.core.metainfo import MetaInfo
+        from app.core import metainfo as metainfo_module
         from app.modules.filemanager import FileManagerModule
 
         media_type = MoviePilotQbGateway.media_type(media)
         candidates: List[Dict[str, Any]] = []
         ignored: List[Dict[str, str]] = []
+        plan_errors: List[Dict[str, str]] = []
         media_extensions = {str(ext).casefold() for ext in settings.RMT_MEDIAEXT}
         for file_item in torrent_files:
             raw = MoviePilotQbGateway.torrent_file_dict(file_item)
@@ -281,13 +284,25 @@ class MoviePilotQbGateway:
         if media_type == "movie" and candidates:
             candidates = [max(candidates, key=lambda item: item["size"])]
 
+        naming_media = media
+        normalized_title = str(title_override or "").strip()
+        if normalized_title:
+            if hasattr(media, "model_copy"):
+                naming_media = media.model_copy(deep=False)
+            else:
+                naming_media = copy.copy(media)
+            setattr(naming_media, "title", normalized_title)
+
         expected_files: List[Dict[str, Any]] = []
         seen_paths = set()
         for item in candidates:
             source_name = item["source_name"]
-            file_meta = MetaInfo(
-                title=PurePosixPath(source_name.replace("\\", "/")).name
-            )
+            source_path = Path(source_name.replace("\\", "/"))
+            meta_path_class = getattr(metainfo_module, "MetaInfoPath", None)
+            if meta_path_class:
+                file_meta = meta_path_class(path=source_path)
+            else:
+                file_meta = metainfo_module.MetaInfo(title=source_path.name)
             if media_type == "tv":
                 season = getattr(file_meta, "begin_season", None)
                 episode = getattr(file_meta, "begin_episode", None)
@@ -296,7 +311,7 @@ class MoviePilotQbGateway:
                     if season is not None:
                         file_meta.begin_season = season
                 if episode is None:
-                    ignored.append({
+                    plan_errors.append({
                         "source_name": source_name,
                         "reason": "无法从文件名解析集号",
                     })
@@ -304,27 +319,55 @@ class MoviePilotQbGateway:
             if getattr(file_meta, "year", None) is None:
                 file_meta.year = getattr(media, "year", None)
             relative_path = str(
-                FileManagerModule.recommend_name(file_meta, media) or ""
+                FileManagerModule.recommend_name(file_meta, naming_media) or ""
             ).strip().replace("\\", "/")
             pure_path = PurePosixPath(relative_path)
             if not relative_path or pure_path.is_absolute() or ".." in pure_path.parts:
-                raise RuntimeError(f"MoviePilot 生成了无效目标路径：{relative_path}")
+                plan_errors.append({
+                    "source_name": source_name,
+                    "reason": f"MoviePilot 生成了无效目标路径：{relative_path}",
+                })
+                continue
             identity = pure_path.as_posix().casefold()
             if identity in seen_paths:
-                raise RuntimeError(f"多个源文件生成了相同目标路径：{pure_path.as_posix()}")
+                plan_errors.append({
+                    "source_name": source_name,
+                    "reason": f"多个源文件生成了相同目标路径：{pure_path.as_posix()}",
+                })
+                continue
             seen_paths.add(identity)
+            inventory_path = (
+                pure_path.with_suffix(".strm")
+                if pure_path.suffix
+                else pure_path.with_name(f"{pure_path.name}.strm")
+            )
             expected_files.append({
                 "source_name": source_name,
                 "relative_path": pure_path.as_posix(),
+                "new_rel": pure_path.as_posix(),
+                "inventory_relative_path": inventory_path.as_posix(),
                 "size": item["size"],
             })
 
+        expected_directory = ""
+        if expected_files:
+            first_path = PurePosixPath(expected_files[0]["relative_path"])
+            if len(first_path.parts) > 1:
+                expected_directory = first_path.parts[0]
         return {
             "method": "moviepilot_naming",
             "media_type": media_type,
+            "title_override": normalized_title,
+            "total_files": len(candidates),
             "expected_files": expected_files,
             "ignored_files": ignored,
+            "plan_errors": plan_errors,
+            "expected_directory": expected_directory,
             "target_name": expected_files[0]["relative_path"] if expected_files else "",
+            "inventory_target_name": (
+                expected_files[0]["inventory_relative_path"]
+                if expected_files else ""
+            ),
         }
 
     @staticmethod
@@ -545,7 +588,7 @@ class QbSyncService:
         recognition_error = ""
         inventory_state = "unknown"
         inventory_details: Dict[str, Any] = {}
-        inventory_plan = existing_details.get("inventory_plan") or {}
+        inventory_plan: Dict[str, Any] = {}
         path_plan: Dict[str, Any] = {}
         if media:
             media_type = self.gateway.media_type(media)
@@ -559,37 +602,88 @@ class QbSyncService:
                 season = getattr(meta, "begin_season", None)
             category = str(getattr(media, "category", "") or "")
             poster = self.gateway.poster(media)
-            try:
-                if recognition_needed or not inventory_plan.get("expected_files"):
+            if not _valid_tmdb_id(tmdb_id):
+                recognition_error = "MoviePilot 未返回有效 TMDB ID"
+                inventory_details = {
+                    "method": "tmdb_strm_features",
+                    "scope": "mp_library_path",
+                    "folder_status": "unknown",
+                    "total_files": 0,
+                    "exists_count": 0,
+                    "missing_count": 0,
+                    "files": [],
+                    "reason": recognition_error,
+                }
+                media_state = "unidentified"
+                recognition_state = "unidentified"
+                outcome = "unrecognized"
+            else:
+                try:
                     torrent_files = self.gateway.list_torrent_files(
                         downloader.name, info_hash
                     )
                     inventory_plan = self.gateway.plan_inventory_files(
                         media, torrent_files
                     )
-                path_plan = self.library_layout.plan(
-                    source_path=content_path,
-                    category=category,
-                    expected_files=inventory_plan.get("expected_files") or [],
-                    media_type=media_type,
+                    path_plan = self.library_layout.plan(
+                        source_path=content_path,
+                        category=category,
+                        expected_files=inventory_plan.get("expected_files") or [],
+                        media_type=media_type,
+                    )
+                    folder = self.inventory_checker.locate_root(
+                        path_plan.get("inventory_base") or "",
+                        tmdb_id,
+                        inventory_plan.get("expected_directory") or "",
+                    )
+                    inventory_title = str(folder.title or "").strip()
+                    if (
+                        folder.status == "exists"
+                        and inventory_title
+                        and inventory_title.casefold() != media_title.casefold()
+                    ):
+                        inventory_plan = self.gateway.plan_inventory_files(
+                            media,
+                            torrent_files,
+                            title_override=inventory_title,
+                        )
+                        path_plan = self.library_layout.plan(
+                            source_path=content_path,
+                            category=category,
+                            expected_files=inventory_plan.get("expected_files") or [],
+                            media_type=media_type,
+                        )
+                    inventory_state, inventory_details = (
+                        self.inventory_checker.check_root(
+                            path_plan.get("inventory_base") or "",
+                            inventory_plan.get("expected_files") or [],
+                            tmdb_id=tmdb_id,
+                            expected_directory=(
+                                inventory_plan.get("expected_directory") or ""
+                            ),
+                            media_title=inventory_title or media_title,
+                            folder=folder,
+                            plan_errors=inventory_plan.get("plan_errors") or [],
+                            total_files=inventory_plan.get("total_files"),
+                        )
+                    )
+                    inventory_details["category"] = (
+                        path_plan.get("category") or category
+                    )
+                    inventory_details["group"] = path_plan.get("group") or ""
+                    inventory_details["layout_errors"] = path_plan.get("errors") or []
+                except Exception as error:
+                    inventory_state = "unknown"
+                    inventory_details = {
+                        "method": "tmdb_strm_features",
+                        "scope": "mp_library_path",
+                        "error": str(error),
+                    }
+                media_state = (
+                    "existing" if inventory_state == "exists" else "identified"
                 )
-                inventory_state, inventory_details = self.inventory_checker.check_root(
-                    path_plan.get("inventory_base") or "",
-                    inventory_plan.get("expected_files") or [],
-                )
-                inventory_details["category"] = path_plan.get("category") or category
-                inventory_details["group"] = path_plan.get("group") or ""
-                inventory_details["layout_errors"] = path_plan.get("errors") or []
-            except Exception as error:
-                inventory_state = "unknown"
-                inventory_details = {
-                    "method": "local_filesystem",
-                    "scope": "mp_library_path",
-                    "error": str(error),
-                }
-            media_state = "existing" if inventory_state == "exists" else "identified"
-            recognition_state = "identified"
-            outcome = "existing" if inventory_state == "exists" else "recognized"
+                recognition_state = "identified"
+                outcome = "existing" if inventory_state == "exists" else "recognized"
         else:
             media_type = ""
             media_state = "unidentified"
@@ -618,7 +712,7 @@ class QbSyncService:
         if path_plan.get("inventory_files"):
             target_name = str(path_plan["inventory_files"][0].get("path") or "")
         if not target_name:
-            target_name = str(inventory_plan.get("target_name") or "")
+            target_name = str(inventory_plan.get("inventory_target_name") or "")
         self.store.upsert_media_item({
             "id": media_id,
             "state": media_state,
@@ -632,7 +726,13 @@ class QbSyncService:
             "season": season,
             "category": category,
             "target_name": target_name,
-            "failure_code": "recognition_failed" if not media else "",
+            "failure_code": (
+                "recognition_failed"
+                if not media
+                else "missing_tmdb_id"
+                if not _valid_tmdb_id(tmdb_id)
+                else ""
+            ),
             "failure_message": recognition_error,
             "details": details,
             "updated_at": now,
@@ -751,3 +851,10 @@ def _first_text(
             if text:
                 return text
     return ""
+
+
+def _valid_tmdb_id(value: object) -> bool:
+    try:
+        return int(value or 0) > 0
+    except (TypeError, ValueError):
+        return False

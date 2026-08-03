@@ -104,6 +104,8 @@ const inventoryLabels = {
   exists: '已存在',
   partial: '不完整',
   missing: '不存在',
+  empty: '空资源',
+  ambiguous: '目录冲突',
   unconfigured: '未配置',
   unavailable: '不可访问',
   unknown: '未知',
@@ -297,7 +299,7 @@ async function refreshQb() {
   try {
     const response = unwrap(
       await props.api.post('plugin/RssAllInOne/qb/refresh', {
-        force_recognition: false,
+        force_recognition: true,
       }),
     )
     if (!response?.success && !response?.task_id) {
@@ -322,9 +324,22 @@ function inventoryColor(state) {
     exists: 'success',
     partial: 'warning',
     missing: 'info',
+    empty: 'warning',
+    ambiguous: 'error',
     unavailable: 'error',
     unconfigured: 'warning',
   }[state] || 'default'
+}
+
+function inventoryText(item) {
+  const label = inventoryLabels[item.inventory_state] || item.inventory_state
+  const inventory = item.details?.inventory || {}
+  const totalFiles = Number(inventory.total_files ?? inventory.total ?? 0)
+  const existsCount = Number(inventory.exists_count ?? inventory.exists ?? 0)
+  if (totalFiles > 0 && ['exists', 'partial', 'missing'].includes(item.inventory_state)) {
+    return `${label} ${existsCount}/${totalFiles}`
+  }
+  return label
 }
 
 function recognitionColor(state) {
@@ -579,7 +594,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           </template>
           <template #item.inventory_state="{ item }">
             <VChip :color="inventoryColor(item.inventory_state)" size="small" variant="tonal">
-              {{ inventoryLabels[item.inventory_state] || item.inventory_state }}
+              {{ inventoryText(item) }}
             </VChip>
           </template>
           <template #item.recognition_state="{ item }">

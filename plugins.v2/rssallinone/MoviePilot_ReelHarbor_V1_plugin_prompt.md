@@ -526,7 +526,7 @@ VT+ 包含 `站点身份`、`RSS任务`、`RSS历史` 三个子页。
 1. `qb_reported_path`：qB API 返回的 `content_path/save_path`，属于 qB 容器的路径命名空间，例如 `/downloads/series/A`。
 2. `plugin_source_path`：应用路径映射后，MoviePilot 插件进程实际可以访问的源文件路径，例如 `/data/downloads/series/A`。
 3. `local_hardlink_path`：插件创建硬链接的本地 CD2 staging 路径，例如 `/data/cd2-staging/TV/标题...mkv`。
-4. `mp_library_path`：MoviePilot/Emby 用于库存检查和媒体库扫描的最终挂载目录，例如 `/media/TV/标题...mkv`。
+4. `mp_library_path`：MoviePilot/Emby 用于库存检查和媒体库扫描的最终 STRM 挂载目录，例如 `/media/TV/标题...strm`。
 5. `cd2_dest_path`：CD2 上传任务中的完整云端目标路径，例如 `/CloudDrive/Media/TV/标题...mkv`。
 
 ### 2. 正常部署关系
@@ -536,7 +536,7 @@ VT+ 包含 `站点身份`、`RSS任务`、`RSS历史` 三个子页。
 - `local_hardlink_path` 必须位于 CD2 正在监控或挂载上传的本地目录树中；CD2 容器看到的路径可以不同，但必须配置显式 `plugin_staging_root -> cd2_staging_root` 映射。
 - `local_hardlink_path` 的相对路径必须稳定映射到 `cd2_dest_path`：`cd2_dest_root + relative(local_hardlink_path, plugin_staging_root)`。
 - `mp_library_path` 是 CD2 云端目录重新挂载给 MoviePilot/Emby 后的路径，配置显式 `cd2_dest_root -> mp_library_root` 映射。库存检查在 `mp_library_path` 上进行，不应把 staging 目录当作最终媒体库。
-- 库存检查必须由插件直接读取 `mp_library_path` 下的本地目录和文件，按预期相对路径、文件数与文件大小核对；MoviePilot 只提供媒体识别和命名规划，不得用 MoviePilot/Emby 的“媒体已存在”接口替代本地文件检查。媒体库根目录未配置、挂载不可访问、文件缺失和大小不一致必须分别记录，挂载离线不得误判为库存缺失。
+- 库存检查必须由插件直接读取 `mp_library_path` 下的本地目录和文件，其中库存文件只接受 `.strm`；不得用 MoviePilot/Emby 的“媒体已存在”接口替代本地文件检查。按 MP 分类定位库存根目录后，优先通过一级目录中的 `[tmdbid=ID]` 或 `{tmdbid=ID}` 锁定媒体目录；未命中时才按 MoviePilot 预期目录名进行不区分大小写的完整匹配。锁定目录后提取库存标题，重新调用 MoviePilot 当前命名模板和自定义识别词生成完整 `new_rel`，库存预期路径只将最终扩展名派生为 `.strm`。库存比较不使用源媒体大小；优先匹配精确相对路径，再比较去掉库存标题和扩展名后的完整文件特征。根目录未配置、挂载不可访问、重复 TMDB 目录、媒体目录缺失、部分文件缺失和空资源必须分别记录，挂载离线不得误判为库存缺失。
 - 因此正常数据链是：qB 下载文件 -> 插件可访问源路径 -> 同盘 staging 硬链接 -> CD2 云端目标 -> CD2/网盘挂载的 MP 媒体库。
 
 ### 3. 建议的容器挂载示例
@@ -595,8 +595,10 @@ source_routes:
 - 所有配置路径都是 MoviePilot 插件容器内路径，不是 NAS 宿主机路径。
 - 不提供电影/剧集分类白名单选择框。`movie` 和 `series` 根目录默认覆盖 MoviePilot 返回的全部分类。
 - MoviePilot 识别为电影时使用 `movie` 根目录，识别为剧集时使用 `series` 根目录；当前 `纪录片` 由 MoviePilot 识别为剧集，因此自动走剧集根目录。
-- 最终库存目录：`inventory_root / MP分类 / MoviePilot目标相对路径`。
-- 硬链接目录：`命中的link_root / MP分类 / MoviePilot目标相对路径`。
+- 最终库存目录：`inventory_root / MP分类 / MoviePilot目标相对路径`，最终文件扩展名统一派生为 `.strm`。
+- 硬链接目录：`命中的link_root / MP分类 / MoviePilot目标相对路径`，保留 MoviePilot 命名结果中的真实媒体扩展名。
+- MoviePilot 命名必须使用文件名、父目录和上上级目录的完整路径上下文，并自动应用宿主当前电影/电视剧命名模板、自定义识别词及命名字典。插件不得自行拼接简化的“标题 + 季集 + 分辨率”文件名。
+- 每个源文件至少保存 `src_file`、`new_rel`、派生的 STRM 库存相对路径、`inventory_exists`、匹配方式和实际匹配路径。执行入库时跳过 `inventory_exists=true` 的文件，只处理缺失文件。
 - 源路由按路径边界感知的最长前缀匹配；`/SSD` 可以命中 `/SSD/downloads/A`，但不能命中 `/SSD2/A`。
 - 路由可分别提供 `movie`、`series` 根目录，也可用 `default` 作为共同根目录。
 - MP 分类只要是安全的单级目录名称即可参与路径规划；分类为空或包含路径分隔/目录穿越时必须拒绝。

@@ -73,7 +73,11 @@ class LibraryLayoutTest(unittest.TestCase):
         self.assertEqual(result["link_base"], "/SSD/云盘/l/国产剧")
         self.assertEqual(
             result["inventory_files"][0]["path"],
-            "/SSD/云盘/strm/影视库/国产剧/剧名 (2026)/Season 01/剧名 S01E01.mkv",
+            "/SSD/云盘/strm/影视库/国产剧/剧名 (2026)/Season 01/剧名 S01E01.strm",
+        )
+        self.assertEqual(
+            result["link_files"][0]["path"],
+            "/SSD/云盘/l/国产剧/剧名 (2026)/Season 01/剧名 S01E01.mkv",
         )
 
     def test_prefix_matching_respects_path_boundaries_and_longest_match(self) -> None:

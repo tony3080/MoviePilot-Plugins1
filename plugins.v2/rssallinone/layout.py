@@ -199,15 +199,33 @@ class LibraryLayout:
             if not _valid_relative(relative):
                 path_errors.append(f"无效预期相对路径：{relative or '<empty>'}")
                 continue
+            pure_relative = PurePosixPath(relative)
+            default_inventory = (
+                pure_relative.with_suffix(".strm")
+                if pure_relative.suffix
+                else pure_relative.with_name(f"{pure_relative.name}.strm")
+            )
+            inventory_relative = str(
+                item.get("inventory_relative_path") or default_inventory.as_posix()
+            ).strip().replace("\\", "/")
+            if not _valid_relative(inventory_relative):
+                path_errors.append(
+                    f"无效 STRM 库存相对路径：{inventory_relative or '<empty>'}"
+                )
+                continue
             payload = {
-                "relative_path": PurePosixPath(relative).as_posix(),
+                "relative_path": pure_relative.as_posix(),
+                "new_rel": pure_relative.as_posix(),
+                "inventory_relative_path": PurePosixPath(
+                    inventory_relative
+                ).as_posix(),
                 "source_name": str(item.get("source_name") or ""),
                 "size": int(item.get("size") or 0),
             }
             if inventory_base:
                 inventory_files.append({
                     **payload,
-                    "path": _join_path(inventory_base, relative),
+                    "path": _join_path(inventory_base, inventory_relative),
                 })
             if link_base:
                 link_files.append({

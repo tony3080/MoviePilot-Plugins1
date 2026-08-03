@@ -8,6 +8,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +54,7 @@ class LocalInventoryCheckerTest(unittest.TestCase):
     def test_unconfigured_and_unavailable_are_not_reported_missing(self) -> None:
         checker = inventory.LocalInventoryChecker.from_config("")
         state, _ = checker.check(
-            "movie", [{"relative_path": "A/A.mkv", "size": 4}]
+            "movie", [{"relative_path": "A/A.mkv", "size": 4}], tmdb_id=1
         )
         self.assertEqual(state, "unconfigured")
 
@@ -63,47 +64,197 @@ class LocalInventoryCheckerTest(unittest.TestCase):
                 f"movie => {missing_root}"
             )
             state, details = checker.check(
-                "movie", [{"relative_path": "A/A.mkv", "size": 4}]
+                "movie", [{"relative_path": "A/A.mkv", "size": 4}], tmdb_id=1
             )
         self.assertEqual(state, "unavailable")
-        self.assertEqual(len(details["unavailable_roots"]), 1)
+        self.assertEqual(details["folder_status"], "unavailable")
 
-    def test_checks_exact_relative_paths_and_sizes(self) -> None:
+    def test_locks_tmdb_folder_and_only_counts_strm_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            first = root / "Show (2026)" / "Season 00" / "Show S00E01.mkv"
-            second = root / "Show (2026)" / "Season 00" / "Show S00E02.mkv"
+            media_root = root / "剧名 (2026) {tmdbid=42}"
+            first = media_root / "Season 00" / "剧名 S00E01 2160p.strm"
+            second = media_root / "Season 00" / "剧名 S00E02 2160p.strm"
             first.parent.mkdir(parents=True)
-            first.write_bytes(b"1234")
+            first.write_text("cloud://episode-1", encoding="utf-8")
             checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
             expected = [
-                {"relative_path": "Show (2026)/Season 00/Show S00E01.mkv", "size": 4},
-                {"relative_path": "Show (2026)/Season 00/Show S00E02.mkv", "size": 4},
+                {
+                    "source_name": "Show.S00E01.2160p.mkv",
+                    "relative_path": (
+                        "剧名 (2026) {tmdbid=42}/Season 00/剧名 S00E01 2160p.mkv"
+                    ),
+                    "size": 40_000,
+                },
+                {
+                    "source_name": "Show.S00E02.2160p.mkv",
+                    "relative_path": (
+                        "剧名 (2026) {tmdbid=42}/Season 00/剧名 S00E02 2160p.mkv"
+                    ),
+                    "size": 50_000,
+                },
             ]
 
-            state, details = checker.check("tv", expected)
+            state, details = checker.check("tv", expected, tmdb_id=42)
             self.assertEqual(state, "partial")
-            self.assertEqual(details["exists"], 1)
-            self.assertEqual(details["missing"], 1)
+            self.assertEqual(details["folder"]["match_method"], "tmdb_id")
+            self.assertEqual(details["folder"]["title"], "剧名")
+            self.assertEqual(details["exists_count"], 1)
+            self.assertEqual(details["missing_count"], 1)
+            self.assertTrue(details["files"][0]["inventory_exists"])
 
-            second.write_bytes(b"bad")
-            state, details = checker.check("tv", expected)
+            second.with_suffix(".mkv").write_bytes(b"not-an-inventory-file")
+            state, details = checker.check("tv", expected, tmdb_id=42)
             self.assertEqual(state, "partial")
-            self.assertEqual(details["size_mismatch"], 1)
+            self.assertEqual(details["exists_count"], 1)
 
-            second.write_bytes(b"1234")
-            state, details = checker.check("tv", expected)
+            second.write_text("x", encoding="utf-8")
+            state, details = checker.check("tv", expected, tmdb_id=42)
             self.assertEqual(state, "exists")
-            self.assertEqual(details["exists"], 2)
+            self.assertEqual(details["exists_count"], 2)
+
+    def test_matches_inventory_title_features_after_mp_naming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_root = root / "库存中文标题 (2026) [tmdbid=42]"
+            inventory_file = (
+                media_root / "Season 01" / "库存中文标题.S01E03.2160p.WEB-DL.strm"
+            )
+            inventory_file.parent.mkdir(parents=True)
+            inventory_file.write_text("cloud://episode-3", encoding="utf-8")
+            checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
+
+            state, details = checker.check(
+                "tv",
+                [{
+                    "source_name": "Source.S01E03.mkv",
+                    "relative_path": (
+                        "库存中文标题 (2026) [tmdbid=42]/Season 01/"
+                        "库存中文标题 - S01E03 - 2160p WEB-DL.mkv"
+                    ),
+                    "size": 999999,
+                }],
+                tmdb_id=42,
+            )
+
+            self.assertEqual(state, "exists")
+            self.assertEqual(
+                details["files"][0]["match_method"], "filename_features"
+            )
+            self.assertEqual(details["files"][0]["new_rel"].split("/")[-1],
+                             "库存中文标题 - S01E03 - 2160p WEB-DL.mkv")
+
+    def test_duplicate_tmdb_directories_are_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "A {tmdbid=42}").mkdir()
+            (root / "B [tmdbid=42]").mkdir()
+            checker = inventory.LocalInventoryChecker.from_config(f"movie => {root}")
+
+            state, details = checker.check(
+                "movie", [{"relative_path": "A/A.mkv"}], tmdb_id=42
+            )
+
+            self.assertEqual(state, "ambiguous")
+            self.assertEqual(len(details["folder"]["candidates"]), 2)
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checker = inventory.LocalInventoryChecker.from_config(directory)
             state, details = checker.check(
-                "movie", [{"relative_path": "../outside.mkv", "size": 1}]
+                "movie",
+                [{"relative_path": "../outside.mkv", "size": 1}],
+                tmdb_id=1,
             )
         self.assertEqual(state, "unknown")
         self.assertTrue(details["plan_errors"])
+
+
+class MoviePilotNamingPlanTest(unittest.TestCase):
+    def test_preserves_full_mp_name_and_only_derives_strm_suffix(self) -> None:
+        calls = []
+
+        class FakeMetaInfoPath:
+            def __init__(self, path):
+                self.path = path
+                self.begin_season = 1
+                self.begin_episode = 3
+                self.year = None
+
+        class FakeMetaInfo:
+            def __init__(self, title):
+                self.title = title
+                self.begin_season = 1
+                self.begin_episode = 3
+                self.year = None
+
+        class FakeFileManagerModule:
+            @staticmethod
+            def recommend_name(meta, media):
+                calls.append((meta.path.as_posix(), media.title))
+                return (
+                    f"{media.title} (2023) {{tmdbid=42}}/Season 01/"
+                    f"{media.title} - S01E03 - 2160p NF WEB-DL "
+                    "DDP5.1 DV HEVC-NTb.mkv"
+                )
+
+        app_module = types.ModuleType("app")
+        app_module.__path__ = []
+        core_module = types.ModuleType("app.core")
+        core_module.__path__ = []
+        config_module = types.ModuleType("app.core.config")
+        config_module.settings = types.SimpleNamespace(RMT_MEDIAEXT=[".mkv"])
+        metainfo_module = types.ModuleType("app.core.metainfo")
+        metainfo_module.MetaInfo = FakeMetaInfo
+        metainfo_module.MetaInfoPath = FakeMetaInfoPath
+        core_module.metainfo = metainfo_module
+        modules_module = types.ModuleType("app.modules")
+        modules_module.__path__ = []
+        filemanager_module = types.ModuleType("app.modules.filemanager")
+        filemanager_module.FileManagerModule = FakeFileManagerModule
+        fake_modules = {
+            "app": app_module,
+            "app.core": core_module,
+            "app.core.config": config_module,
+            "app.core.metainfo": metainfo_module,
+            "app.modules": modules_module,
+            "app.modules.filemanager": filemanager_module,
+        }
+        media = types.SimpleNamespace(
+            type="电视剧",
+            title="MoviePilot识别标题",
+            year=2023,
+            season=1,
+        )
+
+        with mock.patch.dict(sys.modules, fake_modules):
+            result = qb_sync.MoviePilotQbGateway.plan_inventory_files(
+                media,
+                [{
+                    "name": (
+                        "发布目录/The.Last.of.Us.S01E03.2160p.NF.WEB-DL."
+                        "DDP5.1.DV.H.265-NTb.mkv"
+                    ),
+                    "size": 1000,
+                }],
+                title_override="库存中文标题",
+            )
+
+        expected = result["expected_files"][0]
+        self.assertEqual(
+            calls,
+            [(
+                "发布目录/The.Last.of.Us.S01E03.2160p.NF.WEB-DL."
+                "DDP5.1.DV.H.265-NTb.mkv",
+                "库存中文标题",
+            )],
+        )
+        self.assertEqual(media.title, "MoviePilot识别标题")
+        self.assertTrue(expected["relative_path"].endswith("HEVC-NTb.mkv"))
+        self.assertTrue(
+            expected["inventory_relative_path"].endswith("HEVC-NTb.strm")
+        )
+        self.assertEqual(expected["new_rel"], expected["relative_path"])
 
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
@@ -221,18 +372,27 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             def list_torrent_files(_downloader, _info_hash):
                 return [{"name": "Example.Movie.2026.mkv", "size": 4}]
 
-            def plan_inventory_files(self, _media, _files):
+            def plan_inventory_files(self, _media, _files, title_override=""):
                 self.plans += 1
+                naming_title = title_override or "MoviePilot English Title"
+                media_directory = f"{naming_title} (2026) {{tmdbid=42}}"
                 return {
                     "method": "moviepilot_naming",
                     "media_type": "movie",
+                    "title_override": title_override,
+                    "total_files": 1,
                     "expected_files": [{
                         "source_name": "Example.Movie.2026.mkv",
-                        "relative_path": "Example Movie (2026)/Example Movie (2026).mkv",
+                        "relative_path": f"{media_directory}/{naming_title}.mkv",
+                        "inventory_relative_path": (
+                            f"{media_directory}/{naming_title}.strm"
+                        ),
                         "size": 4,
                     }],
                     "ignored_files": [],
-                    "target_name": "Example Movie (2026)/Example Movie (2026).mkv",
+                    "plan_errors": [],
+                    "expected_directory": media_directory,
+                    "target_name": f"{media_directory}/{naming_title}.mkv",
                 }
 
             @staticmethod
@@ -260,11 +420,11 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             expected = (
                 library_root
                 / "华语电影"
-                / "Example Movie (2026)"
-                / "Example Movie (2026).mkv"
+                / "库存中文标题 (2026) {tmdbid=42}"
+                / "库存中文标题.strm"
             )
             expected.parent.mkdir(parents=True)
-            expected.write_bytes(b"1234")
+            expected.write_text("cloud://movie", encoding="utf-8")
             gateway = Gateway()
             service = qb_sync.QbSyncService(
                 store=store,
@@ -298,7 +458,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             second = store.get_torrent_snapshot("qb-main", "abc123")
             self.assertEqual(second["inventory_state"], "missing")
             self.assertEqual(gateway.recognitions, 1)
-            self.assertEqual(gateway.plans, 1)
+            self.assertEqual(gateway.plans, 4)
 
     def test_sync_only_recognizes_rss_task_downloader_category_pairs(self) -> None:
         class Gateway:
