@@ -4,6 +4,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import sqlite3
 import sys
 import tempfile
 import types
@@ -72,6 +73,45 @@ class SQLiteFrameworkTest(unittest.TestCase):
             item = store.list_media()["items"][0]
             self.assertEqual(item["season"], 0)
 
+    def test_v1_torrent_snapshots_migrate_without_losing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rssallinone.db"
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE torrent_snapshots (
+                        downloader_id TEXT NOT NULL,
+                        info_hash TEXT NOT NULL,
+                        name TEXT NOT NULL DEFAULT '',
+                        state TEXT NOT NULL DEFAULT '',
+                        category TEXT NOT NULL DEFAULT '',
+                        content_path TEXT NOT NULL DEFAULT '',
+                        progress REAL NOT NULL DEFAULT 0,
+                        size INTEGER NOT NULL DEFAULT 0,
+                        media_id TEXT,
+                        source_url_masked TEXT NOT NULL DEFAULT '',
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (downloader_id, info_hash)
+                    );
+                    INSERT INTO torrent_snapshots(
+                        downloader_id, info_hash, name, updated_at
+                    ) VALUES ('qb-main', 'abc123', '旧快照', '2026-08-03T00:00:00+00:00');
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = database.SQLiteStore(path)
+            store.initialize()
+            migrated = store.get_torrent_snapshot("qb-main", "abc123")
+            self.assertEqual(migrated["name"], "旧快照")
+            self.assertEqual(migrated["present"], 1)
+            self.assertEqual(migrated["inventory_state"], "unknown")
+            self.assertEqual(store.health()["schema_version"], 2)
+
 
 class RepositoryContractTest(unittest.TestCase):
     def test_identity_and_market_metadata_match(self) -> None:
@@ -126,6 +166,15 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("插件只使用当前所在 MoviePilot 实例", prompt)
         self.assertNotIn("选择从哪个 MoviePilot 实例同步站点", prompt)
         self.assertIn("大于等于 0 的数字", prompt)
+
+    def test_inventory_is_direct_local_filesystem_only(self) -> None:
+        backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
+        prompt = (
+            PLUGIN_DIR / "MoviePilot_ReelHarbor_V1_plugin_prompt.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("get_no_exists_info", backend)
+        self.assertNotIn("media_exists", backend)
+        self.assertIn("直接读取 `mp_library_path` 下的本地目录和文件", prompt)
 
 
 class PluginLifecycleTest(unittest.TestCase):

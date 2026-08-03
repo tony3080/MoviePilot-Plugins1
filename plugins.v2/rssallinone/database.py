@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utc_now() -> str:
@@ -86,6 +86,19 @@ class SQLiteStore:
                         size INTEGER NOT NULL DEFAULT 0,
                         media_id TEXT,
                         source_url_masked TEXT NOT NULL DEFAULT '',
+                        present INTEGER NOT NULL DEFAULT 1,
+                        recognition_state TEXT NOT NULL DEFAULT 'pending',
+                        inventory_state TEXT NOT NULL DEFAULT 'unknown',
+                        media_title TEXT NOT NULL DEFAULT '',
+                        media_type TEXT NOT NULL DEFAULT '',
+                        media_year TEXT NOT NULL DEFAULT '',
+                        tmdb_id INTEGER,
+                        season INTEGER CHECK (season IS NULL OR season >= 0),
+                        poster TEXT NOT NULL DEFAULT '',
+                        recognition_error TEXT NOT NULL DEFAULT '',
+                        recognized_at TEXT,
+                        last_seen_at TEXT NOT NULL DEFAULT '',
+                        missing_since TEXT,
                         details_json TEXT NOT NULL DEFAULT '{}',
                         updated_at TEXT NOT NULL,
                         PRIMARY KEY (downloader_id, info_hash),
@@ -163,10 +176,47 @@ class SQLiteStore:
                     );
                     """
                 )
+                self._migrate_v2(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
                 )
+
+    @staticmethod
+    def _migrate_v2(connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(torrent_snapshots)").fetchall()
+        }
+        additions = {
+            "present": "INTEGER NOT NULL DEFAULT 1",
+            "recognition_state": "TEXT NOT NULL DEFAULT 'pending'",
+            "inventory_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "media_title": "TEXT NOT NULL DEFAULT ''",
+            "media_type": "TEXT NOT NULL DEFAULT ''",
+            "media_year": "TEXT NOT NULL DEFAULT ''",
+            "tmdb_id": "INTEGER",
+            "season": "INTEGER",
+            "poster": "TEXT NOT NULL DEFAULT ''",
+            "recognition_error": "TEXT NOT NULL DEFAULT ''",
+            "recognized_at": "TEXT",
+            "last_seen_at": "TEXT NOT NULL DEFAULT ''",
+            "missing_since": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE torrent_snapshots ADD COLUMN {name} {definition}"
+                )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_torrent_snapshots_present
+               ON torrent_snapshots(present, downloader_id, updated_at DESC)"""
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_downloader_hash
+               ON media_items(downloader_id, info_hash)
+               WHERE downloader_id != '' AND info_hash != ''"""
+        )
 
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
@@ -184,17 +234,20 @@ class SQLiteStore:
     def counts(self) -> Dict[str, int]:
         tables = {
             "media": "media_items",
-            "torrents": "torrent_snapshots",
             "rss_tasks": "rss_tasks",
             "rss_history": "rss_history",
             "background_tasks": "background_tasks",
             "import_watches": "import_watches",
         }
         with self.connection() as connection:
-            return {
+            counts = {
                 key: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for key, table in tables.items()
             }
+            counts["torrents"] = int(connection.execute(
+                "SELECT COUNT(*) FROM torrent_snapshots WHERE present = 1"
+            ).fetchone()[0])
+            return counts
 
     @staticmethod
     def _page(offset: object, limit: object) -> Tuple[int, int]:
@@ -236,8 +289,253 @@ class SQLiteStore:
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
 
-    def list_torrents(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
-        return self._list_table("torrent_snapshots", "updated_at", offset, limit)
+    def list_torrents(
+        self,
+        downloader_id: str = "",
+        view: str = "",
+        keyword: str = "",
+        offset: object = 0,
+        limit: object = 50,
+        present_only: bool = True,
+    ) -> Dict[str, Any]:
+        safe_offset, safe_limit = self._page(offset, limit)
+        clauses: List[str] = []
+        params: List[Any] = []
+        if present_only:
+            clauses.append("present = 1")
+        if downloader_id:
+            clauses.append("downloader_id = ?")
+            params.append(downloader_id)
+        if view == "existing":
+            clauses.append("inventory_state = 'exists'")
+        elif view == "pending":
+            clauses.append("inventory_state != 'exists'")
+        elif view == "recognized":
+            clauses.append("recognition_state = 'identified'")
+        elif view == "unrecognized":
+            clauses.append("recognition_state = 'unidentified'")
+        if keyword:
+            clauses.append("(name LIKE ? OR media_title LIKE ? OR info_hash LIKE ?)")
+            pattern = f"%{keyword}%"
+            params.extend([pattern, pattern, pattern])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connection() as connection:
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM torrent_snapshots {where}", params
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"""SELECT * FROM torrent_snapshots {where}
+                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                [*params, safe_limit, safe_offset],
+            ).fetchall()
+        return self._result(rows, total, safe_offset, safe_limit)
+
+    def get_torrent_snapshot(
+        self, downloader_id: str, info_hash: str
+    ) -> Optional[Dict[str, Any]]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM torrent_snapshots
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                (downloader_id, info_hash),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def mark_downloader_seen(
+        self,
+        downloader_id: str,
+        seen_hashes: List[str],
+        seen_at: str,
+    ) -> None:
+        normalized = sorted({value for value in seen_hashes if value})
+        with self.connection() as connection:
+            connection.execute(
+                """UPDATE torrent_snapshots
+                   SET present = 0,
+                       missing_since = COALESCE(missing_since, ?),
+                       updated_at = ?
+                   WHERE downloader_id = ?""",
+                (seen_at, seen_at, downloader_id),
+            )
+            for start in range(0, len(normalized), 500):
+                batch = normalized[start:start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                connection.execute(
+                    f"""UPDATE torrent_snapshots
+                        SET present = 1, missing_since = NULL, last_seen_at = ?
+                        WHERE downloader_id = ? AND info_hash IN ({placeholders})""",
+                    [seen_at, downloader_id, *batch],
+                )
+
+    def upsert_torrent_snapshot(self, record: Dict[str, Any]) -> None:
+        fields = (
+            "downloader_id", "info_hash", "name", "state", "category",
+            "content_path", "progress", "size", "media_id", "source_url_masked",
+            "present", "recognition_state", "inventory_state", "media_title",
+            "media_type", "media_year", "tmdb_id", "season", "poster",
+            "recognition_error", "recognized_at", "last_seen_at", "missing_since",
+            "details_json", "updated_at",
+        )
+        values = []
+        for field in fields:
+            if field == "details_json":
+                values.append(self._json_dump(record.get("details") or {}))
+            else:
+                values.append(record.get(field))
+        placeholders = ", ".join("?" for _ in fields)
+        updates = ", ".join(
+            f"{field} = excluded.{field}"
+            for field in fields
+            if field not in {"downloader_id", "info_hash"}
+        )
+        with self.connection() as connection:
+            connection.execute(
+                f"""INSERT INTO torrent_snapshots({', '.join(fields)})
+                    VALUES ({placeholders})
+                    ON CONFLICT(downloader_id, info_hash) DO UPDATE SET {updates}""",
+                values,
+            )
+
+    def upsert_media_item(self, record: Dict[str, Any]) -> None:
+        now = record.get("updated_at") or utc_now()
+        values = (
+            record["id"], record["state"], record.get("media_type"),
+            record.get("title") or "", record.get("source_name") or "",
+            record.get("source_path") or "", record.get("downloader_id") or "",
+            record.get("info_hash") or "", record.get("tmdb_id"),
+            record.get("season"), record.get("category") or "",
+            record.get("target_name") or "", record.get("failure_code") or "",
+            record.get("failure_message") or "", int(bool(record.get("rolled_back"))),
+            self._json_dump(record.get("details") or {}),
+            record.get("created_at") or now, now,
+        )
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO media_items(
+                    id, state, media_type, title, source_name, source_path,
+                    downloader_id, info_hash, tmdb_id, season, category, target_name,
+                    failure_code, failure_message, rolled_back, details_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    state = excluded.state,
+                    media_type = excluded.media_type,
+                    title = excluded.title,
+                    source_name = excluded.source_name,
+                    source_path = excluded.source_path,
+                    downloader_id = excluded.downloader_id,
+                    info_hash = excluded.info_hash,
+                    tmdb_id = excluded.tmdb_id,
+                    season = excluded.season,
+                    category = excluded.category,
+                    target_name = excluded.target_name,
+                    failure_code = excluded.failure_code,
+                    failure_message = excluded.failure_message,
+                    rolled_back = excluded.rolled_back,
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at""",
+                values,
+            )
+
+    def create_background_task(self, task_id: str, task_type: str) -> None:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO background_tasks(
+                    id, task_type, state, created_at, updated_at
+                ) VALUES (?, ?, 'running', ?, ?)""",
+                (task_id, task_type, now, now),
+            )
+
+    def update_background_task(
+        self,
+        task_id: str,
+        *,
+        current_item: Optional[str] = None,
+        processed: Optional[int] = None,
+        succeeded: Optional[int] = None,
+        failed: Optional[int] = None,
+        total: Optional[int] = None,
+        result: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        updates = ["updated_at = ?"]
+        values: List[Any] = [utc_now()]
+        fields = {
+            "current_item": current_item,
+            "processed": processed,
+            "succeeded": succeeded,
+            "failed": failed,
+            "total": total,
+            "error_message": error_message,
+        }
+        for field, value in fields.items():
+            if value is not None:
+                updates.append(f"{field} = ?")
+                values.append(value)
+        if result is not None:
+            updates.append("result_json = ?")
+            values.append(self._json_dump(result))
+        values.append(task_id)
+        with self.connection() as connection:
+            connection.execute(
+                f"UPDATE background_tasks SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+
+    def finish_background_task(
+        self,
+        task_id: str,
+        state: str,
+        *,
+        result: Optional[Dict[str, Any]] = None,
+        error_message: str = "",
+    ) -> None:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """UPDATE background_tasks
+                   SET state = ?, result_json = ?, error_message = ?,
+                       updated_at = ?, finished_at = ?
+                   WHERE id = ?""",
+                (
+                    state,
+                    self._json_dump(result or {}),
+                    error_message,
+                    now,
+                    now,
+                    task_id,
+                ),
+            )
+
+    def get_background_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM background_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def latest_running_task(self, task_type: str) -> Optional[Dict[str, Any]]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM background_tasks
+                   WHERE task_type = ? AND state = 'running'
+                   ORDER BY created_at DESC LIMIT 1""",
+                (task_type,),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def recover_incomplete_tasks(self) -> int:
+        now = utc_now()
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """UPDATE background_tasks
+                   SET state = 'failed', error_message = '插件重启，任务已中断',
+                       updated_at = ?, finished_at = ?
+                   WHERE state IN ('queued', 'running')""",
+                (now, now),
+            )
+            return int(cursor.rowcount or 0)
 
     def list_rss_tasks(self, offset: object = 0, limit: object = 100) -> Dict[str, Any]:
         safe_offset, safe_limit = self._page(offset, limit)
@@ -279,15 +577,21 @@ class SQLiteStore:
         offset: int,
         limit: int,
     ) -> Dict[str, Any]:
-        items = []
-        for row in rows:
-            item = dict(row)
-            for key in tuple(item):
-                if key.endswith("_json"):
-                    try:
-                        item[key.removesuffix("_json")] = json.loads(item[key] or "{}")
-                    except (TypeError, json.JSONDecodeError):
-                        item[key.removesuffix("_json")] = {}
-                    del item[key]
-            items.append(item)
+        items = [SQLiteStore._decode_row(row) for row in rows]
         return {"items": items, "total": int(total), "offset": offset, "limit": limit}
+
+    @staticmethod
+    def _decode_row(row: sqlite3.Row) -> Dict[str, Any]:
+        item = dict(row)
+        for key in tuple(item):
+            if key.endswith("_json"):
+                try:
+                    item[key.removesuffix("_json")] = json.loads(item[key] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    item[key.removesuffix("_json")] = {}
+                del item[key]
+        return item
+
+    @staticmethod
+    def _json_dump(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps({
   api: {
@@ -17,6 +17,12 @@ const rows = ref([])
 const total = ref(0)
 const mediaState = ref('')
 const mediaType = ref('')
+const qbDownloaders = ref([])
+const qbDownloader = ref('')
+const qbView = ref('')
+const qbKeyword = ref('')
+const qbTask = ref(null)
+let qbPollTimer = null
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -37,13 +43,16 @@ const mediaHeaders = [
 ]
 
 const torrentHeaders = [
-  { title: '名称', key: 'name', minWidth: 220 },
-  { title: '下载器', key: 'downloader_id', width: 130 },
-  { title: 'Hash', key: 'info_hash', minWidth: 180 },
-  { title: '状态', key: 'state', width: 120 },
-  { title: '分类', key: 'category', width: 120 },
-  { title: '进度', key: 'progress', width: 90 },
-  { title: '更新时间', key: 'updated_at', minWidth: 170 },
+  { title: '识别结果', key: 'media_title', minWidth: 210 },
+  { title: '源名称', key: 'name', minWidth: 250 },
+  { title: '库存', key: 'inventory_state', width: 110 },
+  { title: '识别', key: 'recognition_state', width: 110 },
+  { title: '下载状态', key: 'state', width: 120 },
+  { title: '进度', key: 'progress', width: 100 },
+  { title: '节点', key: 'downloader_id', width: 130 },
+  { title: '分类', key: 'category', width: 110 },
+  { title: '目标路径', key: 'target_name', minWidth: 250 },
+  { title: 'Hash', key: 'info_hash', width: 120 },
 ]
 
 const rssTaskHeaders = [
@@ -77,6 +86,29 @@ const capabilityRows = computed(() => Object.entries(
   phase: value?.phase || value?.mode || '-',
 })))
 
+const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state))
+const qbProgress = computed(() => {
+  const processed = Number(qbTask.value?.processed || 0)
+  const taskTotal = Number(qbTask.value?.total || 0)
+  return taskTotal > 0 ? Math.round((processed / taskTotal) * 100) : 0
+})
+
+const inventoryLabels = {
+  exists: '已存在',
+  partial: '不完整',
+  missing: '不存在',
+  unconfigured: '未配置',
+  unavailable: '不可访问',
+  unknown: '未知',
+}
+
+const recognitionLabels = {
+  identified: '已识别',
+  unidentified: '未识别',
+  error: '失败',
+  pending: '待识别',
+}
+
 function unwrap(response) {
   return response?.data ?? response
 }
@@ -91,6 +123,21 @@ function normalizeTaskRows(items) {
 async function loadOverview() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/overview'))
   overview.value = response || overview.value
+  if (response?.qb_task?.id && !qbTask.value?.id) {
+    qbTask.value = response.qb_task
+    scheduleQbPoll(response.qb_task.id)
+  }
+}
+
+async function loadQbDownloaders() {
+  const response = unwrap(
+    await props.api.get('plugin/RssAllInOne/qb/downloaders'),
+  )
+  qbDownloaders.value = (response?.items || []).map(item => ({
+    title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
+    value: item.name,
+    disabled: !item.ready,
+  }))
 }
 
 async function loadActive() {
@@ -115,6 +162,12 @@ async function loadActive() {
       }
     } else if (activeTab.value === 'qb') {
       path = 'torrents'
+      params = {
+        ...params,
+        downloader_id: qbDownloader.value,
+        view: qbView.value,
+        keyword: qbKeyword.value.trim(),
+      }
     } else if (activeTab.value === 'tasks') {
       path = 'tasks'
     } else if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
@@ -131,9 +184,18 @@ async function loadActive() {
     const response = unwrap(
       await props.api.get(`plugin/RssAllInOne/${path}`, { params }),
     )
-    rows.value = activeTab.value === 'tasks'
-      ? normalizeTaskRows(response?.items)
-      : (response?.items || [])
+    const items = response?.items || []
+    if (activeTab.value === 'tasks') {
+      rows.value = normalizeTaskRows(items)
+    } else if (activeTab.value === 'qb') {
+      rows.value = items.map(item => ({
+        ...item,
+        row_key: `${item.downloader_id}:${item.info_hash}`,
+        target_name: item.details?.inventory_plan?.target_name || '',
+      }))
+    } else {
+      rows.value = items
+    }
     total.value = Number(response?.total || 0)
   } catch (error) {
     errorMessage.value = error?.message || '数据加载失败'
@@ -144,14 +206,93 @@ async function loadActive() {
   }
 }
 
-watch(activeTab, loadActive)
+function scheduleQbPoll(taskId) {
+  if (!taskId) return
+  window.clearTimeout(qbPollTimer)
+  qbPollTimer = window.setTimeout(() => pollQbTask(taskId), 1200)
+}
+
+async function pollQbTask(taskId) {
+  try {
+    const response = unwrap(
+      await props.api.get(`plugin/RssAllInOne/tasks/${taskId}`),
+    )
+    if (!response?.success || !response?.task) return
+    qbTask.value = response.task
+    if (['queued', 'running'].includes(response.task.state)) {
+      scheduleQbPoll(taskId)
+    } else {
+      await loadActive()
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '读取 QB 刷新进度失败'
+  }
+}
+
+async function refreshQb() {
+  errorMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/qb/refresh', {
+        force_recognition: false,
+      }),
+    )
+    if (!response?.success && !response?.task_id) {
+      errorMessage.value = response?.message || 'QB 刷新启动失败'
+      return
+    }
+    qbTask.value = {
+      id: response.task_id,
+      state: 'running',
+      processed: 0,
+      total: 0,
+      current_item: '',
+    }
+    scheduleQbPoll(response.task_id)
+  } catch (error) {
+    errorMessage.value = error?.message || 'QB 刷新启动失败'
+  }
+}
+
+function inventoryColor(state) {
+  return {
+    exists: 'success',
+    partial: 'warning',
+    missing: 'info',
+    unavailable: 'error',
+    unconfigured: 'warning',
+  }[state] || 'default'
+}
+
+function recognitionColor(state) {
+  return {
+    identified: 'success',
+    unidentified: 'warning',
+    error: 'error',
+  }[state] || 'default'
+}
+
+watch(activeTab, async value => {
+  if (value === 'qb' && qbDownloaders.value.length === 0) {
+    try {
+      await loadQbDownloaders()
+    } catch (error) {
+      errorMessage.value = error?.message || '读取 qB 节点失败'
+    }
+  }
+  await loadActive()
+})
 watch(vtTab, () => {
   if (activeTab.value === 'vt') loadActive()
 })
 watch([mediaState, mediaType], () => {
   if (activeTab.value === 'library') loadActive()
 })
+watch([qbDownloader, qbView], () => {
+  if (activeTab.value === 'qb') loadActive()
+})
 onMounted(loadActive)
+onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
 </script>
 
 <template>
@@ -165,7 +306,7 @@ onMounted(loadActive)
         </div>
       </div>
       <VSpacer />
-      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.1.0' }}</VChip>
+      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.2.0' }}</VChip>
       <VTooltip text="刷新">
         <template #activator="{ props: tooltipProps }">
           <VBtn
@@ -286,17 +427,110 @@ onMounted(loadActive)
       </section>
 
       <section v-else-if="activeTab === 'qb'">
-        <div class="section-count">{{ total }} 个 qB 任务快照</div>
+        <div class="qb-toolbar">
+          <VSelect
+            v-model="qbDownloader"
+            :items="[{ title: '全部节点', value: '' }, ...qbDownloaders]"
+            label="QB 节点"
+            density="compact"
+            hide-details
+            class="filter-control"
+          />
+          <VBtnToggle
+            v-model="qbView"
+            mandatory
+            divided
+            density="compact"
+            variant="outlined"
+            color="primary"
+          >
+            <VBtn value="">全部</VBtn>
+            <VBtn value="existing">已存在</VBtn>
+            <VBtn value="pending">待下载</VBtn>
+          </VBtnToggle>
+          <VTextField
+            v-model="qbKeyword"
+            label="搜索名称或 Hash"
+            prepend-inner-icon="mdi-magnify"
+            density="compact"
+            hide-details
+            clearable
+            class="qb-search"
+            @keyup.enter="loadActive"
+            @click:clear="loadActive"
+          />
+          <VSpacer />
+          <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
+          <VBtn
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-refresh"
+            :loading="qbRefreshing"
+            :disabled="qbRefreshing || !overview.plugin?.enabled"
+            @click="refreshQb"
+          >
+            刷新识别
+          </VBtn>
+        </div>
+        <VAlert
+          v-if="qbTask"
+          :type="qbTask.state === 'failed' ? 'error' : 'info'"
+          variant="tonal"
+          density="compact"
+          class="qb-task-status"
+        >
+          <div class="qb-task-line">
+            <span>{{ qbRefreshing ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.state}` }}</span>
+            <span>{{ qbTask.processed || 0 }}/{{ qbTask.total || 0 }}</span>
+          </div>
+          <VProgressLinear
+            v-if="qbRefreshing"
+            :model-value="qbProgress"
+            height="4"
+            class="mt-2"
+          />
+          <div v-if="qbTask.current_item" class="text-caption mt-1 text-truncate">
+            {{ qbTask.current_item }}
+          </div>
+        </VAlert>
         <VDataTable
           :headers="torrentHeaders"
           :items="rows"
           :loading="loading"
           density="compact"
-          item-value="info_hash"
+          item-value="row_key"
           hide-default-footer
           class="data-table"
           no-data-text="暂无 qB 任务快照"
-        />
+        >
+          <template #item.media_title="{ item }">
+            <div class="media-cell">
+              <strong>{{ item.media_title || '未识别' }}</strong>
+              <span v-if="item.media_year || item.season !== null" class="text-caption text-medium-emphasis">
+                {{ item.media_year || '' }}{{ item.season !== null && item.season !== undefined ? ` · S${String(item.season).padStart(2, '0')}` : '' }}
+              </span>
+            </div>
+          </template>
+          <template #item.inventory_state="{ item }">
+            <VChip :color="inventoryColor(item.inventory_state)" size="small" variant="tonal">
+              {{ inventoryLabels[item.inventory_state] || item.inventory_state }}
+            </VChip>
+          </template>
+          <template #item.recognition_state="{ item }">
+            <VChip :color="recognitionColor(item.recognition_state)" size="small" variant="tonal">
+              {{ recognitionLabels[item.recognition_state] || item.recognition_state }}
+            </VChip>
+          </template>
+          <template #item.progress="{ item }">
+            <div class="progress-cell">
+              <VProgressLinear :model-value="Number(item.progress || 0)" height="5" />
+              <span>{{ Math.round(Number(item.progress || 0)) }}%</span>
+            </div>
+          </template>
+          <template #item.info_hash="{ item }">
+            <code>{{ String(item.info_hash || '').slice(0, 10) }}</code>
+          </template>
+        </VDataTable>
       </section>
 
       <section v-else-if="activeTab === 'vt'">
@@ -427,6 +661,57 @@ onMounted(loadActive)
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.qb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.qb-search {
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: 380px;
+}
+
+.qb-task-status {
+  margin-bottom: 12px;
+}
+
+.qb-task-line,
+.progress-cell,
+.media-cell {
+  display: flex;
+  min-width: 0;
+}
+
+.qb-task-line {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.progress-cell {
+  min-width: 80px;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-cell .v-progress-linear {
+  min-width: 48px;
+}
+
+.media-cell {
+  flex-direction: column;
+  line-height: 1.35;
+}
+
+.media-cell strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .filter-control {

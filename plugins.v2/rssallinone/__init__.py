@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,6 +12,8 @@ from app.plugins import _PluginBase
 
 from .capabilities import runtime_capabilities
 from .database import SQLiteStore
+from .inventory import LocalInventoryChecker
+from .qb_sync import MoviePilotQbGateway, QB_TASK_TYPE, QbSyncService
 
 
 PLUGIN_ID = "RssAllInOne"
@@ -23,7 +27,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -32,6 +36,8 @@ class RssAllInOne(_PluginBase):
 
     _enabled = False
     _database_filename = "rssallinone.db"
+    _qb_refresh_cron = "*/10 * * * *"
+    _inventory_library_roots = ""
     _cd2_grpc_addr = ""
     _cd2_token = ""
     _catchup_base_url = ""
@@ -47,6 +53,8 @@ class RssAllInOne(_PluginBase):
         super().__init__(*args, **kwargs)
         self._store: Optional[SQLiteStore] = None
         self._startup_error = ""
+        self._qb_refresh_lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     def init_plugin(self, config: dict = None) -> None:
         config = config or {}
@@ -54,6 +62,12 @@ class RssAllInOne(_PluginBase):
         self._database_filename = self._safe_database_filename(
             config.get("database_filename") or "rssallinone.db"
         )
+        self._qb_refresh_cron = str(
+            config.get("qb_refresh_cron") or "*/10 * * * *"
+        ).strip()
+        self._inventory_library_roots = str(
+            config.get("inventory_library_roots") or ""
+        ).strip()
         self._cd2_grpc_addr = str(config.get("cd2_grpc_addr") or "").strip()
         self._cd2_token = str(config.get("cd2_token") or "").strip()
         self._catchup_base_url = str(config.get("catchup_base_url") or "").strip()
@@ -66,9 +80,13 @@ class RssAllInOne(_PluginBase):
         self._scan_target_name = str(config.get("scan_target_name") or "").strip()
 
         self._startup_error = ""
+        self._stop_event.clear()
         try:
             self._store = SQLiteStore(self._database_path())
             self._store.initialize()
+            recovered = self._store.recover_incomplete_tasks()
+            if recovered:
+                logger.warning(f"RSS一条龙：已终止 {recovered} 个重启前未完成的后台任务")
         except Exception as error:
             self._store = None
             self._startup_error = str(error)
@@ -101,11 +119,26 @@ class RssAllInOne(_PluginBase):
     def get_page() -> List[dict]:
         return []
 
-    @staticmethod
-    def get_service() -> List[Dict[str, Any]]:
-        return []
+    def get_service(self) -> List[Dict[str, Any]]:
+        if not self._enabled or not self._store or not self._qb_refresh_cron:
+            return []
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            trigger = CronTrigger.from_crontab(self._qb_refresh_cron)
+        except (ImportError, TypeError, ValueError) as error:
+            logger.error(f"RSS一条龙：无效的 QB 刷新周期 {self._qb_refresh_cron}：{error}")
+            return []
+        return [{
+            "id": "RssAllInOne.QbRefresh",
+            "name": "RSS一条龙 QB 只读同步",
+            "trigger": trigger,
+            "func": self._scheduled_qb_refresh,
+            "kwargs": {},
+        }]
 
     def stop_service(self) -> None:
+        self._stop_event.set()
         self._store = None
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -114,9 +147,12 @@ class RssAllInOne(_PluginBase):
             self._api("/health", self.api_health, "GET", "依赖与数据库状态"),
             self._api("/media", self.api_media, "GET", "入库管理列表"),
             self._api("/torrents", self.api_torrents, "GET", "QB 管理列表"),
+            self._api("/qb/downloaders", self.api_qb_downloaders, "GET", "可用 qB 节点"),
+            self._api("/qb/refresh", self.api_qb_refresh, "POST", "刷新并识别 QB 任务"),
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
+            self._api("/tasks/{task_id}", self.api_background_task, "GET", "后台任务详情"),
         ]
 
     def api_overview(self) -> Dict[str, Any]:
@@ -128,10 +164,11 @@ class RssAllInOne(_PluginBase):
                 "name": self.plugin_name,
                 "version": self.plugin_version,
                 "enabled": self._enabled,
-                "phase": "framework",
+                "phase": "qb_readonly",
             },
             "counts": store.counts(),
-            "capabilities": runtime_capabilities(PLUGIN_DIR),
+            "capabilities": self._capabilities(),
+            "qb_task": store.latest_running_task(QB_TASK_TYPE),
         }
 
     def api_health(self) -> Dict[str, Any]:
@@ -139,13 +176,13 @@ class RssAllInOne(_PluginBase):
             return {
                 "success": False,
                 "database": {"ready": False},
-                "capabilities": runtime_capabilities(PLUGIN_DIR),
+                "capabilities": self._capabilities(),
                 "startup_error": self._startup_error or "SQLite 尚未初始化",
             }
         return {
             "success": True,
             "database": self._store.health(),
-            "capabilities": runtime_capabilities(PLUGIN_DIR),
+            "capabilities": self._capabilities(),
             "startup_error": self._startup_error,
         }
 
@@ -164,11 +201,40 @@ class RssAllInOne(_PluginBase):
         )
         return {"success": True, **result}
 
-    def api_torrents(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
+    def api_torrents(
+        self,
+        downloader_id: str = "",
+        view: str = "",
+        keyword: str = "",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
         return {
             "success": True,
-            **self._require_store().list_torrents(offset=offset, limit=limit),
+            **self._require_store().list_torrents(
+                downloader_id=str(downloader_id or "").strip(),
+                view=str(view or "").strip(),
+                keyword=str(keyword or "").strip(),
+                offset=offset,
+                limit=limit,
+            ),
         }
+
+    def api_qb_downloaders(self) -> Dict[str, Any]:
+        try:
+            items = [item.to_dict() for item in MoviePilotQbGateway.list_downloaders()]
+            return {"success": True, "items": items, "total": len(items)}
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取 qBittorrent 节点失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error), "items": [], "total": 0}
+
+    def api_qb_refresh(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self._enabled:
+            return {"success": False, "message": "插件尚未启用"}
+        force = self._as_bool((payload or {}).get("force_recognition", False))
+        return self._start_qb_refresh(force_recognition=force, source="manual")
 
     def api_rss_tasks(self, offset: int = 0, limit: int = 100) -> Dict[str, Any]:
         return {
@@ -187,6 +253,125 @@ class RssAllInOne(_PluginBase):
             "success": True,
             **self._require_store().list_background_tasks(offset=offset, limit=limit),
         }
+
+    def api_background_task(self, task_id: str) -> Dict[str, Any]:
+        task = self._require_store().get_background_task(str(task_id or "").strip())
+        if not task:
+            return {"success": False, "message": "后台任务不存在"}
+        return {"success": True, "task": task}
+
+    def _scheduled_qb_refresh(self) -> None:
+        self._start_qb_refresh(force_recognition=False, source="scheduler")
+
+    def _start_qb_refresh(
+        self,
+        *,
+        force_recognition: bool,
+        source: str,
+    ) -> Dict[str, Any]:
+        store = self._require_store()
+        if not self._qb_refresh_lock.acquire(blocking=False):
+            running = store.latest_running_task(QB_TASK_TYPE)
+            return {
+                "success": False,
+                "message": "QB 刷新识别正在运行",
+                "task_id": running.get("id") if running else None,
+            }
+        task_id = uuid.uuid4().hex
+        try:
+            store.create_background_task(task_id, QB_TASK_TYPE)
+            thread = threading.Thread(
+                target=self._run_qb_refresh,
+                kwargs={
+                    "task_id": task_id,
+                    "force_recognition": force_recognition,
+                    "source": source,
+                },
+                name=f"rssallinone-qb-{task_id[:8]}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as error:
+            store.finish_background_task(
+                task_id,
+                "failed",
+                error_message=f"后台线程启动失败：{error}",
+            )
+            self._qb_refresh_lock.release()
+            raise
+        return {
+            "success": True,
+            "message": "QB 刷新识别已启动",
+            "task_id": task_id,
+        }
+
+    def _run_qb_refresh(
+        self,
+        *,
+        task_id: str,
+        force_recognition: bool,
+        source: str,
+    ) -> None:
+        store = self._store
+        if not store:
+            self._qb_refresh_lock.release()
+            return
+        try:
+            logger.info(
+                f"RSS一条龙：开始 QB 只读同步，来源={source}，"
+                f"强制识别={force_recognition}"
+            )
+            QbSyncService(
+                store=store,
+                inventory_checker=LocalInventoryChecker.from_config(
+                    self._inventory_library_roots
+                ),
+                logger=logger,
+            ).run(
+                task_id,
+                force_recognition=force_recognition,
+                stop_event=self._stop_event,
+            )
+        except Exception as error:
+            logger.error(f"RSS一条龙：QB 刷新识别失败：{error}", exc_info=True)
+            store.finish_background_task(
+                task_id,
+                "failed",
+                error_message=str(error),
+            )
+        finally:
+            self._qb_refresh_lock.release()
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
+        return bool(value)
+
+    def _capabilities(self) -> Dict[str, Any]:
+        capabilities = runtime_capabilities(PLUGIN_DIR)
+        capabilities["local_inventory"] = LocalInventoryChecker.from_config(
+            self._inventory_library_roots
+        ).capability()
+        try:
+            downloaders = MoviePilotQbGateway.list_downloaders()
+            capabilities["qbittorrent"] = {
+                "ready": any(item.ready for item in downloaders),
+                "scope": "moviepilot_configured_qbittorrent_only",
+                "configured": len(downloaders),
+                "available": sum(1 for item in downloaders if item.ready),
+                "phase": "readonly_sync",
+            }
+        except Exception as error:
+            capabilities["qbittorrent"] = {
+                "ready": False,
+                "scope": "moviepilot_configured_qbittorrent_only",
+                "configured": 0,
+                "available": 0,
+                "phase": "runtime_error",
+                "message": str(error),
+            }
+        return capabilities
 
     def _database_path(self) -> Path:
         getter = getattr(self, "get_data_path", None)
@@ -221,6 +406,8 @@ class RssAllInOne(_PluginBase):
         return {
             "enabled": False,
             "database_filename": "rssallinone.db",
+            "qb_refresh_cron": "*/10 * * * *",
+            "inventory_library_roots": "",
             "cd2_grpc_addr": "",
             "cd2_token": "",
             "catchup_base_url": "",

@@ -79,7 +79,7 @@ return (_ctx, _cache) => {
         }),
         _createElementVNode("div", null, [
           _cache[1] || (_cache[1] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
-          _createElementVNode("div", _hoisted_2, "v" + _toDisplayString(overview.value.plugin?.version || '0.1.0'), 1)
+          _createElementVNode("div", _hoisted_2, "v" + _toDisplayString(overview.value.plugin?.version || '0.2.0'), 1)
         ]),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "刷新状态" }, {
@@ -186,12 +186,22 @@ return (_ctx, _cache) => {
         _: 1
       }, 8, ["color"]),
       _createVNode(_component_VChip, {
+        color: overview.value.capabilities?.local_inventory?.ready ? 'success' : 'warning',
+        variant: "tonal",
+        size: "small"
+      }, {
+        default: _withCtx(() => [
+          _createTextVNode(" 本地库存 " + _toDisplayString(overview.value.capabilities?.local_inventory?.ready ? '可访问' : '待配置'), 1)
+        ]),
+        _: 1
+      }, 8, ["color"]),
+      _createVNode(_component_VChip, {
         color: "info",
         variant: "tonal",
         size: "small"
       }, {
         default: _withCtx(() => [...(_cache[6] || (_cache[6] = [
-          _createTextVNode("框架阶段", -1)
+          _createTextVNode("QB 只读阶段", -1)
         ]))]),
         _: 1
       })
@@ -201,6 +211,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-907414a2"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4cf3cf56"]]);
 
 export { Page as default };

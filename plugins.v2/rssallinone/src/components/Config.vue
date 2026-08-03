@@ -13,6 +13,8 @@ const emit = defineEmits(['save', 'close'])
 const defaults = {
   enabled: false,
   database_filename: 'rssallinone.db',
+  qb_refresh_cron: '*/10 * * * *',
+  inventory_library_roots: '',
   cd2_grpc_addr: '',
   cd2_token: '',
   catchup_base_url: '',
@@ -89,6 +91,24 @@ onMounted(() => {
               label="状态数据库文件名"
               hint="保存在 MoviePilot 分配的插件数据目录"
               persistent-hint
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model="config.qb_refresh_cron"
+              label="QB 只读刷新 CRON"
+              placeholder="*/10 * * * *"
+            />
+          </VCol>
+          <VCol cols="12">
+            <VTextarea
+              v-model="config.inventory_library_roots"
+              label="最终媒体库本地根目录"
+              placeholder="movie => /media/Movies&#10;tv => /media/TV"
+              hint="库存仅核对这些本地路径；可写 movie、tv 或省略类型，每行一个绝对路径"
+              persistent-hint
+              rows="4"
+              auto-grow
             />
           </VCol>
         </VRow>

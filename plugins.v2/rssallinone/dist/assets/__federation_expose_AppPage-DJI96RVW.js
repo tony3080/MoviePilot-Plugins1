@@ -1,7 +1,7 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
 import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
-const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode} = await importShared('vue');
+const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 
 
 const _hoisted_1 = { class: "app-page" };
@@ -17,12 +17,24 @@ const _hoisted_7 = { key: 1 };
 const _hoisted_8 = { class: "filter-bar" };
 const _hoisted_9 = { class: "text-caption text-medium-emphasis" };
 const _hoisted_10 = { key: 2 };
-const _hoisted_11 = { class: "section-count" };
-const _hoisted_12 = { key: 3 };
-const _hoisted_13 = { key: 4 };
-const _hoisted_14 = { class: "section-count" };
+const _hoisted_11 = { class: "qb-toolbar" };
+const _hoisted_12 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_13 = { class: "qb-task-line" };
+const _hoisted_14 = {
+  key: 1,
+  class: "text-caption mt-1 text-truncate"
+};
+const _hoisted_15 = { class: "media-cell" };
+const _hoisted_16 = {
+  key: 0,
+  class: "text-caption text-medium-emphasis"
+};
+const _hoisted_17 = { class: "progress-cell" };
+const _hoisted_18 = { key: 3 };
+const _hoisted_19 = { key: 4 };
+const _hoisted_20 = { class: "section-count" };
 
-const {computed,onMounted,ref,watch} = await importShared('vue');
+const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
 
 
@@ -47,6 +59,12 @@ const rows = ref([]);
 const total = ref(0);
 const mediaState = ref('');
 const mediaType = ref('');
+const qbDownloaders = ref([]);
+const qbDownloader = ref('');
+const qbView = ref('');
+const qbKeyword = ref('');
+const qbTask = ref(null);
+let qbPollTimer = null;
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -67,13 +85,16 @@ const mediaHeaders = [
 ];
 
 const torrentHeaders = [
-  { title: '名称', key: 'name', minWidth: 220 },
-  { title: '下载器', key: 'downloader_id', width: 130 },
-  { title: 'Hash', key: 'info_hash', minWidth: 180 },
-  { title: '状态', key: 'state', width: 120 },
-  { title: '分类', key: 'category', width: 120 },
-  { title: '进度', key: 'progress', width: 90 },
-  { title: '更新时间', key: 'updated_at', minWidth: 170 },
+  { title: '识别结果', key: 'media_title', minWidth: 210 },
+  { title: '源名称', key: 'name', minWidth: 250 },
+  { title: '库存', key: 'inventory_state', width: 110 },
+  { title: '识别', key: 'recognition_state', width: 110 },
+  { title: '下载状态', key: 'state', width: 120 },
+  { title: '进度', key: 'progress', width: 100 },
+  { title: '节点', key: 'downloader_id', width: 130 },
+  { title: '分类', key: 'category', width: 110 },
+  { title: '目标路径', key: 'target_name', minWidth: 250 },
+  { title: 'Hash', key: 'info_hash', width: 120 },
 ];
 
 const rssTaskHeaders = [
@@ -107,6 +128,29 @@ const capabilityRows = computed(() => Object.entries(
   phase: value?.phase || value?.mode || '-',
 })));
 
+const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state));
+const qbProgress = computed(() => {
+  const processed = Number(qbTask.value?.processed || 0);
+  const taskTotal = Number(qbTask.value?.total || 0);
+  return taskTotal > 0 ? Math.round((processed / taskTotal) * 100) : 0
+});
+
+const inventoryLabels = {
+  exists: '已存在',
+  partial: '不完整',
+  missing: '不存在',
+  unconfigured: '未配置',
+  unavailable: '不可访问',
+  unknown: '未知',
+};
+
+const recognitionLabels = {
+  identified: '已识别',
+  unidentified: '未识别',
+  error: '失败',
+  pending: '待识别',
+};
+
 function unwrap(response) {
   return response?.data ?? response
 }
@@ -121,6 +165,21 @@ function normalizeTaskRows(items) {
 async function loadOverview() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/overview'));
   overview.value = response || overview.value;
+  if (response?.qb_task?.id && !qbTask.value?.id) {
+    qbTask.value = response.qb_task;
+    scheduleQbPoll(response.qb_task.id);
+  }
+}
+
+async function loadQbDownloaders() {
+  const response = unwrap(
+    await props.api.get('plugin/RssAllInOne/qb/downloaders'),
+  );
+  qbDownloaders.value = (response?.items || []).map(item => ({
+    title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
+    value: item.name,
+    disabled: !item.ready,
+  }));
 }
 
 async function loadActive() {
@@ -145,6 +204,12 @@ async function loadActive() {
       };
     } else if (activeTab.value === 'qb') {
       path = 'torrents';
+      params = {
+        ...params,
+        downloader_id: qbDownloader.value,
+        view: qbView.value,
+        keyword: qbKeyword.value.trim(),
+      };
     } else if (activeTab.value === 'tasks') {
       path = 'tasks';
     } else if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
@@ -161,9 +226,18 @@ async function loadActive() {
     const response = unwrap(
       await props.api.get(`plugin/RssAllInOne/${path}`, { params }),
     );
-    rows.value = activeTab.value === 'tasks'
-      ? normalizeTaskRows(response?.items)
-      : (response?.items || []);
+    const items = response?.items || [];
+    if (activeTab.value === 'tasks') {
+      rows.value = normalizeTaskRows(items);
+    } else if (activeTab.value === 'qb') {
+      rows.value = items.map(item => ({
+        ...item,
+        row_key: `${item.downloader_id}:${item.info_hash}`,
+        target_name: item.details?.inventory_plan?.target_name || '',
+      }));
+    } else {
+      rows.value = items;
+    }
     total.value = Number(response?.total || 0);
   } catch (error) {
     errorMessage.value = error?.message || '数据加载失败';
@@ -174,14 +248,93 @@ async function loadActive() {
   }
 }
 
-watch(activeTab, loadActive);
+function scheduleQbPoll(taskId) {
+  if (!taskId) return
+  window.clearTimeout(qbPollTimer);
+  qbPollTimer = window.setTimeout(() => pollQbTask(taskId), 1200);
+}
+
+async function pollQbTask(taskId) {
+  try {
+    const response = unwrap(
+      await props.api.get(`plugin/RssAllInOne/tasks/${taskId}`),
+    );
+    if (!response?.success || !response?.task) return
+    qbTask.value = response.task;
+    if (['queued', 'running'].includes(response.task.state)) {
+      scheduleQbPoll(taskId);
+    } else {
+      await loadActive();
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '读取 QB 刷新进度失败';
+  }
+}
+
+async function refreshQb() {
+  errorMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/qb/refresh', {
+        force_recognition: false,
+      }),
+    );
+    if (!response?.success && !response?.task_id) {
+      errorMessage.value = response?.message || 'QB 刷新启动失败';
+      return
+    }
+    qbTask.value = {
+      id: response.task_id,
+      state: 'running',
+      processed: 0,
+      total: 0,
+      current_item: '',
+    };
+    scheduleQbPoll(response.task_id);
+  } catch (error) {
+    errorMessage.value = error?.message || 'QB 刷新启动失败';
+  }
+}
+
+function inventoryColor(state) {
+  return {
+    exists: 'success',
+    partial: 'warning',
+    missing: 'info',
+    unavailable: 'error',
+    unconfigured: 'warning',
+  }[state] || 'default'
+}
+
+function recognitionColor(state) {
+  return {
+    identified: 'success',
+    unidentified: 'warning',
+    error: 'error',
+  }[state] || 'default'
+}
+
+watch(activeTab, async value => {
+  if (value === 'qb' && qbDownloaders.value.length === 0) {
+    try {
+      await loadQbDownloaders();
+    } catch (error) {
+      errorMessage.value = error?.message || '读取 qB 节点失败';
+    }
+  }
+  await loadActive();
+});
 watch(vtTab, () => {
   if (activeTab.value === 'vt') loadActive();
 });
 watch([mediaState, mediaType], () => {
   if (activeTab.value === 'library') loadActive();
 });
+watch([qbDownloader, qbView], () => {
+  if (activeTab.value === 'qb') loadActive();
+});
 onMounted(loadActive);
+onBeforeUnmount(() => window.clearTimeout(qbPollTimer));
 
 return (_ctx, _cache) => {
   const _component_VIcon = _resolveComponent("VIcon");
@@ -197,6 +350,9 @@ return (_ctx, _cache) => {
   const _component_VTable = _resolveComponent("VTable");
   const _component_VSelect = _resolveComponent("VSelect");
   const _component_VDataTable = _resolveComponent("VDataTable");
+  const _component_VBtnToggle = _resolveComponent("VBtnToggle");
+  const _component_VTextField = _resolveComponent("VTextField");
+  const _component_VProgressLinear = _resolveComponent("VProgressLinear");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
     _createVNode(_component_VToolbar, {
@@ -211,7 +367,7 @@ return (_ctx, _cache) => {
           class: "ms-3 me-3"
         }),
         _createElementVNode("div", _hoisted_2, [
-          _cache[4] || (_cache[4] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
+          _cache[7] || (_cache[7] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
           _createElementVNode("div", _hoisted_3, _toDisplayString(overview.value.plugin?.enabled ? '运行已启用' : '运行未启用'), 1)
         ]),
         _createVNode(_component_VSpacer),
@@ -222,7 +378,7 @@ return (_ctx, _cache) => {
           class: "me-2"
         }, {
           default: _withCtx(() => [
-            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.1.0'), 1)
+            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.2.0'), 1)
           ]),
           _: 1
         }),
@@ -291,7 +447,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[5] || (_cache[5] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
+                  _cache[8] || (_cache[8] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.media || 0), 1)
                 ]),
                 _: 1
@@ -301,7 +457,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[6] || (_cache[6] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
+                  _cache[9] || (_cache[9] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.torrents || 0), 1)
                 ]),
                 _: 1
@@ -311,7 +467,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[7] || (_cache[7] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
+                  _cache[10] || (_cache[10] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.rss_history || 0), 1)
                 ]),
                 _: 1
@@ -321,7 +477,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[8] || (_cache[8] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
+                  _cache[11] || (_cache[11] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.background_tasks || 0), 1)
                 ]),
                 _: 1
@@ -332,7 +488,7 @@ return (_ctx, _cache) => {
               class: "capability-table"
             }, {
               default: _withCtx(() => [
-                _cache[9] || (_cache[9] = _createElementVNode("thead", null, [
+                _cache[12] || (_cache[12] = _createElementVNode("thead", null, [
                   _createElementVNode("tr", null, [
                     _createElementVNode("th", null, "能力"),
                     _createElementVNode("th", null, "状态"),
@@ -414,42 +570,184 @@ return (_ctx, _cache) => {
             ]))
           : (activeTab.value === 'qb')
             ? (_openBlock(), _createElementBlock("section", _hoisted_10, [
-                _createElementVNode("div", _hoisted_11, _toDisplayString(total.value) + " 个 qB 任务快照", 1),
+                _createElementVNode("div", _hoisted_11, [
+                  _createVNode(_component_VSelect, {
+                    modelValue: qbDownloader.value,
+                    "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((qbDownloader).value = $event)),
+                    items: [{ title: '全部节点', value: '' }, ...qbDownloaders.value],
+                    label: "QB 节点",
+                    density: "compact",
+                    "hide-details": "",
+                    class: "filter-control"
+                  }, null, 8, ["modelValue", "items"]),
+                  _createVNode(_component_VBtnToggle, {
+                    modelValue: qbView.value,
+                    "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((qbView).value = $event)),
+                    mandatory: "",
+                    divided: "",
+                    density: "compact",
+                    variant: "outlined",
+                    color: "primary"
+                  }, {
+                    default: _withCtx(() => [
+                      _createVNode(_component_VBtn, { value: "" }, {
+                        default: _withCtx(() => [...(_cache[13] || (_cache[13] = [
+                          _createTextVNode("全部", -1)
+                        ]))]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VBtn, { value: "existing" }, {
+                        default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
+                          _createTextVNode("已存在", -1)
+                        ]))]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VBtn, { value: "pending" }, {
+                        default: _withCtx(() => [...(_cache[15] || (_cache[15] = [
+                          _createTextVNode("待下载", -1)
+                        ]))]),
+                        _: 1
+                      })
+                    ]),
+                    _: 1
+                  }, 8, ["modelValue"]),
+                  _createVNode(_component_VTextField, {
+                    modelValue: qbKeyword.value,
+                    "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((qbKeyword).value = $event)),
+                    label: "搜索名称或 Hash",
+                    "prepend-inner-icon": "mdi-magnify",
+                    density: "compact",
+                    "hide-details": "",
+                    clearable: "",
+                    class: "qb-search",
+                    onKeyup: _withKeys(loadActive, ["enter"]),
+                    "onClick:clear": loadActive
+                  }, null, 8, ["modelValue"]),
+                  _createVNode(_component_VSpacer),
+                  _createElementVNode("span", _hoisted_12, _toDisplayString(total.value) + " 项", 1),
+                  _createVNode(_component_VBtn, {
+                    color: "primary",
+                    variant: "tonal",
+                    "prepend-icon": "mdi-refresh",
+                    loading: qbRefreshing.value,
+                    disabled: qbRefreshing.value || !overview.value.plugin?.enabled,
+                    onClick: refreshQb
+                  }, {
+                    default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
+                      _createTextVNode(" 刷新识别 ", -1)
+                    ]))]),
+                    _: 1
+                  }, 8, ["loading", "disabled"])
+                ]),
+                (qbTask.value)
+                  ? (_openBlock(), _createBlock(_component_VAlert, {
+                      key: 0,
+                      type: qbTask.value.state === 'failed' ? 'error' : 'info',
+                      variant: "tonal",
+                      density: "compact",
+                      class: "qb-task-status"
+                    }, {
+                      default: _withCtx(() => [
+                        _createElementVNode("div", _hoisted_13, [
+                          _createElementVNode("span", null, _toDisplayString(qbRefreshing.value ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.value.state}`), 1),
+                          _createElementVNode("span", null, _toDisplayString(qbTask.value.processed || 0) + "/" + _toDisplayString(qbTask.value.total || 0), 1)
+                        ]),
+                        (qbRefreshing.value)
+                          ? (_openBlock(), _createBlock(_component_VProgressLinear, {
+                              key: 0,
+                              "model-value": qbProgress.value,
+                              height: "4",
+                              class: "mt-2"
+                            }, null, 8, ["model-value"]))
+                          : _createCommentVNode("", true),
+                        (qbTask.value.current_item)
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_14, _toDisplayString(qbTask.value.current_item), 1))
+                          : _createCommentVNode("", true)
+                      ]),
+                      _: 1
+                    }, 8, ["type"]))
+                  : _createCommentVNode("", true),
                 _createVNode(_component_VDataTable, {
                   headers: torrentHeaders,
                   items: rows.value,
                   loading: loading.value,
                   density: "compact",
-                  "item-value": "info_hash",
+                  "item-value": "row_key",
                   "hide-default-footer": "",
                   class: "data-table",
                   "no-data-text": "暂无 qB 任务快照"
-                }, null, 8, ["items", "loading"])
+                }, {
+                  "item.media_title": _withCtx(({ item }) => [
+                    _createElementVNode("div", _hoisted_15, [
+                      _createElementVNode("strong", null, _toDisplayString(item.media_title || '未识别'), 1),
+                      (item.media_year || item.season !== null)
+                        ? (_openBlock(), _createElementBlock("span", _hoisted_16, _toDisplayString(item.media_year || '') + _toDisplayString(item.season !== null && item.season !== undefined ? ` · S${String(item.season).padStart(2, '0')}` : ''), 1))
+                        : _createCommentVNode("", true)
+                    ])
+                  ]),
+                  "item.inventory_state": _withCtx(({ item }) => [
+                    _createVNode(_component_VChip, {
+                      color: inventoryColor(item.inventory_state),
+                      size: "small",
+                      variant: "tonal"
+                    }, {
+                      default: _withCtx(() => [
+                        _createTextVNode(_toDisplayString(inventoryLabels[item.inventory_state] || item.inventory_state), 1)
+                      ]),
+                      _: 2
+                    }, 1032, ["color"])
+                  ]),
+                  "item.recognition_state": _withCtx(({ item }) => [
+                    _createVNode(_component_VChip, {
+                      color: recognitionColor(item.recognition_state),
+                      size: "small",
+                      variant: "tonal"
+                    }, {
+                      default: _withCtx(() => [
+                        _createTextVNode(_toDisplayString(recognitionLabels[item.recognition_state] || item.recognition_state), 1)
+                      ]),
+                      _: 2
+                    }, 1032, ["color"])
+                  ]),
+                  "item.progress": _withCtx(({ item }) => [
+                    _createElementVNode("div", _hoisted_17, [
+                      _createVNode(_component_VProgressLinear, {
+                        "model-value": Number(item.progress || 0),
+                        height: "5"
+                      }, null, 8, ["model-value"]),
+                      _createElementVNode("span", null, _toDisplayString(Math.round(Number(item.progress || 0))) + "%", 1)
+                    ])
+                  ]),
+                  "item.info_hash": _withCtx(({ item }) => [
+                    _createElementVNode("code", null, _toDisplayString(String(item.info_hash || '').slice(0, 10)), 1)
+                  ]),
+                  _: 1
+                }, 8, ["items", "loading"])
               ]))
             : (activeTab.value === 'vt')
-              ? (_openBlock(), _createElementBlock("section", _hoisted_12, [
+              ? (_openBlock(), _createElementBlock("section", _hoisted_18, [
                   _createVNode(_component_VTabs, {
                     modelValue: vtTab.value,
-                    "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((vtTab).value = $event)),
+                    "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((vtTab).value = $event)),
                     density: "compact",
                     color: "primary",
                     class: "sub-tabs"
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                        default: _withCtx(() => [...(_cache[10] || (_cache[10] = [
+                        default: _withCtx(() => [...(_cache[17] || (_cache[17] = [
                           _createTextVNode("RSS任务", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "rss_history" }, {
-                        default: _withCtx(() => [...(_cache[11] || (_cache[11] = [
+                        default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
                           _createTextVNode("RSS历史", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
-                        default: _withCtx(() => [...(_cache[12] || (_cache[12] = [
+                        default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
                           _createTextVNode("站点身份", -1)
                         ]))]),
                         _: 1
@@ -487,7 +785,7 @@ return (_ctx, _cache) => {
                           class: "capability-table"
                         }, {
                           default: _withCtx(() => [
-                            _cache[16] || (_cache[16] = _createElementVNode("thead", null, [
+                            _cache[23] || (_cache[23] = _createElementVNode("thead", null, [
                               _createElementVNode("tr", null, [
                                 _createElementVNode("th", null, "来源"),
                                 _createElementVNode("th", null, "模式"),
@@ -496,15 +794,15 @@ return (_ctx, _cache) => {
                             ], -1)),
                             _createElementVNode("tbody", null, [
                               _createElementVNode("tr", null, [
-                                _cache[14] || (_cache[14] = _createElementVNode("td", null, "当前 MoviePilot", -1)),
-                                _cache[15] || (_cache[15] = _createElementVNode("td", null, "站点服务", -1)),
+                                _cache[21] || (_cache[21] = _createElementVNode("td", null, "当前 MoviePilot", -1)),
+                                _cache[22] || (_cache[22] = _createElementVNode("td", null, "站点服务", -1)),
                                 _createElementVNode("td", null, [
                                   _createVNode(_component_VChip, {
                                     size: "small",
                                     variant: "tonal",
                                     color: "warning"
                                   }, {
-                                    default: _withCtx(() => [...(_cache[13] || (_cache[13] = [
+                                    default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
                                       _createTextVNode("适配器待接入", -1)
                                     ]))]),
                                     _: 1
@@ -517,8 +815,8 @@ return (_ctx, _cache) => {
                         }))
                 ]))
               : (activeTab.value === 'tasks')
-                ? (_openBlock(), _createElementBlock("section", _hoisted_13, [
-                    _createElementVNode("div", _hoisted_14, _toDisplayString(total.value) + " 个后台任务", 1),
+                ? (_openBlock(), _createElementBlock("section", _hoisted_19, [
+                    _createElementVNode("div", _hoisted_20, _toDisplayString(total.value) + " 个后台任务", 1),
                     _createVNode(_component_VDataTable, {
                       headers: taskHeaders,
                       items: rows.value,
@@ -537,6 +835,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9093ebd4"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-e2b35360"]]);
 
 export { AppPage as default };

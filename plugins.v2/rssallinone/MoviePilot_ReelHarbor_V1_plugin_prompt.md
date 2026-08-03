@@ -531,6 +531,7 @@ VT+ 包含 `站点身份`、`RSS任务`、`RSS历史` 三个子页。
 - `local_hardlink_path` 必须位于 CD2 正在监控或挂载上传的本地目录树中；CD2 容器看到的路径可以不同，但必须配置显式 `plugin_staging_root -> cd2_staging_root` 映射。
 - `local_hardlink_path` 的相对路径必须稳定映射到 `cd2_dest_path`：`cd2_dest_root + relative(local_hardlink_path, plugin_staging_root)`。
 - `mp_library_path` 是 CD2 云端目录重新挂载给 MoviePilot/Emby 后的路径，配置显式 `cd2_dest_root -> mp_library_root` 映射。库存检查在 `mp_library_path` 上进行，不应把 staging 目录当作最终媒体库。
+- 库存检查必须由插件直接读取 `mp_library_path` 下的本地目录和文件，按预期相对路径、文件数与文件大小核对；MoviePilot 只提供媒体识别和命名规划，不得用 MoviePilot/Emby 的“媒体已存在”接口替代本地文件检查。媒体库根目录未配置、挂载不可访问、文件缺失和大小不一致必须分别记录，挂载离线不得误判为库存缺失。
 - 因此正常数据链是：qB 下载文件 -> 插件可访问源路径 -> 同盘 staging 硬链接 -> CD2 云端目标 -> CD2/网盘挂载的 MP 媒体库。
 
 ### 3. 建议的容器挂载示例

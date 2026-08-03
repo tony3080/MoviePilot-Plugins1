@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、硬链接 staging 与 CloudDrive2 备份流程。",
     "labels": "RSS,下载管理",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.2.0": "接入 MoviePilot 已配置的 qBittorrent 只读增量同步与媒体识别；按最终挂载媒体库本地路径逐文件核对库存，不调用 MoviePilot/Emby 库存接口",
       "v0.1.0": "建立 MoviePilot V2 插件框架、SQLite 状态库、Vue 全页工作区和 CloudDrive2 gRPC 契约"
     }
   }

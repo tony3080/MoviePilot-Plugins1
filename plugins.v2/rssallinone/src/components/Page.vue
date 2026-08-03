@@ -40,7 +40,7 @@ onMounted(loadOverview)
       <VIcon icon="mdi-rss" color="primary" class="ms-3 me-3" />
       <div>
         <div class="text-h6">RSS一条龙</div>
-        <div class="text-caption text-medium-emphasis">v{{ overview.plugin?.version || '0.1.0' }}</div>
+        <div class="text-caption text-medium-emphasis">v{{ overview.plugin?.version || '0.2.0' }}</div>
       </div>
       <VSpacer />
       <VTooltip text="刷新状态">
@@ -107,7 +107,14 @@ onMounted(loadOverview)
       >
         CloudDrive2 {{ overview.capabilities?.clouddrive?.ready ? '依赖就绪' : '待配置' }}
       </VChip>
-      <VChip color="info" variant="tonal" size="small">框架阶段</VChip>
+      <VChip
+        :color="overview.capabilities?.local_inventory?.ready ? 'success' : 'warning'"
+        variant="tonal"
+        size="small"
+      >
+        本地库存 {{ overview.capabilities?.local_inventory?.ready ? '可访问' : '待配置' }}
+      </VChip>
+      <VChip color="info" variant="tonal" size="small">QB 只读阶段</VChip>
     </div>
   </div>
 </template>
