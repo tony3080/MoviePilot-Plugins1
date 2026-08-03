@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
+from .layout import LibraryLayout
 
 
 QB_TASK_TYPE = "qb_refresh"
@@ -257,11 +258,13 @@ class QbSyncService:
         store: SQLiteStore,
         gateway: Optional[MoviePilotQbGateway] = None,
         inventory_checker: Optional[LocalInventoryChecker] = None,
+        library_layout: Optional[LibraryLayout] = None,
         logger: Any = None,
     ):
         self.store = store
         self.gateway = gateway or MoviePilotQbGateway()
         self.inventory_checker = inventory_checker or LocalInventoryChecker([])
+        self.library_layout = library_layout or LibraryLayout("", [], {})
         self.logger = logger
 
     def run(
@@ -410,28 +413,9 @@ class QbSyncService:
         inventory_state = "unknown"
         inventory_details: Dict[str, Any] = {}
         inventory_plan = existing_details.get("inventory_plan") or {}
+        path_plan: Dict[str, Any] = {}
         if media:
             media_type = self.gateway.media_type(media)
-            try:
-                if recognition_needed or not inventory_plan.get("expected_files"):
-                    torrent_files = self.gateway.list_torrent_files(
-                        downloader.name, info_hash
-                    )
-                    inventory_plan = self.gateway.plan_inventory_files(
-                        media, torrent_files
-                    )
-                inventory_state, inventory_details = self.inventory_checker.check(
-                    media_type,
-                    inventory_plan.get("expected_files") or [],
-                )
-            except Exception as error:
-                inventory_state = "unknown"
-                inventory_details = {
-                    "method": "local_filesystem",
-                    "scope": "mp_library_path",
-                    "error": str(error),
-                }
-            media_state = "existing" if inventory_state == "exists" else "identified"
             media_payload = self.gateway.media_payload(media)
             meta_payload = self.gateway.meta_payload(meta)
             media_title = str(getattr(media, "title", "") or "")
@@ -442,6 +426,34 @@ class QbSyncService:
                 season = getattr(meta, "begin_season", None)
             category = str(getattr(media, "category", "") or "")
             poster = self.gateway.poster(media)
+            try:
+                if recognition_needed or not inventory_plan.get("expected_files"):
+                    torrent_files = self.gateway.list_torrent_files(
+                        downloader.name, info_hash
+                    )
+                    inventory_plan = self.gateway.plan_inventory_files(
+                        media, torrent_files
+                    )
+                path_plan = self.library_layout.plan(
+                    source_path=content_path,
+                    category=category,
+                    expected_files=inventory_plan.get("expected_files") or [],
+                )
+                inventory_state, inventory_details = self.inventory_checker.check_root(
+                    path_plan.get("inventory_base") or "",
+                    inventory_plan.get("expected_files") or [],
+                )
+                inventory_details["category"] = path_plan.get("category") or category
+                inventory_details["group"] = path_plan.get("group") or ""
+                inventory_details["layout_errors"] = path_plan.get("errors") or []
+            except Exception as error:
+                inventory_state = "unknown"
+                inventory_details = {
+                    "method": "local_filesystem",
+                    "scope": "mp_library_path",
+                    "error": str(error),
+                }
+            media_state = "existing" if inventory_state == "exists" else "identified"
             recognition_state = "identified"
             outcome = "existing" if inventory_state == "exists" else "recognized"
         else:
@@ -465,8 +477,14 @@ class QbSyncService:
             "meta": meta_payload,
             "media": media_payload,
             "inventory_plan": inventory_plan,
+            "path_plan": path_plan,
             "inventory": inventory_details,
         }
+        target_name = ""
+        if path_plan.get("inventory_files"):
+            target_name = str(path_plan["inventory_files"][0].get("path") or "")
+        if not target_name:
+            target_name = str(inventory_plan.get("target_name") or "")
         self.store.upsert_media_item({
             "id": media_id,
             "state": media_state,
@@ -479,7 +497,7 @@ class QbSyncService:
             "tmdb_id": tmdb_id,
             "season": season,
             "category": category,
-            "target_name": inventory_plan.get("target_name") or "",
+            "target_name": target_name,
             "failure_code": "recognition_failed" if not media else "",
             "failure_message": recognition_error,
             "details": details,

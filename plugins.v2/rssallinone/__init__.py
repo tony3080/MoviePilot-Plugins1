@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,6 +14,7 @@ from app.plugins import _PluginBase
 from .capabilities import runtime_capabilities
 from .database import SQLiteStore
 from .inventory import LocalInventoryChecker
+from .layout import LibraryLayout, default_layout_config
 from .qb_sync import MoviePilotQbGateway, QB_TASK_TYPE, QbSyncService
 
 
@@ -27,7 +29,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.2.0"
+    plugin_version = "0.3.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -37,7 +39,7 @@ class RssAllInOne(_PluginBase):
     _enabled = False
     _database_filename = "rssallinone.db"
     _qb_refresh_cron = "*/10 * * * *"
-    _inventory_library_roots = ""
+    _inventory_root = ""
     _cd2_grpc_addr = ""
     _cd2_token = ""
     _catchup_base_url = ""
@@ -55,9 +57,13 @@ class RssAllInOne(_PluginBase):
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._source_routes: List[Dict[str, Any]] = []
+        self._category_groups: Dict[str, List[str]] = {}
+        self._library_layout = LibraryLayout("", [], {})
 
     def init_plugin(self, config: dict = None) -> None:
         config = config or {}
+        defaults = self._default_config()
         self._enabled = bool(config.get("enabled", False))
         self._database_filename = self._safe_database_filename(
             config.get("database_filename") or "rssallinone.db"
@@ -65,9 +71,20 @@ class RssAllInOne(_PluginBase):
         self._qb_refresh_cron = str(
             config.get("qb_refresh_cron") or "*/10 * * * *"
         ).strip()
-        self._inventory_library_roots = str(
-            config.get("inventory_library_roots") or ""
+        self._inventory_root = str(
+            config.get("inventory_root", defaults["inventory_root"]) or ""
         ).strip()
+        self._source_routes = deepcopy(
+            config.get("source_routes", defaults["source_routes"])
+        )
+        self._category_groups = deepcopy(
+            config.get("category_groups", defaults["category_groups"])
+        )
+        self._library_layout = LibraryLayout.from_config(
+            self._inventory_root,
+            self._source_routes,
+            self._category_groups,
+        )
         self._cd2_grpc_addr = str(config.get("cd2_grpc_addr") or "").strip()
         self._cd2_token = str(config.get("cd2_token") or "").strip()
         self._catchup_base_url = str(config.get("catchup_base_url") or "").strip()
@@ -149,6 +166,7 @@ class RssAllInOne(_PluginBase):
             self._api("/torrents", self.api_torrents, "GET", "QB 管理列表"),
             self._api("/qb/downloaders", self.api_qb_downloaders, "GET", "可用 qB 节点"),
             self._api("/qb/refresh", self.api_qb_refresh, "POST", "刷新并识别 QB 任务"),
+            self._api("/layout", self.api_layout, "GET", "目录规划配置"),
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
@@ -235,6 +253,13 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": "插件尚未启用"}
         force = self._as_bool((payload or {}).get("force_recognition", False))
         return self._start_qb_refresh(force_recognition=force, source="manual")
+
+    def api_layout(self) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "layout": self._library_layout.to_dict(),
+            "capability": self._library_layout.capability(),
+        }
 
     def api_rss_tasks(self, offset: int = 0, limit: int = 100) -> Dict[str, Any]:
         return {
@@ -323,9 +348,8 @@ class RssAllInOne(_PluginBase):
             )
             QbSyncService(
                 store=store,
-                inventory_checker=LocalInventoryChecker.from_config(
-                    self._inventory_library_roots
-                ),
+                inventory_checker=LocalInventoryChecker([]),
+                library_layout=self._library_layout,
                 logger=logger,
             ).run(
                 task_id,
@@ -350,9 +374,7 @@ class RssAllInOne(_PluginBase):
 
     def _capabilities(self) -> Dict[str, Any]:
         capabilities = runtime_capabilities(PLUGIN_DIR)
-        capabilities["local_inventory"] = LocalInventoryChecker.from_config(
-            self._inventory_library_roots
-        ).capability()
+        capabilities["local_inventory"] = self._library_layout.capability()
         try:
             downloaders = MoviePilotQbGateway.list_downloaders()
             capabilities["qbittorrent"] = {
@@ -403,11 +425,12 @@ class RssAllInOne(_PluginBase):
 
     @staticmethod
     def _default_config() -> Dict[str, Any]:
+        layout = default_layout_config()
         return {
             "enabled": False,
             "database_filename": "rssallinone.db",
             "qb_refresh_cron": "*/10 * * * *",
-            "inventory_library_roots": "",
+            **layout,
             "cd2_grpc_addr": "",
             "cd2_token": "",
             "catchup_base_url": "",

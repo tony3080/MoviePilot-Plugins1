@@ -34,6 +34,7 @@ def load_package_module(name: str):
 
 database = load_package_module("database")
 inventory = load_package_module("inventory")
+layout = load_package_module("layout")
 qb_sync = load_package_module("qb_sync")
 
 
@@ -117,7 +118,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             year = "2026"
             tmdb_id = 42
             season = None
-            category = "电影"
+            category = "华语电影"
 
         class Gateway:
             def __init__(self):
@@ -201,15 +202,28 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             store = database.SQLiteStore(directory / "state.db")
             store.initialize()
             library_root = directory / "library"
-            expected = library_root / "Example Movie (2026)" / "Example Movie (2026).mkv"
+            expected = (
+                library_root
+                / "华语电影"
+                / "Example Movie (2026)"
+                / "Example Movie (2026).mkv"
+            )
             expected.parent.mkdir(parents=True)
             expected.write_bytes(b"1234")
             gateway = Gateway()
             service = qb_sync.QbSyncService(
                 store=store,
                 gateway=gateway,
-                inventory_checker=inventory.LocalInventoryChecker.from_config(
-                    f"movie => {library_root}"
+                inventory_checker=inventory.LocalInventoryChecker([]),
+                library_layout=layout.LibraryLayout.from_config(
+                    str(library_root),
+                    [{
+                        "name": "downloads",
+                        "prefix": "/downloads",
+                        "link_roots": {"movie": str(directory / "staging")},
+                        "enabled": True,
+                    }],
+                    {"movie": ["华语电影"]},
                 ),
             )
 
@@ -219,6 +233,10 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(first["inventory_state"], "exists")
             self.assertEqual(first["recognition_state"], "identified")
             self.assertEqual(first["details"]["inventory"]["scope"], "mp_library_path")
+            self.assertEqual(
+                first["details"]["path_plan"]["inventory_base"],
+                str(library_root / "华语电影").replace("\\", "/"),
+            )
 
             expected.unlink()
             store.create_background_task("second", qb_sync.QB_TASK_TYPE)

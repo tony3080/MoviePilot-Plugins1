@@ -176,6 +176,23 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("media_exists", backend)
         self.assertIn("直接读取 `mp_library_path` 下的本地目录和文件", prompt)
 
+    def test_current_layout_defaults_are_documented(self) -> None:
+        prompt = (
+            PLUGIN_DIR / "MoviePilot_ReelHarbor_V1_plugin_prompt.md"
+        ).read_text(encoding="utf-8")
+        config = (
+            PLUGIN_DIR / "src" / "components" / "Config.vue"
+        ).read_text(encoding="utf-8")
+        for expected in (
+            "/SSD/云盘/strm/影视库",
+            "/MP/电影UP",
+            "/MP/剧集UP",
+            "/SSD/云盘/l",
+        ):
+            self.assertIn(expected, prompt)
+            self.assertIn(expected, config)
+        self.assertIn("series: [儿童剧, 动漫, 国产剧, 日韩剧, 欧美剧, 纪录片, 综艺]", prompt)
+
 
 class PluginLifecycleTest(unittest.TestCase):
     def test_plugin_loads_inside_a_minimal_moviepilot_host(self) -> None:

@@ -95,6 +95,38 @@ class LocalInventoryChecker:
         expected_files: Sequence[Dict[str, Any]],
     ) -> Tuple[str, Dict[str, Any]]:
         selected_roots = self._roots_for(media_type)
+        return self._check_roots(selected_roots, expected_files)
+
+    def check_root(
+        self,
+        root: object,
+        expected_files: Sequence[Dict[str, Any]],
+    ) -> Tuple[str, Dict[str, Any]]:
+        path = str(root or "").strip()
+        if not path:
+            return "unconfigured", {
+                "method": "local_filesystem",
+                "scope": "mp_library_path",
+                "roots": [],
+                "config_errors": [],
+                "total": 0,
+                "exists": 0,
+                "missing": 0,
+                "size_mismatch": 0,
+                "unavailable": 0,
+                "files": [],
+                "reason": "未生成最终媒体库分类目录",
+            }
+        return self._check_roots(
+            [InventoryRoot(media_type="*", path=Path(path))],
+            expected_files,
+        )
+
+    def _check_roots(
+        self,
+        selected_roots: Sequence[InventoryRoot],
+        expected_files: Sequence[Dict[str, Any]],
+    ) -> Tuple[str, Dict[str, Any]]:
         details: Dict[str, Any] = {
             "method": "local_filesystem",
             "scope": "mp_library_path",

@@ -10,11 +10,39 @@ const props = defineProps({
 
 const emit = defineEmits(['save', 'close'])
 
+const defaultRoutes = [
+  {
+    name: 'UP',
+    prefix: '/MP',
+    link_roots: {
+      movie: '/MP/电影UP',
+      series: '/MP/剧集UP',
+      default: '',
+    },
+    enabled: true,
+  },
+  {
+    name: 'SSD',
+    prefix: '/SSD',
+    link_roots: {
+      movie: '',
+      series: '',
+      default: '/SSD/云盘/l',
+    },
+    enabled: true,
+  },
+]
+
 const defaults = {
   enabled: false,
   database_filename: 'rssallinone.db',
   qb_refresh_cron: '*/10 * * * *',
-  inventory_library_roots: '',
+  inventory_root: '/SSD/云盘/strm/影视库',
+  source_routes: defaultRoutes,
+  category_groups: {
+    movie: ['演唱会', '动画电影', '华语电影', '外语电影'],
+    series: ['儿童剧', '动漫', '国产剧', '日韩剧', '欧美剧', '纪录片', '综艺'],
+  },
   cd2_grpc_addr: '',
   cd2_token: '',
   catchup_base_url: '',
@@ -30,15 +58,69 @@ const defaults = {
 const config = ref({ ...defaults })
 const section = ref('general')
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function parseStructured(value, fallback) {
+  if (typeof value !== 'string') return value ?? fallback
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeRoute(route = {}, index = 0) {
+  return {
+    name: route.name || `路由${index + 1}`,
+    prefix: route.prefix || '',
+    link_roots: {
+      movie: route.link_roots?.movie || '',
+      series: route.link_roots?.series || '',
+      default: route.link_roots?.default || '',
+    },
+    enabled: route.enabled !== false,
+  }
+}
+
+function normalizeConfig(initial = {}) {
+  const next = {
+    ...clone(defaults),
+    ...clone(initial),
+  }
+  const routeValue = parseStructured(initial.source_routes, defaultRoutes)
+  const routes = Array.isArray(routeValue) ? routeValue : defaultRoutes
+  const groupValue = parseStructured(initial.category_groups, defaults.category_groups)
+  const groups = groupValue && typeof groupValue === 'object'
+    ? groupValue
+    : defaults.category_groups
+  next.source_routes = routes.map(normalizeRoute)
+  next.category_groups = {
+    movie: Array.isArray(groups.movie)
+      ? [...groups.movie]
+      : [...defaults.category_groups.movie],
+    series: Array.isArray(groups.series)
+      ? [...groups.series]
+      : [...defaults.category_groups.series],
+  }
+  return next
+}
+
 function save() {
-  emit('save', JSON.parse(JSON.stringify(config.value)))
+  emit('save', clone(config.value))
+}
+
+function addRoute() {
+  config.value.source_routes.push(normalizeRoute({}, config.value.source_routes.length))
+}
+
+function removeRoute(index) {
+  config.value.source_routes.splice(index, 1)
 }
 
 onMounted(() => {
-  config.value = {
-    ...defaults,
-    ...JSON.parse(JSON.stringify(props.initialConfig || {})),
-  }
+  config.value = normalizeConfig(props.initialConfig || {})
 })
 </script>
 
@@ -100,15 +182,82 @@ onMounted(() => {
               placeholder="*/10 * * * *"
             />
           </VCol>
+          <VCol cols="12" md="8">
+            <VTextField
+              v-model="config.inventory_root"
+              label="最终媒体库根目录"
+              placeholder="/SSD/云盘/strm/影视库"
+            />
+          </VCol>
           <VCol cols="12">
-            <VTextarea
-              v-model="config.inventory_library_roots"
-              label="最终媒体库本地根目录"
-              placeholder="movie => /media/Movies&#10;tv => /media/TV"
-              hint="库存仅核对这些本地路径；可写 movie、tv 或省略类型，每行一个绝对路径"
-              persistent-hint
-              rows="4"
-              auto-grow
+            <div class="config-section-header">
+              <div class="text-subtitle-2">源路径路由</div>
+              <VBtn
+                size="small"
+                variant="text"
+                prepend-icon="mdi-plus"
+                @click="addRoute"
+              >
+                添加路由
+              </VBtn>
+            </div>
+            <VTable density="compact" class="route-table">
+              <thead>
+                <tr>
+                  <th>启用</th>
+                  <th>名称</th>
+                  <th>源路径前缀</th>
+                  <th>电影硬链接根目录</th>
+                  <th>剧集硬链接根目录</th>
+                  <th>默认硬链接根目录</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(route, index) in config.source_routes" :key="`${route.name}-${index}`">
+                  <td><VSwitch v-model="route.enabled" density="compact" hide-details /></td>
+                  <td><VTextField v-model="route.name" density="compact" hide-details /></td>
+                  <td><VTextField v-model="route.prefix" density="compact" hide-details /></td>
+                  <td><VTextField v-model="route.link_roots.movie" density="compact" hide-details /></td>
+                  <td><VTextField v-model="route.link_roots.series" density="compact" hide-details /></td>
+                  <td><VTextField v-model="route.link_roots.default" density="compact" hide-details /></td>
+                  <td>
+                    <VTooltip text="删除路由">
+                      <template #activator="{ props: tooltipProps }">
+                        <VBtn
+                          v-bind="tooltipProps"
+                          icon="mdi-delete-outline"
+                          size="small"
+                          variant="text"
+                          color="error"
+                          aria-label="删除路由"
+                          @click="removeRoute(index)"
+                        />
+                      </template>
+                    </VTooltip>
+                  </td>
+                </tr>
+              </tbody>
+            </VTable>
+          </VCol>
+          <VCol cols="12" md="6">
+            <VCombobox
+              v-model="config.category_groups.movie"
+              label="电影目录组分类"
+              multiple
+              chips
+              closable-chips
+              hide-selected
+            />
+          </VCol>
+          <VCol cols="12" md="6">
+            <VCombobox
+              v-model="config.category_groups.series"
+              label="剧集目录组分类"
+              multiple
+              chips
+              closable-chips
+              hide-selected
             />
           </VCol>
         </VRow>
@@ -187,5 +336,34 @@ onMounted(() => {
 
 .config-window {
   padding: 16px;
+}
+
+.config-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.route-table {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.route-table th {
+  white-space: nowrap;
+}
+
+.route-table td {
+  min-width: 150px;
+  padding: 6px;
+}
+
+.route-table td:first-child,
+.route-table td:last-child {
+  min-width: 64px;
+  width: 64px;
 }
 </style>

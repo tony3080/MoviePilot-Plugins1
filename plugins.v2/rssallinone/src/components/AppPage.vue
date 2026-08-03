@@ -51,7 +51,8 @@ const torrentHeaders = [
   { title: '进度', key: 'progress', width: 100 },
   { title: '节点', key: 'downloader_id', width: 130 },
   { title: '分类', key: 'category', width: 110 },
-  { title: '目标路径', key: 'target_name', minWidth: 250 },
+  { title: '库存路径', key: 'target_name', minWidth: 280 },
+  { title: '硬链接路径', key: 'link_target', minWidth: 280 },
   { title: 'Hash', key: 'info_hash', width: 120 },
 ]
 
@@ -191,7 +192,8 @@ async function loadActive() {
       rows.value = items.map(item => ({
         ...item,
         row_key: `${item.downloader_id}:${item.info_hash}`,
-        target_name: item.details?.inventory_plan?.target_name || '',
+        target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
+        link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
       }))
     } else {
       rows.value = items
@@ -306,7 +308,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
         </div>
       </div>
       <VSpacer />
-      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.2.0' }}</VChip>
+      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.3.0' }}</VChip>
       <VTooltip text="刷新">
         <template #activator="{ props: tooltipProps }">
           <VBtn

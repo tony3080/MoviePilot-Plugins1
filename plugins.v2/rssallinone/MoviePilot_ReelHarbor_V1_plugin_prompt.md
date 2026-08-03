@@ -560,7 +560,46 @@ CD2容器:
   /CloudDrive/Media/<rel> -> /media/<rel>
 ```
 
-### 4. CD2 任务关联键
+### 4. 当前 MoviePilot 部署的默认目录配置
+
+当前 MoviePilot 容器挂载为：
+
+```text
+/volume1/media/transmission -> /MP
+/volume2/SSD                -> /SSD
+```
+
+插件配置页必须提供可编辑的 `inventory_root`、`source_routes` 和 `category_groups`，不能把这些路径只写死在代码中。默认配置如下：
+
+```yaml
+inventory_root: /SSD/云盘/strm/影视库
+source_routes:
+  - name: UP
+    prefix: /MP
+    link_roots:
+      movie: /MP/电影UP
+      series: /MP/剧集UP
+    enabled: true
+  - name: SSD
+    prefix: /SSD
+    link_roots:
+      default: /SSD/云盘/l
+    enabled: true
+category_groups:
+  movie: [演唱会, 动画电影, 华语电影, 外语电影]
+  series: [儿童剧, 动漫, 国产剧, 日韩剧, 欧美剧, 纪录片, 综艺]
+```
+
+- 所有配置路径都是 MoviePilot 插件容器内路径，不是 NAS 宿主机路径。
+- `纪录片` 在当前 MoviePilot 分类规则中固定属于剧集目录组，不再同时配置电影纪录片分支。
+- 最终库存目录：`inventory_root / MP分类 / MoviePilot目标相对路径`。
+- 硬链接目录：`命中的link_root / MP分类 / MoviePilot目标相对路径`。
+- 源路由按路径边界感知的最长前缀匹配；`/SSD` 可以命中 `/SSD/downloads/A`，但不能命中 `/SSD2/A`。
+- 路由可分别提供 `movie`、`series` 根目录，也可用 `default` 作为共同根目录。
+- MP 分类必须精确命中一个分类组；未知分类或重复归属不得猜测目标目录，应标记未配置并阻止后续硬链接。
+- 即使源路径没有命中硬链接路由，只要库存根目录和分类有效，仍可执行最终媒体库本地库存检查。
+
+### 5. CD2 任务关联键
 
 - 禁止只按文件名关联 CD2 上传任务，同名电影、同集不同版本和多目录同名文件都会误匹配。
 - 创建硬链接时为每个文件持久化：`watch_id`、`imported_id`、`plugin_source_path`、`local_hardlink_path`、`expected_cd2_dest_path`、`expected_mp_library_path`、文件大小、创建时间和内容 hash（可用时）。
@@ -568,7 +607,7 @@ CD2容器:
 - 一旦发现匹配行，立即持久化 CD2 `UploadFileInfo.key`；后续状态、暂停和取消全部以 `key` 为主键，完整路径只用于重启后的重新发现。
 - 多文件入库必须保存每个文件自己的 CD2 key 和状态，整张卡片只有在所有文件达到终态后才能完成。
 
-### 5. 成功、真实传输与超时
+### 6. 成功、真实传输与超时
 
 - CD2 成功状态：匹配任务进入 `Finish` 或 `Skipped`，没有风险错误，并且从未超过真实传输阈值；或者已观察到成功终态后任务从列表消失。
 - 真实传输字节阈值默认：`max(8 MiB, min(64 MiB, file_size * 1%))`，允许配置。
@@ -580,7 +619,7 @@ CD2容器:
 - 单卡最终超时默认 7200 秒；超时后暂停/取消已知 key、只删本次硬链接、保留源文件并标记可重试。
 - 活跃任务轮询 10 秒；PushMessage 不可用时兜底轮询 30 秒；没有监控任务时 300 秒。参数可配置但必须有上下限。
 
-### 6. 重启恢复
+### 7. 重启恢复
 
 - 监控状态必须持久化，不能只放内存。至少包含 `waiting_task`、`watching`、`rolling_back`、`done`、`rolled_back`、`risk_control`、`error`。
 - 插件启动时加载所有非终态 watch：

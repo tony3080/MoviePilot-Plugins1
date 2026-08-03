@@ -93,7 +93,8 @@ const torrentHeaders = [
   { title: '进度', key: 'progress', width: 100 },
   { title: '节点', key: 'downloader_id', width: 130 },
   { title: '分类', key: 'category', width: 110 },
-  { title: '目标路径', key: 'target_name', minWidth: 250 },
+  { title: '库存路径', key: 'target_name', minWidth: 280 },
+  { title: '硬链接路径', key: 'link_target', minWidth: 280 },
   { title: 'Hash', key: 'info_hash', width: 120 },
 ];
 
@@ -233,7 +234,8 @@ async function loadActive() {
       rows.value = items.map(item => ({
         ...item,
         row_key: `${item.downloader_id}:${item.info_hash}`,
-        target_name: item.details?.inventory_plan?.target_name || '',
+        target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
+        link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
       }));
     } else {
       rows.value = items;
@@ -378,7 +380,7 @@ return (_ctx, _cache) => {
           class: "me-2"
         }, {
           default: _withCtx(() => [
-            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.2.0'), 1)
+            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.3.0'), 1)
           ]),
           _: 1
         }),
@@ -835,6 +837,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-e2b35360"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c4014c0b"]]);
 
 export { AppPage as default };
