@@ -308,7 +308,8 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
                     f"{media.title} (2015) [tmdbid=307081]/"
                     f"{media.title} (2015) - {meta.resource_type} - "
                     f"{meta.resource_effect} - {meta.resource_pix} - "
-                    f"{meta.audio_encode} - {meta.resource_team}.mkv"
+                    f"{meta.audio_encode} - {meta.customization} - "
+                    f"{meta.resource_team}.mkv"
                 )
 
         app_module = types.ModuleType("app")
@@ -343,7 +344,7 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
             resource_effect="杜比视界 HDR",
             resource_pix="2160p",
             resource_team="CHD",
-            customization="V2",
+            customization="V2@REMUX@杜比视界@HDR",
             video_encode="HEVC",
             audio_encode="Atmos TrueHD 7.1",
             apply_words=[
@@ -366,7 +367,7 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
             "resource_effect": "杜比视界 HDR",
             "resource_pix": "2160p",
             "resource_team": "CHD",
-            "customization": "V2",
+            "customization": "V2@REMUX@杜比视界@HDR",
             "video_encode": "HEVC",
             "audio_encode": "Atmos TrueHD 7.1",
             "apply_words": torrent_meta.apply_words,
@@ -375,6 +376,9 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
         self.assertIn("BluRay REMUX", expected["relative_path"])
         self.assertIn("杜比视界 HDR", expected["relative_path"])
         self.assertIn("Atmos TrueHD 7.1", expected["relative_path"])
+        self.assertIn(
+            "V2@REMUX@杜比视界@HDR", expected["relative_path"]
+        )
         self.assertEqual(
             expected["recognition"]["resource_tokens"],
             [
@@ -382,10 +386,14 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
                 "杜比视界 HDR",
                 "2160p",
                 "CHD",
-                "V2",
+                "V2@REMUX@杜比视界@HDR",
                 "HEVC",
                 "Atmos TrueHD 7.1",
             ],
+        )
+        self.assertEqual(
+            expected["recognition"]["customization"],
+            "V2@REMUX@杜比视界@HDR",
         )
         self.assertEqual(
             expected["recognition"]["apply_words"],
@@ -394,6 +402,60 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
         self.assertIn(
             "resource_effect", expected["recognition"]["inherited_fields"]
         )
+
+    def test_refresh_customization_uses_live_moviepilot_matchers(self) -> None:
+        prepared_titles = []
+
+        class FakeWordsMatcher:
+            @staticmethod
+            def prepare(title):
+                return (
+                    title.replace("DoVi", "杜比视界").replace("HDR10", "HDR"),
+                    ["DoVi => 杜比视界", "HDR10 => HDR"],
+                )
+
+        class FakeCustomizationMatcher:
+            @staticmethod
+            def match(title):
+                prepared_titles.append(title)
+                return "V2@REMUX@杜比视界@HDR"
+
+        app_module = types.ModuleType("app")
+        app_module.__path__ = []
+        core_module = types.ModuleType("app.core")
+        core_module.__path__ = []
+        meta_module = types.ModuleType("app.core.meta")
+        meta_module.__path__ = []
+        words_module = types.ModuleType("app.core.meta.words")
+        words_module.WordsMatcher = FakeWordsMatcher
+        customization_module = types.ModuleType("app.core.meta.customization")
+        customization_module.CustomizationMatcher = FakeCustomizationMatcher
+        fake_modules = {
+            "app": app_module,
+            "app.core": core_module,
+            "app.core.meta": meta_module,
+            "app.core.meta.words": words_module,
+            "app.core.meta.customization": customization_module,
+        }
+        meta = types.SimpleNamespace(customization="C版@REMUX")
+        title = (
+            "Southpaw 2015 USA V2 BluRay REMUX UHD DoVi HDR10 "
+            "2160p Atmos TrueHD7.1-CHD.mkv"
+        )
+
+        with mock.patch.dict(sys.modules, fake_modules):
+            customization = qb_sync.MoviePilotQbGateway.refresh_customization(
+                meta, title
+            )
+
+        self.assertEqual(
+            customization,
+            "V2@REMUX@杜比视界@HDR@C版",
+        )
+        self.assertEqual(meta.customization, customization)
+        self.assertEqual(len(prepared_titles), 1)
+        self.assertIn("杜比视界", prepared_titles[0])
+        self.assertNotIn("DoVi", prepared_titles[0])
 
 
 class ReadOnlyQbSyncTest(unittest.TestCase):

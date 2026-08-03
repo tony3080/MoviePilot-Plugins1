@@ -146,6 +146,7 @@ function torrentRecognition(item) {
   return {
     tokens: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.resource_tokens || [])),
     words: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.apply_words || [])),
+    customizations: uniqueTexts(expectedFiles.map(file => file.recognition?.customization || '')),
     inherited: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.inherited_fields || [])),
   }
 }
@@ -260,6 +261,7 @@ async function loadActive() {
           link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
           resource_tokens: recognition.tokens,
           applied_words: recognition.words,
+          customizations: recognition.customizations,
           inherited_meta_fields: recognition.inherited,
         }
       })
@@ -621,6 +623,10 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           </template>
           <template #item.resource_info="{ item }">
             <div class="resource-cell">
+              <span class="customization-line">
+                <strong>customization</strong>
+                {{ item.customizations?.join(' / ') || '空' }}
+              </span>
               <span v-if="item.resource_tokens?.length" class="resource-token-line">
                 {{ item.resource_tokens.join(' · ') }}
               </span>
@@ -868,6 +874,16 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
 
 .resource-token-line {
   overflow-wrap: anywhere;
+}
+
+.customization-line {
+  overflow-wrap: anywhere;
+  color: rgb(var(--v-theme-primary));
+}
+
+.customization-line strong {
+  margin-right: 5px;
+  font-weight: 600;
 }
 
 .resource-meta-line {

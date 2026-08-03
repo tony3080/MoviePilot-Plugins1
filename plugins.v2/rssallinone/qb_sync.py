@@ -226,6 +226,7 @@ class MoviePilotQbGateway:
         from app.core.metainfo import MetaInfo
 
         meta = MetaInfo(title=title)
+        MoviePilotQbGateway.refresh_customization(meta, title)
         media = MediaChain().recognize_by_meta(meta, obtain_images=False)
         return meta, media
 
@@ -251,7 +252,9 @@ class MoviePilotQbGateway:
     def restore_meta(title: str, _payload: Dict[str, Any]) -> Any:
         from app.core.metainfo import MetaInfo
 
-        return MetaInfo(title=title)
+        meta = MetaInfo(title=title)
+        MoviePilotQbGateway.refresh_customization(meta, title)
+        return meta
 
     @staticmethod
     def plan_inventory_files(
@@ -313,6 +316,7 @@ class MoviePilotQbGateway:
                 file_meta = meta_path_class(path=source_path)
             else:
                 file_meta = metainfo_module.MetaInfo(title=source_path.name)
+            MoviePilotQbGateway.refresh_customization(file_meta, source_name)
             inherited_fields = MoviePilotQbGateway.merge_naming_meta(
                 file_meta, torrent_meta
             )
@@ -367,6 +371,9 @@ class MoviePilotQbGateway:
                     ),
                     "apply_words": MoviePilotQbGateway.recognition_words(
                         file_meta
+                    ),
+                    "customization": str(
+                        getattr(file_meta, "customization", "") or ""
                     ),
                     "inherited_fields": inherited_fields,
                 },
@@ -432,6 +439,8 @@ class MoviePilotQbGateway:
             return []
         inherited = []
         for field in NAMING_META_FIELDS:
+            if field == "customization":
+                continue
             current = getattr(file_meta, field, None)
             fallback = getattr(torrent_meta, field, None)
             if MoviePilotQbGateway._has_meta_value(current):
@@ -440,6 +449,16 @@ class MoviePilotQbGateway:
                 continue
             setattr(file_meta, field, copy.deepcopy(fallback))
             inherited.append(field)
+
+        file_customization = getattr(file_meta, "customization", None)
+        torrent_customization = getattr(torrent_meta, "customization", None)
+        merged_customization = MoviePilotQbGateway.merge_customizations(
+            torrent_customization,
+            file_customization,
+        )
+        if merged_customization and merged_customization != file_customization:
+            setattr(file_meta, "customization", merged_customization)
+            inherited.append("customization")
 
         current_words = list(getattr(file_meta, "apply_words", None) or [])
         fallback_words = list(getattr(torrent_meta, "apply_words", None) or [])
@@ -450,6 +469,44 @@ class MoviePilotQbGateway:
             setattr(file_meta, "apply_words", current_words)
             inherited.append("apply_words")
         return inherited
+
+    @staticmethod
+    def refresh_customization(meta: Any, title: str) -> str:
+        """Re-evaluate MoviePilot custom placeholders against current settings."""
+
+        if not meta:
+            return ""
+        existing = getattr(meta, "customization", None)
+        detected = ""
+        try:
+            from app.core.meta.customization import CustomizationMatcher
+            from app.core.meta.words import WordsMatcher
+
+            prepared_title, _ = WordsMatcher().prepare(str(title or ""))
+            detected = CustomizationMatcher().match(
+                title=prepared_title
+            ) or ""
+        except Exception:
+            detected = ""
+        merged = MoviePilotQbGateway.merge_customizations(detected, existing)
+        if merged:
+            setattr(meta, "customization", merged)
+        return merged
+
+    @staticmethod
+    def merge_customizations(*values: Any) -> str:
+        tokens: List[str] = []
+        identities = set()
+        for value in values:
+            parts = value if isinstance(value, (list, tuple, set)) else [value]
+            for part in parts:
+                for token in str(part or "").split("@"):
+                    text = token.strip()
+                    identity = text.casefold()
+                    if text and identity not in identities:
+                        identities.add(identity)
+                        tokens.append(text)
+        return "@".join(tokens)
 
     @staticmethod
     def resource_tokens(meta: Any) -> List[str]:

@@ -535,24 +535,25 @@ const _hoisted_16 = {
   class: "text-caption text-medium-emphasis"
 };
 const _hoisted_17 = { class: "resource-cell" };
-const _hoisted_18 = {
+const _hoisted_18 = { class: "customization-line" };
+const _hoisted_19 = {
   key: 0,
   class: "resource-token-line"
 };
-const _hoisted_19 = {
+const _hoisted_20 = {
   key: 1,
   class: "text-caption text-medium-emphasis"
 };
-const _hoisted_20 = { class: "resource-meta-line" };
-const _hoisted_21 = { class: "recognition-tooltip" };
-const _hoisted_22 = {
+const _hoisted_21 = { class: "resource-meta-line" };
+const _hoisted_22 = { class: "recognition-tooltip" };
+const _hoisted_23 = {
   key: 1,
   class: "text-caption text-medium-emphasis"
 };
-const _hoisted_23 = { class: "progress-cell" };
-const _hoisted_24 = { key: 3 };
-const _hoisted_25 = { key: 4 };
-const _hoisted_26 = { class: "section-count" };
+const _hoisted_24 = { class: "progress-cell" };
+const _hoisted_25 = { key: 3 };
+const _hoisted_26 = { key: 4 };
+const _hoisted_27 = { class: "section-count" };
 
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
@@ -706,6 +707,7 @@ function torrentRecognition(item) {
   return {
     tokens: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.resource_tokens || [])),
     words: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.apply_words || [])),
+    customizations: uniqueTexts(expectedFiles.map(file => file.recognition?.customization || '')),
     inherited: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.inherited_fields || [])),
   }
 }
@@ -820,6 +822,7 @@ async function loadActive() {
           link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
           resource_tokens: recognition.tokens,
           applied_words: recognition.words,
+          customizations: recognition.customizations,
           inherited_meta_fields: recognition.inherited,
         }
       });
@@ -1323,10 +1326,14 @@ return (_ctx, _cache) => {
                   ]),
                   "item.resource_info": _withCtx(({ item }) => [
                     _createElementVNode("div", _hoisted_17, [
+                      _createElementVNode("span", _hoisted_18, [
+                        _cache[17] || (_cache[17] = _createElementVNode("strong", null, "customization", -1)),
+                        _createTextVNode(" " + _toDisplayString(item.customizations?.join(' / ') || '空'), 1)
+                      ]),
                       (item.resource_tokens?.length)
-                        ? (_openBlock(), _createElementBlock("span", _hoisted_18, _toDisplayString(item.resource_tokens.join(' · ')), 1))
-                        : (_openBlock(), _createElementBlock("span", _hoisted_19, "未解析到资源字段")),
-                      _createElementVNode("div", _hoisted_20, [
+                        ? (_openBlock(), _createElementBlock("span", _hoisted_19, _toDisplayString(item.resource_tokens.join(' · ')), 1))
+                        : (_openBlock(), _createElementBlock("span", _hoisted_20, "未解析到资源字段")),
+                      _createElementVNode("div", _hoisted_21, [
                         (item.applied_words?.length)
                           ? (_openBlock(), _createBlock(_component_VTooltip, {
                               key: 0,
@@ -1347,7 +1354,7 @@ return (_ctx, _cache) => {
                                 }, 1040)
                               ]),
                               default: _withCtx(() => [
-                                _createElementVNode("div", _hoisted_21, [
+                                _createElementVNode("div", _hoisted_22, [
                                   (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(item.applied_words, (word) => {
                                     return (_openBlock(), _createElementBlock("code", { key: word }, _toDisplayString(word), 1))
                                   }), 128))
@@ -1357,7 +1364,7 @@ return (_ctx, _cache) => {
                             }, 1024))
                           : _createCommentVNode("", true),
                         (item.inherited_meta_fields?.length)
-                          ? (_openBlock(), _createElementBlock("span", _hoisted_22, " 任务标题补全 " + _toDisplayString(item.inherited_meta_fields.length) + " 项 ", 1))
+                          ? (_openBlock(), _createElementBlock("span", _hoisted_23, " 任务标题补全 " + _toDisplayString(item.inherited_meta_fields.length) + " 项 ", 1))
                           : _createCommentVNode("", true)
                       ])
                     ])
@@ -1387,7 +1394,7 @@ return (_ctx, _cache) => {
                     }, 1032, ["color"])
                   ]),
                   "item.progress": _withCtx(({ item }) => [
-                    _createElementVNode("div", _hoisted_23, [
+                    _createElementVNode("div", _hoisted_24, [
                       _createVNode(_component_VProgressLinear, {
                         "model-value": Number(item.progress || 0),
                         height: "5"
@@ -1402,7 +1409,7 @@ return (_ctx, _cache) => {
                 }, 8, ["items", "loading"])
               ]))
             : (activeTab.value === 'vt')
-              ? (_openBlock(), _createElementBlock("section", _hoisted_24, [
+              ? (_openBlock(), _createElementBlock("section", _hoisted_25, [
                   _createVNode(_component_VTabs, {
                     modelValue: vtTab.value,
                     "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((vtTab).value = $event)),
@@ -1412,19 +1419,19 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                        default: _withCtx(() => [...(_cache[17] || (_cache[17] = [
+                        default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
                           _createTextVNode("RSS任务", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "rss_history" }, {
-                        default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
+                        default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
                           _createTextVNode("RSS历史", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
-                        default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
+                        default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
                           _createTextVNode("站点访问身份", -1)
                         ]))]),
                         _: 1
@@ -1493,8 +1500,8 @@ return (_ctx, _cache) => {
                         }, 8, ["items", "loading"]))
                 ]))
               : (activeTab.value === 'tasks')
-                ? (_openBlock(), _createElementBlock("section", _hoisted_25, [
-                    _createElementVNode("div", _hoisted_26, _toDisplayString(total.value) + " 个后台任务", 1),
+                ? (_openBlock(), _createElementBlock("section", _hoisted_26, [
+                    _createElementVNode("div", _hoisted_27, _toDisplayString(total.value) + " 个后台任务", 1),
                     _createVNode(_component_VDataTable, {
                       headers: taskHeaders,
                       items: rows.value,
@@ -1513,6 +1520,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7dd4b6b8"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-48617fa8"]]);
 
 export { AppPage as default };
