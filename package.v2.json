@@ -28,5 +28,20 @@
       "v0.2.0": "支持自定义 RSS、豆瓣总集数提取、TMDB 季度匹配和订阅集数锁定",
       "v0.1.0": "创建符合 MoviePilot V2 规范的插件仓库骨架"
     }
+  },
+  "RssAllInOne": {
+    "name": "RSS一条龙",
+    "description": "统一管理 PT RSS、qBittorrent、硬链接 staging 与 CloudDrive2 备份流程。",
+    "labels": "RSS,下载管理",
+    "version": "0.1.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
+    "author": "tony3080",
+    "author_url": "https://github.com/tony3080",
+    "level": 2,
+    "v2": true,
+    "system_version": ">=2.15.0",
+    "history": {
+      "v0.1.0": "建立 MoviePilot V2 插件框架、SQLite 状态库、Vue 全页工作区和 CloudDrive2 gRPC 契约"
+    }
   }
 }

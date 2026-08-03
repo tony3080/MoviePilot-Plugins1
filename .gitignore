@@ -29,4 +29,10 @@ build/
 dist/
 !plugins.v2/doubansubscribe/dist/
 !plugins.v2/doubansubscribe/dist/**
+!plugins.v2/rssallinone/dist/
+!plugins.v2/rssallinone/dist/**
+plugins.v2/rssallinone/.runtime/
+plugins.v2/rssallinone/*.db
+plugins.v2/rssallinone/*.db-shm
+plugins.v2/rssallinone/*.db-wal
 *.egg-info/

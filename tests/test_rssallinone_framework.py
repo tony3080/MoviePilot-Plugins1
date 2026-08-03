@@ -1,0 +1,197 @@
+"""Framework checks for the RSS All-in-One MoviePilot plugin."""
+
+import ast
+import hashlib
+import importlib.util
+import json
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PLUGIN_ID = "RssAllInOne"
+PLUGIN_DIR = ROOT / "plugins.v2" / PLUGIN_ID.lower()
+
+
+def load_module(name: str, filename: str):
+    spec = importlib.util.spec_from_file_location(name, PLUGIN_DIR / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+domain = load_module("rssallinone_domain", "domain.py")
+database = load_module("rssallinone_database", "database.py")
+
+
+class DomainContractTest(unittest.TestCase):
+    def test_specials_use_season_zero(self) -> None:
+        self.assertEqual(domain.validate_season(0), 0)
+        self.assertEqual(domain.validate_season("0"), 0)
+        self.assertIsNone(domain.validate_season(None))
+        with self.assertRaises(ValueError):
+            domain.validate_season(-1)
+
+    def test_media_transition_matrix_is_explicit(self) -> None:
+        self.assertTrue(domain.can_transition("identified", "pending"))
+        self.assertTrue(domain.can_transition("importing", "rolled_back"))
+        self.assertFalse(domain.can_transition("imported", "discovered"))
+        self.assertFalse(domain.can_transition("unknown", "pending"))
+
+
+class SQLiteFrameworkTest(unittest.TestCase):
+    def test_schema_initializes_and_lists_empty_collections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+
+            health = store.health()
+            self.assertTrue(health["ready"])
+            self.assertEqual(health["schema_version"], database.SCHEMA_VERSION)
+            self.assertEqual(store.counts()["media"], 0)
+            self.assertEqual(store.list_media()["items"], [])
+            self.assertEqual(store.list_torrents()["items"], [])
+            self.assertEqual(store.list_rss_history()["items"], [])
+
+    def test_schema_accepts_specials_season_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            now = database.utc_now()
+            with store.connection() as connection:
+                connection.execute(
+                    """INSERT INTO media_items(
+                        id, state, media_type, title, tmdb_id, season, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ("special", "identified", "tv", "特别篇", 1, 0, now, now),
+                )
+            item = store.list_media()["items"][0]
+            self.assertEqual(item["season"], 0)
+
+
+class RepositoryContractTest(unittest.TestCase):
+    def test_identity_and_market_metadata_match(self) -> None:
+        package = json.loads((ROOT / "package.v2.json").read_text(encoding="utf-8"))
+        metadata = package[PLUGIN_ID]
+        tree = ast.parse((PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8"))
+        plugin_class = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == PLUGIN_ID
+        )
+        attributes = {}
+        for item in plugin_class.body:
+            if isinstance(item, ast.Assign) and len(item.targets) == 1:
+                target = item.targets[0]
+                if isinstance(target, ast.Name):
+                    try:
+                        attributes[target.id] = ast.literal_eval(item.value)
+                    except (TypeError, ValueError):
+                        pass
+        self.assertEqual(PLUGIN_DIR.name, PLUGIN_ID.lower())
+        self.assertEqual(attributes["plugin_name"], metadata["name"])
+        self.assertEqual(attributes["plugin_version"], metadata["version"])
+        self.assertEqual(attributes["plugin_desc"], metadata["description"])
+        self.assertEqual(attributes["auth_level"], metadata["level"])
+
+    def test_vue_full_page_contract(self) -> None:
+        vite = (PLUGIN_DIR / "vite.config.js").read_text(encoding="utf-8")
+        backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("'./AppPage'", vite)
+        self.assertIn("'./Page'", vite)
+        self.assertIn("'./Config'", vite)
+        self.assertIn("get_sidebar_nav", backend)
+        self.assertIn('return "vue", "dist/assets"', backend)
+
+    def test_clouddrive_contract_is_original_and_generated(self) -> None:
+        digest = hashlib.sha256((PLUGIN_DIR / "clouddrive.proto").read_bytes()).hexdigest()
+        self.assertEqual(
+            digest.upper(),
+            "3F1AB3E53EA9A5A73C9E154724C7AD0E6B824454F1B7C27BF6EF0F2FCE41C552",
+        )
+        generated = PLUGIN_DIR / "generated" / "clouddrive_pb2_grpc.py"
+        self.assertTrue(generated.is_file())
+        self.assertIn(
+            "from . import clouddrive_pb2 as clouddrive__pb2",
+            generated.read_text(encoding="utf-8"),
+        )
+
+    def test_prompt_no_longer_requires_remote_moviepilot(self) -> None:
+        prompt = (
+            PLUGIN_DIR / "MoviePilot_ReelHarbor_V1_plugin_prompt.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("插件只使用当前所在 MoviePilot 实例", prompt)
+        self.assertNotIn("选择从哪个 MoviePilot 实例同步站点", prompt)
+        self.assertIn("大于等于 0 的数字", prompt)
+
+
+class PluginLifecycleTest(unittest.TestCase):
+    def test_plugin_loads_inside_a_minimal_moviepilot_host(self) -> None:
+        app = types.ModuleType("app")
+        app.__path__ = []
+        app_log = types.ModuleType("app.log")
+        app_plugins = types.ModuleType("app.plugins")
+
+        class Logger:
+            @staticmethod
+            def error(*_args, **_kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory)
+
+            class PluginBase:
+                def __init__(self, *_args, **_kwargs):
+                    self._config = {}
+
+                @staticmethod
+                def get_data_path():
+                    return data_path
+
+            app_log.logger = Logger()
+            app_plugins._PluginBase = PluginBase
+            previous = {
+                name: sys.modules.get(name)
+                for name in ("app", "app.log", "app.plugins", "rssallinone")
+            }
+            sys.modules["app"] = app
+            sys.modules["app.log"] = app_log
+            sys.modules["app.plugins"] = app_plugins
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "rssallinone",
+                    PLUGIN_DIR / "__init__.py",
+                    submodule_search_locations=[str(PLUGIN_DIR)],
+                )
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["rssallinone"] = module
+                spec.loader.exec_module(module)
+
+                plugin = module.RssAllInOne()
+                plugin.init_plugin({"enabled": True})
+                overview = plugin.api_overview()
+                health = plugin.api_health()
+
+                self.assertTrue(plugin.get_state())
+                self.assertTrue(overview["success"])
+                self.assertEqual(overview["plugin"]["id"], PLUGIN_ID)
+                self.assertTrue(health["database"]["ready"])
+                self.assertTrue((data_path / "rssallinone.db").is_file())
+                self.assertEqual(plugin.get_sidebar_nav()[0]["nav_key"], "rssallinone")
+
+                from rssallinone.generated import clouddrive_pb2_grpc
+
+                self.assertTrue(clouddrive_pb2_grpc.CloudDriveFileSrvStub)
+            finally:
+                for name, value in previous.items():
+                    if value is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = value
+
+
+if __name__ == "__main__":
+    unittest.main()
