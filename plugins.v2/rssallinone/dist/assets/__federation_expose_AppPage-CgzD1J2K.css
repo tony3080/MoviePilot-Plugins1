@@ -40,40 +40,40 @@
 }
 }
 
-.app-page[data-v-a137d3bd] {
+.app-page[data-v-7dd4b6b8] {
   min-height: 100%;
   min-width: 0;
   background: rgb(var(--v-theme-background));
 }
-.topbar[data-v-a137d3bd] {
+.topbar[data-v-7dd4b6b8] {
   position: sticky;
   top: 0;
   z-index: 12;
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
-.title-block[data-v-a137d3bd] {
+.title-block[data-v-7dd4b6b8] {
   min-width: 0;
   line-height: 1.2;
 }
-.main-tabs[data-v-a137d3bd],
-.sub-tabs[data-v-a137d3bd] {
+.main-tabs[data-v-7dd4b6b8],
+.sub-tabs[data-v-7dd4b6b8] {
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background: rgb(var(--v-theme-surface));
 }
-.status-alert[data-v-a137d3bd] {
+.status-alert[data-v-7dd4b6b8] {
   margin: 12px 16px 0;
 }
-.workspace[data-v-a137d3bd] {
+.workspace[data-v-7dd4b6b8] {
   width: 100%;
   padding: 16px;
 }
-.metric-grid[data-v-a137d3bd] {
+.metric-grid[data-v-7dd4b6b8] {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
-.metric-item[data-v-a137d3bd] {
+.metric-item[data-v-7dd4b6b8] {
   display: flex;
   min-height: 78px;
   flex-direction: column;
@@ -82,86 +82,112 @@
   padding: 12px 14px;
   border-radius: 6px;
 }
-.metric-item strong[data-v-a137d3bd] {
+.metric-item strong[data-v-7dd4b6b8] {
   font-size: 1.45rem;
   font-weight: 600;
 }
-.capability-table[data-v-a137d3bd],
-.data-table[data-v-a137d3bd] {
+.capability-table[data-v-7dd4b6b8],
+.data-table[data-v-7dd4b6b8] {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   overflow: hidden;
 }
-.filter-bar[data-v-a137d3bd] {
+.filter-bar[data-v-7dd4b6b8] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
-.qb-toolbar[data-v-a137d3bd] {
+.qb-toolbar[data-v-7dd4b6b8] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
-.qb-search[data-v-a137d3bd] {
+.qb-search[data-v-7dd4b6b8] {
   flex: 1 1 240px;
   min-width: 200px;
   max-width: 380px;
 }
-.qb-task-status[data-v-a137d3bd] {
+.qb-task-status[data-v-7dd4b6b8] {
   margin-bottom: 12px;
 }
-.qb-task-line[data-v-a137d3bd],
-.progress-cell[data-v-a137d3bd],
-.media-cell[data-v-a137d3bd] {
+.qb-task-line[data-v-7dd4b6b8],
+.progress-cell[data-v-7dd4b6b8],
+.media-cell[data-v-7dd4b6b8],
+.resource-cell[data-v-7dd4b6b8] {
   display: flex;
   min-width: 0;
 }
-.qb-task-line[data-v-a137d3bd] {
+.qb-task-line[data-v-7dd4b6b8] {
   justify-content: space-between;
   gap: 12px;
 }
-.progress-cell[data-v-a137d3bd] {
+.progress-cell[data-v-7dd4b6b8] {
   min-width: 80px;
   align-items: center;
   gap: 8px;
 }
-.media-cell[data-v-a137d3bd] {
+.media-cell[data-v-7dd4b6b8] {
   flex-direction: column;
   line-height: 1.35;
 }
-.media-cell strong[data-v-a137d3bd] {
+.media-cell strong[data-v-7dd4b6b8] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.filter-control[data-v-a137d3bd] {
+.resource-cell[data-v-7dd4b6b8] {
+  flex-direction: column;
+  gap: 5px;
+  line-height: 1.35;
+}
+.resource-token-line[data-v-7dd4b6b8] {
+  overflow-wrap: anywhere;
+}
+.resource-meta-line[data-v-7dd4b6b8] {
+  display: flex;
+  min-height: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.recognition-tooltip[data-v-7dd4b6b8] {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-block: 4px;
+}
+.recognition-tooltip code[data-v-7dd4b6b8] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.filter-control[data-v-7dd4b6b8] {
   flex: 0 1 190px;
   min-width: 150px;
 }
-.section-count[data-v-a137d3bd] {
+.section-count[data-v-7dd4b6b8] {
   margin-bottom: 10px;
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.8rem;
 }
-.sub-tabs[data-v-a137d3bd] {
+.sub-tabs[data-v-7dd4b6b8] {
   margin: -16px -16px 14px;
   padding-inline: 8px;
 }
 @media (max-width: 760px) {
-.workspace[data-v-a137d3bd] {
+.workspace[data-v-7dd4b6b8] {
     padding: 10px;
 }
-.metric-grid[data-v-a137d3bd] {
+.metric-grid[data-v-7dd4b6b8] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.sub-tabs[data-v-a137d3bd] {
+.sub-tabs[data-v-7dd4b6b8] {
     margin: -10px -10px 10px;
 }
-.filter-control[data-v-a137d3bd] {
+.filter-control[data-v-7dd4b6b8] {
     flex: 1 1 160px;
 }
 }

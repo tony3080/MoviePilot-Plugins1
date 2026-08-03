@@ -534,10 +534,25 @@ const _hoisted_16 = {
   key: 0,
   class: "text-caption text-medium-emphasis"
 };
-const _hoisted_17 = { class: "progress-cell" };
-const _hoisted_18 = { key: 3 };
-const _hoisted_19 = { key: 4 };
-const _hoisted_20 = { class: "section-count" };
+const _hoisted_17 = { class: "resource-cell" };
+const _hoisted_18 = {
+  key: 0,
+  class: "resource-token-line"
+};
+const _hoisted_19 = {
+  key: 1,
+  class: "text-caption text-medium-emphasis"
+};
+const _hoisted_20 = { class: "resource-meta-line" };
+const _hoisted_21 = { class: "recognition-tooltip" };
+const _hoisted_22 = {
+  key: 1,
+  class: "text-caption text-medium-emphasis"
+};
+const _hoisted_23 = { class: "progress-cell" };
+const _hoisted_24 = { key: 3 };
+const _hoisted_25 = { key: 4 };
+const _hoisted_26 = { class: "section-count" };
 
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
@@ -595,6 +610,7 @@ const mediaHeaders = [
 const torrentHeaders = [
   { title: '识别结果', key: 'media_title', minWidth: 210 },
   { title: '源名称', key: 'name', minWidth: 250 },
+  { title: '资源信息', key: 'resource_info', minWidth: 280 },
   { title: '库存', key: 'inventory_state', width: 110 },
   { title: '识别', key: 'recognition_state', width: 110 },
   { title: '下载状态', key: 'state', width: 120 },
@@ -672,6 +688,26 @@ function normalizeTaskRows(items) {
     ...item,
     progress_text: `${item.processed || 0}/${item.total || 0}`,
   }))
+}
+
+function uniqueTexts(values) {
+  const result = [];
+  for (const value of values || []) {
+    const text = String(value || '').trim();
+    if (text && !result.some(item => item.toLocaleLowerCase() === text.toLocaleLowerCase())) {
+      result.push(text);
+    }
+  }
+  return result
+}
+
+function torrentRecognition(item) {
+  const expectedFiles = item.details?.inventory_plan?.expected_files || [];
+  return {
+    tokens: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.resource_tokens || [])),
+    words: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.apply_words || [])),
+    inherited: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.inherited_fields || [])),
+  }
 }
 
 async function loadOverview() {
@@ -775,12 +811,18 @@ async function loadActive() {
     if (activeTab.value === 'tasks') {
       rows.value = normalizeTaskRows(items);
     } else if (activeTab.value === 'qb') {
-      rows.value = items.map(item => ({
-        ...item,
-        row_key: `${item.downloader_id}:${item.info_hash}`,
-        target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
-        link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
-      }));
+      rows.value = items.map(item => {
+        const recognition = torrentRecognition(item);
+        return {
+          ...item,
+          row_key: `${item.downloader_id}:${item.info_hash}`,
+          target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
+          link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
+          resource_tokens: recognition.tokens,
+          applied_words: recognition.words,
+          inherited_meta_fields: recognition.inherited,
+        }
+      });
     } else {
       rows.value = items;
     }
@@ -1279,6 +1321,47 @@ return (_ctx, _cache) => {
                         : _createCommentVNode("", true)
                     ])
                   ]),
+                  "item.resource_info": _withCtx(({ item }) => [
+                    _createElementVNode("div", _hoisted_17, [
+                      (item.resource_tokens?.length)
+                        ? (_openBlock(), _createElementBlock("span", _hoisted_18, _toDisplayString(item.resource_tokens.join(' · ')), 1))
+                        : (_openBlock(), _createElementBlock("span", _hoisted_19, "未解析到资源字段")),
+                      _createElementVNode("div", _hoisted_20, [
+                        (item.applied_words?.length)
+                          ? (_openBlock(), _createBlock(_component_VTooltip, {
+                              key: 0,
+                              location: "bottom",
+                              "max-width": "560"
+                            }, {
+                              activator: _withCtx(({ props: tooltipProps }) => [
+                                _createVNode(_component_VChip, _mergeProps(tooltipProps, {
+                                  size: "x-small",
+                                  variant: "tonal",
+                                  color: "info",
+                                  "prepend-icon": "mdi-tag-search-outline"
+                                }), {
+                                  default: _withCtx(() => [
+                                    _createTextVNode(" 识别词 " + _toDisplayString(item.applied_words.length), 1)
+                                  ]),
+                                  _: 2
+                                }, 1040)
+                              ]),
+                              default: _withCtx(() => [
+                                _createElementVNode("div", _hoisted_21, [
+                                  (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(item.applied_words, (word) => {
+                                    return (_openBlock(), _createElementBlock("code", { key: word }, _toDisplayString(word), 1))
+                                  }), 128))
+                                ])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode("", true),
+                        (item.inherited_meta_fields?.length)
+                          ? (_openBlock(), _createElementBlock("span", _hoisted_22, " 任务标题补全 " + _toDisplayString(item.inherited_meta_fields.length) + " 项 ", 1))
+                          : _createCommentVNode("", true)
+                      ])
+                    ])
+                  ]),
                   "item.inventory_state": _withCtx(({ item }) => [
                     _createVNode(_component_VChip, {
                       color: inventoryColor(item.inventory_state),
@@ -1304,7 +1387,7 @@ return (_ctx, _cache) => {
                     }, 1032, ["color"])
                   ]),
                   "item.progress": _withCtx(({ item }) => [
-                    _createElementVNode("div", _hoisted_17, [
+                    _createElementVNode("div", _hoisted_23, [
                       _createVNode(_component_VProgressLinear, {
                         "model-value": Number(item.progress || 0),
                         height: "5"
@@ -1319,7 +1402,7 @@ return (_ctx, _cache) => {
                 }, 8, ["items", "loading"])
               ]))
             : (activeTab.value === 'vt')
-              ? (_openBlock(), _createElementBlock("section", _hoisted_18, [
+              ? (_openBlock(), _createElementBlock("section", _hoisted_24, [
                   _createVNode(_component_VTabs, {
                     modelValue: vtTab.value,
                     "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((vtTab).value = $event)),
@@ -1410,8 +1493,8 @@ return (_ctx, _cache) => {
                         }, 8, ["items", "loading"]))
                 ]))
               : (activeTab.value === 'tasks')
-                ? (_openBlock(), _createElementBlock("section", _hoisted_19, [
-                    _createElementVNode("div", _hoisted_20, _toDisplayString(total.value) + " 个后台任务", 1),
+                ? (_openBlock(), _createElementBlock("section", _hoisted_25, [
+                    _createElementVNode("div", _hoisted_26, _toDisplayString(total.value) + " 个后台任务", 1),
                     _createVNode(_component_VDataTable, {
                       headers: taskHeaders,
                       items: rows.value,
@@ -1430,6 +1513,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a137d3bd"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7dd4b6b8"]]);
 
 export { AppPage as default };

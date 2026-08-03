@@ -27,6 +27,15 @@ QB_CATEGORY_KEYS = (
     "download_category",
     "category",
 )
+NAMING_META_FIELDS = (
+    "resource_type",
+    "resource_effect",
+    "resource_pix",
+    "resource_team",
+    "customization",
+    "video_encode",
+    "audio_encode",
+)
 
 
 @dataclass(frozen=True)
@@ -249,6 +258,7 @@ class MoviePilotQbGateway:
         media: Any,
         torrent_files: Sequence[Any],
         title_override: str = "",
+        torrent_meta: Any = None,
     ) -> Dict[str, Any]:
         """Use the complete MoviePilot naming pipeline for media and STRM paths."""
 
@@ -303,6 +313,9 @@ class MoviePilotQbGateway:
                 file_meta = meta_path_class(path=source_path)
             else:
                 file_meta = metainfo_module.MetaInfo(title=source_path.name)
+            inherited_fields = MoviePilotQbGateway.merge_naming_meta(
+                file_meta, torrent_meta
+            )
             if media_type == "tv":
                 season = getattr(file_meta, "begin_season", None)
                 episode = getattr(file_meta, "begin_episode", None)
@@ -347,6 +360,16 @@ class MoviePilotQbGateway:
                 "new_rel": pure_path.as_posix(),
                 "inventory_relative_path": inventory_path.as_posix(),
                 "size": item["size"],
+                "recognition": {
+                    "meta": MoviePilotQbGateway.meta_payload(file_meta),
+                    "resource_tokens": MoviePilotQbGateway.resource_tokens(
+                        file_meta
+                    ),
+                    "apply_words": MoviePilotQbGateway.recognition_words(
+                        file_meta
+                    ),
+                    "inherited_fields": inherited_fields,
+                },
             })
 
         expected_directory = ""
@@ -376,7 +399,112 @@ class MoviePilotQbGateway:
 
     @staticmethod
     def meta_payload(meta: Any) -> Dict[str, Any]:
-        return meta.to_dict() if meta else {}
+        if not meta:
+            return {}
+        to_dict = getattr(meta, "to_dict", None)
+        if callable(to_dict):
+            payload = to_dict()
+            return dict(payload) if isinstance(payload, dict) else {}
+        model_dump = getattr(meta, "model_dump", None)
+        if callable(model_dump):
+            payload = model_dump(mode="json")
+            return dict(payload) if isinstance(payload, dict) else {}
+        fields = (
+            "title",
+            "year",
+            "begin_season",
+            "begin_episode",
+            "end_episode",
+            *NAMING_META_FIELDS,
+            "apply_words",
+        )
+        return {
+            field: getattr(meta, field)
+            for field in fields
+            if hasattr(meta, field)
+        }
+
+    @staticmethod
+    def merge_naming_meta(file_meta: Any, torrent_meta: Any) -> List[str]:
+        """Fill file-level naming gaps from the already parsed qB task title."""
+
+        if not file_meta or not torrent_meta:
+            return []
+        inherited = []
+        for field in NAMING_META_FIELDS:
+            current = getattr(file_meta, field, None)
+            fallback = getattr(torrent_meta, field, None)
+            if MoviePilotQbGateway._has_meta_value(current):
+                continue
+            if not MoviePilotQbGateway._has_meta_value(fallback):
+                continue
+            setattr(file_meta, field, copy.deepcopy(fallback))
+            inherited.append(field)
+
+        current_words = list(getattr(file_meta, "apply_words", None) or [])
+        fallback_words = list(getattr(torrent_meta, "apply_words", None) or [])
+        for word in fallback_words:
+            if word not in current_words:
+                current_words.append(copy.deepcopy(word))
+        if current_words != list(getattr(file_meta, "apply_words", None) or []):
+            setattr(file_meta, "apply_words", current_words)
+            inherited.append("apply_words")
+        return inherited
+
+    @staticmethod
+    def resource_tokens(meta: Any) -> List[str]:
+        tokens: List[str] = []
+        for field in NAMING_META_FIELDS:
+            value = getattr(meta, field, None)
+            if hasattr(value, "value"):
+                value = value.value
+            values = value if isinstance(value, (list, tuple, set)) else [value]
+            for item in values:
+                text = str(item or "").strip()
+                if text and text.casefold() not in {token.casefold() for token in tokens}:
+                    tokens.append(text)
+        return tokens
+
+    @staticmethod
+    def recognition_words(meta: Any) -> List[str]:
+        result: List[str] = []
+        for word in list(getattr(meta, "apply_words", None) or []):
+            text = MoviePilotQbGateway._recognition_word_text(word)
+            if text and text not in result:
+                result.append(text)
+        return result
+
+    @staticmethod
+    def _recognition_word_text(word: Any) -> str:
+        if isinstance(word, str):
+            return word.strip()
+        if isinstance(word, (list, tuple)):
+            values = [str(item or "").strip() for item in word]
+            values = [item for item in values if item]
+            return " => ".join(values)
+        if isinstance(word, dict):
+            source = next((
+                word.get(key)
+                for key in ("regexp", "regex", "pattern", "source", "word", "origin")
+                if word.get(key) not in (None, "")
+            ), "")
+            target = next((
+                word.get(key)
+                for key in ("replacement", "replace", "target", "result")
+                if word.get(key) not in (None, "")
+            ), "")
+            if source or target:
+                return f"{source} => {target}".strip()
+            return ", ".join(
+                f"{key}={value}"
+                for key, value in word.items()
+                if value not in (None, "", [], {})
+            )
+        return str(word or "").strip()
+
+    @staticmethod
+    def _has_meta_value(value: Any) -> bool:
+        return value not in (None, "", [], {}, ())
 
     @staticmethod
     def poster(media: Any) -> str:
@@ -623,7 +751,7 @@ class QbSyncService:
                         downloader.name, info_hash
                     )
                     inventory_plan = self.gateway.plan_inventory_files(
-                        media, torrent_files
+                        media, torrent_files, torrent_meta=meta
                     )
                     path_plan = self.library_layout.plan(
                         source_path=content_path,
@@ -646,6 +774,7 @@ class QbSyncService:
                             media,
                             torrent_files,
                             title_override=inventory_title,
+                            torrent_meta=meta,
                         )
                         path_plan = self.library_layout.plan(
                             source_path=content_path,

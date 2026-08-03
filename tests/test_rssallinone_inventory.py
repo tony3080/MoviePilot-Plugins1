@@ -268,6 +268,133 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
         )
         self.assertEqual(expected["new_rel"], expected["relative_path"])
 
+    def test_inherits_southpaw_resource_metadata_from_torrent_title(self) -> None:
+        captured = []
+
+        class FakeMetaInfoPath:
+            def __init__(self, path):
+                self.path = path
+                self.begin_season = None
+                self.begin_episode = None
+                self.year = None
+                self.resource_type = None
+                self.resource_effect = None
+                self.resource_pix = None
+                self.resource_team = None
+                self.customization = None
+                self.video_encode = None
+                self.audio_encode = None
+                self.apply_words = []
+
+        class FakeMetaInfo(FakeMetaInfoPath):
+            def __init__(self, title):
+                super().__init__(Path(title))
+                self.title = title
+
+        class FakeFileManagerModule:
+            @staticmethod
+            def recommend_name(meta, media):
+                captured.append({
+                    "resource_type": meta.resource_type,
+                    "resource_effect": meta.resource_effect,
+                    "resource_pix": meta.resource_pix,
+                    "resource_team": meta.resource_team,
+                    "customization": meta.customization,
+                    "video_encode": meta.video_encode,
+                    "audio_encode": meta.audio_encode,
+                    "apply_words": list(meta.apply_words),
+                })
+                return (
+                    f"{media.title} (2015) [tmdbid=307081]/"
+                    f"{media.title} (2015) - {meta.resource_type} - "
+                    f"{meta.resource_effect} - {meta.resource_pix} - "
+                    f"{meta.audio_encode} - {meta.resource_team}.mkv"
+                )
+
+        app_module = types.ModuleType("app")
+        app_module.__path__ = []
+        core_module = types.ModuleType("app.core")
+        core_module.__path__ = []
+        config_module = types.ModuleType("app.core.config")
+        config_module.settings = types.SimpleNamespace(RMT_MEDIAEXT=[".mkv"])
+        metainfo_module = types.ModuleType("app.core.metainfo")
+        metainfo_module.MetaInfo = FakeMetaInfo
+        metainfo_module.MetaInfoPath = FakeMetaInfoPath
+        core_module.metainfo = metainfo_module
+        modules_module = types.ModuleType("app.modules")
+        modules_module.__path__ = []
+        filemanager_module = types.ModuleType("app.modules.filemanager")
+        filemanager_module.FileManagerModule = FakeFileManagerModule
+        fake_modules = {
+            "app": app_module,
+            "app.core": core_module,
+            "app.core.config": config_module,
+            "app.core.metainfo": metainfo_module,
+            "app.modules": modules_module,
+            "app.modules.filemanager": filemanager_module,
+        }
+        media = types.SimpleNamespace(
+            type="movie",
+            title="铁拳",
+            year=2015,
+        )
+        torrent_meta = types.SimpleNamespace(
+            resource_type="BluRay REMUX",
+            resource_effect="杜比视界 HDR",
+            resource_pix="2160p",
+            resource_team="CHD",
+            customization="V2",
+            video_encode="HEVC",
+            audio_encode="Atmos TrueHD 7.1",
+            apply_words=[
+                r"\b([Dd][Vv]|[Dd][Oo][Vv][Ii])\b => 杜比视界",
+                r"\b([Hh][Dd][Rr]10?)\b => HDR",
+                r"\b([Rr][Ee][Mm][Uu][Xx])\b => REMUX",
+                r"\b([Vv]2)\b => V2",
+            ],
+        )
+
+        with mock.patch.dict(sys.modules, fake_modules):
+            result = qb_sync.MoviePilotQbGateway.plan_inventory_files(
+                media,
+                [{"name": "Southpaw.mkv", "size": 1000}],
+                torrent_meta=torrent_meta,
+            )
+
+        self.assertEqual(captured, [{
+            "resource_type": "BluRay REMUX",
+            "resource_effect": "杜比视界 HDR",
+            "resource_pix": "2160p",
+            "resource_team": "CHD",
+            "customization": "V2",
+            "video_encode": "HEVC",
+            "audio_encode": "Atmos TrueHD 7.1",
+            "apply_words": torrent_meta.apply_words,
+        }])
+        expected = result["expected_files"][0]
+        self.assertIn("BluRay REMUX", expected["relative_path"])
+        self.assertIn("杜比视界 HDR", expected["relative_path"])
+        self.assertIn("Atmos TrueHD 7.1", expected["relative_path"])
+        self.assertEqual(
+            expected["recognition"]["resource_tokens"],
+            [
+                "BluRay REMUX",
+                "杜比视界 HDR",
+                "2160p",
+                "CHD",
+                "V2",
+                "HEVC",
+                "Atmos TrueHD 7.1",
+            ],
+        )
+        self.assertEqual(
+            expected["recognition"]["apply_words"],
+            torrent_meta.apply_words,
+        )
+        self.assertIn(
+            "resource_effect", expected["recognition"]["inherited_fields"]
+        )
+
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
     @staticmethod
@@ -384,7 +511,14 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             def list_torrent_files(_downloader, _info_hash):
                 return [{"name": "Example.Movie.2026.mkv", "size": 4}]
 
-            def plan_inventory_files(self, _media, _files, title_override=""):
+            def plan_inventory_files(
+                self,
+                _media,
+                _files,
+                title_override="",
+                torrent_meta=None,
+            ):
+                del torrent_meta
                 self.plans += 1
                 naming_title = title_override or "MoviePilot English Title"
                 media_directory = f"{naming_title} (2026) {{tmdbid=42}}"

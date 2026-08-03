@@ -50,6 +50,7 @@ const mediaHeaders = [
 const torrentHeaders = [
   { title: '识别结果', key: 'media_title', minWidth: 210 },
   { title: '源名称', key: 'name', minWidth: 250 },
+  { title: '资源信息', key: 'resource_info', minWidth: 280 },
   { title: '库存', key: 'inventory_state', width: 110 },
   { title: '识别', key: 'recognition_state', width: 110 },
   { title: '下载状态', key: 'state', width: 120 },
@@ -127,6 +128,26 @@ function normalizeTaskRows(items) {
     ...item,
     progress_text: `${item.processed || 0}/${item.total || 0}`,
   }))
+}
+
+function uniqueTexts(values) {
+  const result = []
+  for (const value of values || []) {
+    const text = String(value || '').trim()
+    if (text && !result.some(item => item.toLocaleLowerCase() === text.toLocaleLowerCase())) {
+      result.push(text)
+    }
+  }
+  return result
+}
+
+function torrentRecognition(item) {
+  const expectedFiles = item.details?.inventory_plan?.expected_files || []
+  return {
+    tokens: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.resource_tokens || [])),
+    words: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.apply_words || [])),
+    inherited: uniqueTexts(expectedFiles.flatMap(file => file.recognition?.inherited_fields || [])),
+  }
 }
 
 async function loadOverview() {
@@ -230,12 +251,18 @@ async function loadActive() {
     if (activeTab.value === 'tasks') {
       rows.value = normalizeTaskRows(items)
     } else if (activeTab.value === 'qb') {
-      rows.value = items.map(item => ({
-        ...item,
-        row_key: `${item.downloader_id}:${item.info_hash}`,
-        target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
-        link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
-      }))
+      rows.value = items.map(item => {
+        const recognition = torrentRecognition(item)
+        return {
+          ...item,
+          row_key: `${item.downloader_id}:${item.info_hash}`,
+          target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
+          link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
+          resource_tokens: recognition.tokens,
+          applied_words: recognition.words,
+          inherited_meta_fields: recognition.inherited,
+        }
+      })
     } else {
       rows.value = items
     }
@@ -592,6 +619,35 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
               </span>
             </div>
           </template>
+          <template #item.resource_info="{ item }">
+            <div class="resource-cell">
+              <span v-if="item.resource_tokens?.length" class="resource-token-line">
+                {{ item.resource_tokens.join(' · ') }}
+              </span>
+              <span v-else class="text-caption text-medium-emphasis">未解析到资源字段</span>
+              <div class="resource-meta-line">
+                <VTooltip v-if="item.applied_words?.length" location="bottom" max-width="560">
+                  <template #activator="{ props: tooltipProps }">
+                    <VChip
+                      v-bind="tooltipProps"
+                      size="x-small"
+                      variant="tonal"
+                      color="info"
+                      prepend-icon="mdi-tag-search-outline"
+                    >
+                      识别词 {{ item.applied_words.length }}
+                    </VChip>
+                  </template>
+                  <div class="recognition-tooltip">
+                    <code v-for="word in item.applied_words" :key="word">{{ word }}</code>
+                  </div>
+                </VTooltip>
+                <span v-if="item.inherited_meta_fields?.length" class="text-caption text-medium-emphasis">
+                  任务标题补全 {{ item.inherited_meta_fields.length }} 项
+                </span>
+              </div>
+            </div>
+          </template>
           <template #item.inventory_state="{ item }">
             <VChip :color="inventoryColor(item.inventory_state)" size="small" variant="tonal">
               {{ inventoryText(item) }}
@@ -772,7 +828,8 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
 
 .qb-task-line,
 .progress-cell,
-.media-cell {
+.media-cell,
+.resource-cell {
   display: flex;
   min-width: 0;
 }
@@ -801,6 +858,36 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.resource-cell {
+  flex-direction: column;
+  gap: 5px;
+  line-height: 1.35;
+}
+
+.resource-token-line {
+  overflow-wrap: anywhere;
+}
+
+.resource-meta-line {
+  display: flex;
+  min-height: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.recognition-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-block: 4px;
+}
+
+.recognition-tooltip code {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .filter-control {
