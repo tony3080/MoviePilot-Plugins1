@@ -530,6 +530,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :loading="loading"
           density="compact"
           item-value="id"
+          :items-per-page="-1"
           hide-default-footer
           class="data-table"
           no-data-text="暂无媒体记录"
@@ -609,6 +610,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :loading="loading"
           density="compact"
           item-value="row_key"
+          :items-per-page="-1"
           hide-default-footer
           class="data-table"
           no-data-text="暂无 qB 任务快照"
@@ -698,6 +700,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :loading="loading"
           density="compact"
           item-value="id"
+          :items-per-page="-1"
           hide-default-footer
           class="data-table"
           no-data-text="暂无 RSS 历史"
@@ -709,6 +712,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :loading="loading"
           density="compact"
           item-value="id"
+          :items-per-page="-1"
           hide-default-footer
           class="data-table"
           no-data-text="暂无可用站点身份"
@@ -734,6 +738,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :loading="loading"
           density="compact"
           item-value="id"
+          :items-per-page="-1"
           hide-default-footer
           class="data-table"
           no-data-text="暂无后台任务"

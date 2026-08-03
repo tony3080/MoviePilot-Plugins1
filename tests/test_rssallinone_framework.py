@@ -140,11 +140,18 @@ class RepositoryContractTest(unittest.TestCase):
     def test_vue_full_page_contract(self) -> None:
         vite = (PLUGIN_DIR / "vite.config.js").read_text(encoding="utf-8")
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
         self.assertIn("'./AppPage'", vite)
         self.assertIn("'./Page'", vite)
         self.assertIn("'./Config'", vite)
         self.assertIn("get_sidebar_nav", backend)
         self.assertIn('return "vue", "dist/assets"', backend)
+        self.assertEqual(
+            app_page.count(':items-per-page="-1"'),
+            app_page.count("hide-default-footer"),
+        )
 
     def test_clouddrive_contract_is_original_and_generated(self) -> None:
         digest = hashlib.sha256((PLUGIN_DIR / "clouddrive.proto").read_bytes()).hexdigest()
