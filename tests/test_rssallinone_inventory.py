@@ -158,6 +158,18 @@ class LocalInventoryCheckerTest(unittest.TestCase):
             self.assertEqual(state, "ambiguous")
             self.assertEqual(len(details["folder"]["candidates"]), 2)
 
+    def test_inventory_title_removes_year_and_template_separators(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_root = root / "聪明镇 (2026) - {tmdbid=300259}"
+            media_root.mkdir()
+            checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
+
+            folder = checker.locate_root(root, 300259)
+
+            self.assertEqual(folder.status, "exists")
+            self.assertEqual(folder.title, "聪明镇")
+
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checker = inventory.LocalInventoryChecker.from_config(directory)

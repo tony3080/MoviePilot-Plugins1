@@ -536,7 +536,7 @@ VT+ 包含 `站点身份`、`RSS任务`、`RSS历史` 三个子页。
 - `local_hardlink_path` 必须位于 CD2 正在监控或挂载上传的本地目录树中；CD2 容器看到的路径可以不同，但必须配置显式 `plugin_staging_root -> cd2_staging_root` 映射。
 - `local_hardlink_path` 的相对路径必须稳定映射到 `cd2_dest_path`：`cd2_dest_root + relative(local_hardlink_path, plugin_staging_root)`。
 - `mp_library_path` 是 CD2 云端目录重新挂载给 MoviePilot/Emby 后的路径，配置显式 `cd2_dest_root -> mp_library_root` 映射。库存检查在 `mp_library_path` 上进行，不应把 staging 目录当作最终媒体库。
-- 库存检查必须由插件直接读取 `mp_library_path` 下的本地目录和文件，其中库存文件只接受 `.strm`；不得用 MoviePilot/Emby 的“媒体已存在”接口替代本地文件检查。按 MP 分类定位库存根目录后，优先通过一级目录中的 `[tmdbid=ID]` 或 `{tmdbid=ID}` 锁定媒体目录；未命中时才按 MoviePilot 预期目录名进行不区分大小写的完整匹配。锁定目录后提取库存标题，重新调用 MoviePilot 当前命名模板和自定义识别词生成完整 `new_rel`，库存预期路径只将最终扩展名派生为 `.strm`。库存比较不使用源媒体大小；优先匹配精确相对路径，再比较去掉库存标题和扩展名后的完整文件特征。根目录未配置、挂载不可访问、重复 TMDB 目录、媒体目录缺失、部分文件缺失和空资源必须分别记录，挂载离线不得误判为库存缺失。
+- 库存检查必须由插件直接读取 `mp_library_path` 下的本地目录和文件，其中库存文件只接受 `.strm`；不得用 MoviePilot/Emby 的“媒体已存在”接口替代本地文件检查。按 MP 分类定位库存根目录后，优先通过一级目录中的 `[tmdbid=ID]` 或 `{tmdbid=ID}` 锁定媒体目录；未命中时才按 MoviePilot 预期目录名进行不区分大小写的完整匹配。锁定目录后提取库存标题时，必须同时移除 TMDB 标记、模板年份和年份前后的尾部分隔符，避免把 `标题 (2026) -`再次交给 MoviePilot 生成重复年份。随后重新调用 MoviePilot 当前命名模板和自定义识别词生成完整 `new_rel`，库存预期路径只将最终扩展名派生为 `.strm`。库存比较不使用源媒体大小；优先匹配精确相对路径，再比较去掉库存标题和扩展名后的完整文件特征。根目录未配置、挂载不可访问、重复 TMDB 目录、媒体目录缺失、部分文件缺失和空资源必须分别记录，挂载离线不得误判为库存缺失。
 - 因此正常数据链是：qB 下载文件 -> 插件可访问源路径 -> 同盘 staging 硬链接 -> CD2 云端目标 -> CD2/网盘挂载的 MP 媒体库。
 
 ### 3. 建议的容器挂载示例

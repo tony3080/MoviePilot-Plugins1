@@ -457,8 +457,9 @@ def _tmdb_ids(name: str) -> List[int]:
 
 def _directory_title(name: str) -> str:
     value = TMDB_MARKER_PATTERN.sub("", str(name or "")).strip()
+    value = value.rstrip(" ._-")
     value = YEAR_SUFFIX_PATTERN.sub("", value).strip()
-    return value
+    return value.rstrip(" ._-")
 
 
 def _inside_media_directory(path: PurePosixPath, folder_name: str) -> PurePosixPath:
