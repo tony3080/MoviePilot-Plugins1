@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import RssTaskEditor from './RssTaskEditor.vue'
 
 const props = defineProps({
   api: {
@@ -12,9 +13,13 @@ const activeTab = ref('overview')
 const vtTab = ref('rss_tasks')
 const loading = ref(false)
 const errorMessage = ref('')
+const successMessage = ref('')
 const overview = ref({ plugin: {}, counts: {}, capabilities: {} })
 const rows = ref([])
 const total = ref(0)
+const rssTasks = ref([])
+const allQbDownloaders = ref([])
+const siteIdentities = ref([])
 const mediaState = ref('')
 const mediaType = ref('')
 const qbDownloaders = ref([])
@@ -56,19 +61,20 @@ const torrentHeaders = [
   { title: 'Hash', key: 'info_hash', width: 120 },
 ]
 
-const rssTaskHeaders = [
-  { title: '任务', key: 'name', minWidth: 200 },
-  { title: '启用', key: 'enabled', width: 80 },
-  { title: '顺序', key: 'position', width: 80 },
-  { title: '更新时间', key: 'updated_at', minWidth: 170 },
-]
-
 const rssHistoryHeaders = [
   { title: '标题', key: 'title', minWidth: 220 },
   { title: '任务', key: 'task_id', width: 150 },
   { title: '状态', key: 'status', width: 120 },
   { title: '原因', key: 'reason', minWidth: 220 },
   { title: '时间', key: 'updated_at', minWidth: 170 },
+]
+
+const siteHeaders = [
+  { title: '站点', key: 'name', minWidth: 180 },
+  { title: '地址', key: 'domain', minWidth: 260 },
+  { title: '认证方式', key: 'auth_mode', width: 120 },
+  { title: '启用', key: 'enabled', width: 90 },
+  { title: '状态', key: 'ready', width: 100 },
 ]
 
 const taskHeaders = [
@@ -134,21 +140,56 @@ async function loadQbDownloaders() {
   const response = unwrap(
     await props.api.get('plugin/RssAllInOne/qb/downloaders'),
   )
-  qbDownloaders.value = (response?.items || []).map(item => ({
-    title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
-    value: item.name,
-    disabled: !item.ready,
-  }))
+  allQbDownloaders.value = response?.items || []
+  qbDownloaders.value = allQbDownloaders.value
+    .filter(item => (item.categories || []).length > 0)
+    .map(item => ({
+      title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'} · ${item.categories?.join(', ') || '无管理分类'}`,
+      value: item.name,
+      disabled: !item.ready,
+    }))
+}
+
+async function loadSites(strict = false) {
+  const response = unwrap(await props.api.get('plugin/RssAllInOne/sites'))
+  if (!response?.success) {
+    siteIdentities.value = []
+    if (strict) throw new Error(response?.message || '读取站点身份失败')
+    return
+  }
+  siteIdentities.value = response.items || []
 }
 
 async function loadActive() {
   loading.value = true
   errorMessage.value = ''
+  successMessage.value = ''
   try {
     await loadOverview()
     if (activeTab.value === 'overview') {
       rows.value = []
       total.value = 0
+      return
+    }
+
+    if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
+      const [response] = await Promise.all([
+        props.api.get('plugin/RssAllInOne/rss/tasks', {
+          params: { offset: 0, limit: 100 },
+        }).then(unwrap),
+        loadQbDownloaders(),
+        loadSites(false),
+      ])
+      rssTasks.value = response?.items || []
+      rows.value = []
+      total.value = Number(response?.total || 0)
+      return
+    }
+
+    if (activeTab.value === 'vt' && vtTab.value === 'sites') {
+      await loadSites(true)
+      rows.value = siteIdentities.value
+      total.value = siteIdentities.value.length
       return
     }
 
@@ -171,8 +212,6 @@ async function loadActive() {
       }
     } else if (activeTab.value === 'tasks') {
       path = 'tasks'
-    } else if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
-      path = 'rss/tasks'
     } else if (activeTab.value === 'vt' && vtTab.value === 'rss_history') {
       path = 'rss/history'
     }
@@ -203,6 +242,28 @@ async function loadActive() {
     errorMessage.value = error?.message || '数据加载失败'
     rows.value = []
     total.value = 0
+  } finally {
+    loading.value = false
+  }
+}
+
+async function saveRssTasks(items) {
+  loading.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/tasks', { items }),
+    )
+    if (!response?.success) {
+      throw new Error(response?.message || 'RSS 任务保存失败')
+    }
+    rssTasks.value = response.items || []
+    total.value = Number(response.total || 0)
+    successMessage.value = response.message || 'RSS 任务已保存'
+    await Promise.all([loadOverview(), loadQbDownloaders()])
+  } catch (error) {
+    errorMessage.value = error?.message || 'RSS 任务保存失败'
   } finally {
     loading.value = false
   }
@@ -308,7 +369,7 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
         </div>
       </div>
       <VSpacer />
-      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.3.0' }}</VChip>
+      <VChip color="info" variant="tonal" size="small" class="me-2">v{{ overview.plugin?.version || '0.4.0' }}</VChip>
       <VTooltip text="刷新">
         <template #activator="{ props: tooltipProps }">
           <VBtn
@@ -338,6 +399,9 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
 
     <VAlert v-if="errorMessage" type="error" variant="tonal" class="status-alert">
       {{ errorMessage }}
+    </VAlert>
+    <VAlert v-if="successMessage" type="success" variant="tonal" class="status-alert">
+      {{ successMessage }}
     </VAlert>
 
     <main class="workspace">
@@ -539,18 +603,16 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
         <VTabs v-model="vtTab" density="compact" color="primary" class="sub-tabs">
           <VTab value="rss_tasks">RSS任务</VTab>
           <VTab value="rss_history">RSS历史</VTab>
-          <VTab value="sites">站点身份</VTab>
+          <VTab value="sites">站点访问身份</VTab>
         </VTabs>
-        <VDataTable
+        <RssTaskEditor
           v-if="vtTab === 'rss_tasks'"
-          :headers="rssTaskHeaders"
-          :items="rows"
+          :items="rssTasks"
+          :downloaders="allQbDownloaders"
+          :sites="siteIdentities"
           :loading="loading"
-          density="compact"
-          item-value="id"
-          hide-default-footer
-          class="data-table"
-          no-data-text="暂无 RSS 任务"
+          @save="saveRssTasks"
+          @reload="loadActive"
         />
         <VDataTable
           v-else-if="vtTab === 'rss_history'"
@@ -563,18 +625,28 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           class="data-table"
           no-data-text="暂无 RSS 历史"
         />
-        <VTable v-else density="compact" class="capability-table">
-          <thead>
-            <tr><th>来源</th><th>模式</th><th>状态</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>当前 MoviePilot</td>
-              <td>站点服务</td>
-              <td><VChip size="small" variant="tonal" color="warning">适配器待接入</VChip></td>
-            </tr>
-          </tbody>
-        </VTable>
+        <VDataTable
+          v-else
+          :headers="siteHeaders"
+          :items="siteIdentities"
+          :loading="loading"
+          density="compact"
+          item-value="id"
+          hide-default-footer
+          class="data-table"
+          no-data-text="暂无可用站点身份"
+        >
+          <template #item.enabled="{ item }">
+            <VChip :color="item.enabled ? 'success' : 'default'" size="small" variant="tonal">
+              {{ item.enabled ? '已启用' : '未启用' }}
+            </VChip>
+          </template>
+          <template #item.ready="{ item }">
+            <VChip :color="item.ready ? 'success' : 'warning'" size="small" variant="tonal">
+              {{ item.ready ? '可用' : '未就绪' }}
+            </VChip>
+          </template>
+        </VDataTable>
       </section>
 
       <section v-else-if="activeTab === 'tasks'">

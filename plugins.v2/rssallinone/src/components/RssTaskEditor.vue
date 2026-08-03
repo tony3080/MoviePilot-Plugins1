@@ -1,0 +1,337 @@
+<script setup>
+import { computed, ref, watch } from 'vue'
+
+const props = defineProps({
+  items: { type: Array, default: () => [] },
+  downloaders: { type: Array, default: () => [] },
+  sites: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
+})
+
+const emit = defineEmits(['save', 'reload'])
+
+const tasks = ref([])
+const expanded = ref([])
+
+const booleanOptions = [
+  { key: 'pause_on_add', label: '添加种子时暂停' },
+  { key: 'push_torrent_file', label: '推送种子文件' },
+  { key: 'recognize_cn', label: '识别国语' },
+  { key: 'recognize_fx', label: '识别特效' },
+  { key: 'add_chinese_title', label: '添加中文标题' },
+  { key: 'import_enabled', label: '入库' },
+  { key: 'rename_enabled', label: '重命名' },
+  { key: 'download_enabled', label: '下载' },
+  { key: 'delete_files', label: '删除文件' },
+]
+
+const downloaderOptions = computed(() => props.downloaders.map(item => ({
+  title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
+  value: item.name,
+  disabled: !item.enabled,
+})))
+
+const siteOptions = computed(() => [
+  { title: '不使用站点标签识别', value: '' },
+  ...props.sites.map(item => ({
+    title: `${item.name || item.domain}${item.enabled ? '' : ' · 未启用'}`,
+    value: String(item.id || ''),
+  })),
+])
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.().replaceAll('-', '')
+    || `rss-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function defaultConfig() {
+  return {
+    rss_url: '',
+    qb_downloader: '',
+    rss_cron: '*/10 * * * *',
+    save_path: '',
+    qb_category: '',
+    name_contains: '',
+    start_cron: '*/5 * * * *',
+    fallback_cron: '*/10 * * * *',
+    delete_after_minutes: 0,
+    upload_limit_kbps: 0,
+    path_mappings: '',
+    rename_rules: '',
+    site_id: '',
+    cn_keywords: '国语,国配',
+    pause_on_add: true,
+    push_torrent_file: false,
+    recognize_cn: false,
+    recognize_fx: false,
+    add_chinese_title: false,
+    import_enabled: true,
+    rename_enabled: false,
+    download_enabled: true,
+    delete_files: false,
+  }
+}
+
+function normalizeTask(item = {}, index = 0) {
+  return {
+    ...clone(item),
+    id: item.id || newId(),
+    name: item.name || `RSS任务 ${index + 1}`,
+    enabled: item.enabled !== false && item.enabled !== 0,
+    position: index,
+    config: {
+      ...defaultConfig(),
+      ...(clone(item.config || {})),
+    },
+  }
+}
+
+function addTask() {
+  const task = normalizeTask({}, tasks.value.length)
+  tasks.value.push(task)
+  expanded.value = [...expanded.value, task.id]
+}
+
+function removeTask(index) {
+  const [removed] = tasks.value.splice(index, 1)
+  expanded.value = expanded.value.filter(id => id !== removed?.id)
+  tasks.value.forEach((task, position) => { task.position = position })
+}
+
+function saveTasks() {
+  emit('save', tasks.value.map((task, position) => ({
+    ...clone(task),
+    position,
+  })))
+}
+
+watch(
+  () => props.items,
+  value => {
+    tasks.value = (value || []).map(normalizeTask)
+    expanded.value = tasks.value.length === 1 ? [tasks.value[0].id] : []
+  },
+  { immediate: true, deep: true },
+)
+</script>
+
+<template>
+  <div class="rss-editor">
+    <div class="rss-toolbar">
+      <span class="text-caption text-medium-emphasis">{{ tasks.length }} 条任务</span>
+      <VSpacer />
+      <VTooltip text="重新读取">
+        <template #activator="{ props: tooltipProps }">
+          <VBtn
+            v-bind="tooltipProps"
+            icon="mdi-refresh"
+            variant="text"
+            :loading="loading"
+            aria-label="重新读取"
+            @click="emit('reload')"
+          />
+        </template>
+      </VTooltip>
+      <VBtn prepend-icon="mdi-plus" variant="text" @click="addTask">
+        添加任务
+      </VBtn>
+      <VBtn
+        prepend-icon="mdi-content-save"
+        color="primary"
+        variant="tonal"
+        :loading="loading"
+        @click="saveTasks"
+      >
+        保存
+      </VBtn>
+    </div>
+
+    <VAlert v-if="tasks.length === 0" type="info" variant="tonal">
+      暂无 RSS 任务
+    </VAlert>
+
+    <VExpansionPanels v-else v-model="expanded" multiple class="task-panels">
+      <VExpansionPanel v-for="(task, index) in tasks" :key="task.id" :value="task.id">
+        <VExpansionPanelTitle>
+          <div class="task-title">
+            <VSwitch
+              v-model="task.enabled"
+              density="compact"
+              hide-details
+              color="primary"
+              @click.stop
+            />
+            <strong>{{ task.name || `RSS任务 ${index + 1}` }}</strong>
+            <VChip v-if="task.config.qb_category" size="small" variant="tonal">
+              {{ task.config.qb_category }}
+            </VChip>
+            <VSpacer />
+            <VTooltip text="删除任务">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-delete-outline"
+                  size="small"
+                  variant="text"
+                  color="error"
+                  aria-label="删除任务"
+                  @click.stop="removeTask(index)"
+                />
+              </template>
+            </VTooltip>
+          </div>
+        </VExpansionPanelTitle>
+        <VExpansionPanelText>
+          <VRow dense>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.name" label="任务名称" />
+            </VCol>
+            <VCol cols="12" md="8">
+              <VTextField v-model="task.config.rss_url" label="RSS URL" />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VSelect
+                v-model="task.config.qb_downloader"
+                :items="downloaderOptions"
+                label="QB下载器"
+              />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.config.qb_category" label="QB分类" />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.config.save_path" label="保存路径" />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.config.rss_cron" label="RSS周期 (CRON)" />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.config.start_cron" label="开始任务 CRON" />
+            </VCol>
+            <VCol cols="12" md="4">
+              <VTextField v-model="task.config.fallback_cron" label="轮询兜底 CRON" />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextField v-model="task.config.name_contains" label="限制条件 (名称包含)" />
+            </VCol>
+            <VCol cols="12" md="3">
+              <VTextField
+                v-model.number="task.config.delete_after_minutes"
+                label="完成后删除任务 (分钟)"
+                type="number"
+                min="0"
+              />
+            </VCol>
+            <VCol cols="12" md="3">
+              <VTextField
+                v-model.number="task.config.upload_limit_kbps"
+                label="上传限速 (kb/s)"
+                type="number"
+                min="0"
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextarea
+                v-model="task.config.path_mappings"
+                label="路径映射"
+                rows="3"
+                auto-grow
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextarea
+                v-model="task.config.rename_rules"
+                label="重命名规则"
+                rows="3"
+                auto-grow
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VSelect
+                v-model="task.config.site_id"
+                :items="siteOptions"
+                label="站点访问身份"
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextField v-model="task.config.cn_keywords" label="国语关键词" />
+            </VCol>
+          </VRow>
+
+          <VDivider class="mb-3" />
+          <div class="switch-grid">
+            <VSwitch
+              v-for="option in booleanOptions"
+              :key="option.key"
+              v-model="task.config[option.key]"
+              :label="option.label"
+              density="compact"
+              color="primary"
+              hide-details
+            />
+          </div>
+        </VExpansionPanelText>
+      </VExpansionPanel>
+    </VExpansionPanels>
+  </div>
+</template>
+
+<style scoped>
+.rss-editor {
+  min-width: 0;
+}
+
+.rss-toolbar,
+.task-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.rss-toolbar {
+  margin-bottom: 12px;
+}
+
+.task-title {
+  width: 100%;
+}
+
+.task-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-panels :deep(.v-expansion-panel) {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+}
+
+.switch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 16px;
+}
+
+@media (max-width: 900px) {
+  .rss-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .switch-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .switch-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

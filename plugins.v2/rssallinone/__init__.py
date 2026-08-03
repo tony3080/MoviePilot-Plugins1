@@ -12,10 +12,16 @@ from app.log import logger
 from app.plugins import _PluginBase
 
 from .capabilities import runtime_capabilities
-from .database import SQLiteStore
+from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
-from .qb_sync import MoviePilotQbGateway, QB_TASK_TYPE, QbSyncService
+from .qb_sync import (
+    MoviePilotQbGateway,
+    QB_TASK_TYPE,
+    QbSyncService,
+    RssTaskQbScope,
+)
+from .rss_tasks import normalize_rss_tasks
 
 
 PLUGIN_ID = "RssAllInOne"
@@ -29,7 +35,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.3.0"
+    plugin_version = "0.4.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -58,8 +64,7 @@ class RssAllInOne(_PluginBase):
         self._qb_refresh_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._source_routes: List[Dict[str, Any]] = []
-        self._category_groups: Dict[str, List[str]] = {}
-        self._library_layout = LibraryLayout("", [], {})
+        self._library_layout = LibraryLayout("", [])
 
     def init_plugin(self, config: dict = None) -> None:
         config = config or {}
@@ -77,13 +82,9 @@ class RssAllInOne(_PluginBase):
         self._source_routes = deepcopy(
             config.get("source_routes", defaults["source_routes"])
         )
-        self._category_groups = deepcopy(
-            config.get("category_groups", defaults["category_groups"])
-        )
         self._library_layout = LibraryLayout.from_config(
             self._inventory_root,
             self._source_routes,
-            self._category_groups,
         )
         self._cd2_grpc_addr = str(config.get("cd2_grpc_addr") or "").strip()
         self._cd2_token = str(config.get("cd2_token") or "").strip()
@@ -168,7 +169,9 @@ class RssAllInOne(_PluginBase):
             self._api("/qb/refresh", self.api_qb_refresh, "POST", "刷新并识别 QB 任务"),
             self._api("/layout", self.api_layout, "GET", "目录规划配置"),
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
+            self._api("/rss/tasks", self.api_save_rss_tasks, "POST", "保存 RSS 任务"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
+            self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
             self._api("/tasks/{task_id}", self.api_background_task, "GET", "后台任务详情"),
         ]
@@ -240,7 +243,11 @@ class RssAllInOne(_PluginBase):
 
     def api_qb_downloaders(self) -> Dict[str, Any]:
         try:
-            items = [item.to_dict() for item in MoviePilotQbGateway.list_downloaders()]
+            scope = self._qb_scope()
+            items = []
+            for item in MoviePilotQbGateway.list_downloaders():
+                categories = scope.categories_for(item.name)
+                items.append({**item.to_dict(), "categories": categories})
             return {"success": True, "items": items, "total": len(items)}
         except Exception as error:
             logger.error(f"RSS一条龙：读取 qBittorrent 节点失败：{error}", exc_info=True)
@@ -267,6 +274,62 @@ class RssAllInOne(_PluginBase):
             **self._require_store().list_rss_tasks(offset=offset, limit=limit),
         }
 
+    def api_save_rss_tasks(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            tasks = normalize_rss_tasks((payload or {}).get("items"))
+            store = self._require_store()
+            items = store.replace_rss_tasks(tasks)
+            scope = RssTaskQbScope.from_tasks(items)
+            out_of_scope = store.mark_torrents_outside_scope(
+                scope.downloader_categories(),
+                utc_now(),
+            )
+            return {
+                "success": True,
+                "message": f"已保存 {len(items)} 条 RSS 任务",
+                "items": items,
+                "total": len(items),
+                "out_of_scope": out_of_scope,
+            }
+        except (TypeError, ValueError) as error:
+            return {"success": False, "message": str(error), "items": []}
+
+    @staticmethod
+    def api_sites() -> Dict[str, Any]:
+        try:
+            from app.db.site_oper import SiteOper
+
+            items = []
+            for site in SiteOper().list() or []:
+                if bool(getattr(site, "public", False)):
+                    auth_mode = "公开"
+                elif str(getattr(site, "apikey", "") or "").strip():
+                    auth_mode = "API Key"
+                elif str(getattr(site, "token", "") or "").strip():
+                    auth_mode = "Token"
+                elif str(getattr(site, "cookie", "") or "").strip():
+                    auth_mode = "Cookie"
+                else:
+                    auth_mode = "未配置"
+                enabled = bool(getattr(site, "is_active", False))
+                items.append({
+                    "id": str(getattr(site, "id", "") or ""),
+                    "name": str(getattr(site, "name", "") or ""),
+                    "domain": str(getattr(site, "url", "") or ""),
+                    "enabled": enabled,
+                    "auth_mode": auth_mode,
+                    "ready": enabled and auth_mode != "未配置",
+                    "proxy": bool(getattr(site, "proxy", False)),
+                    "render": bool(getattr(site, "render", False)),
+                })
+            return {"success": True, "items": items, "total": len(items)}
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取 MoviePilot 站点身份失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error), "items": [], "total": 0}
+
     def api_rss_history(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
         return {
             "success": True,
@@ -286,6 +349,8 @@ class RssAllInOne(_PluginBase):
         return {"success": True, "task": task}
 
     def _scheduled_qb_refresh(self) -> None:
+        if not self._qb_scope().ready:
+            return
         self._start_qb_refresh(force_recognition=False, source="scheduler")
 
     def _start_qb_refresh(
@@ -377,11 +442,18 @@ class RssAllInOne(_PluginBase):
         capabilities["local_inventory"] = self._library_layout.capability()
         try:
             downloaders = MoviePilotQbGateway.list_downloaders()
+            scope = self._qb_scope()
+            managed = [
+                item for item in downloaders
+                if scope.categories_for(item.name)
+            ]
             capabilities["qbittorrent"] = {
-                "ready": any(item.ready for item in downloaders),
-                "scope": "moviepilot_configured_qbittorrent_only",
+                "ready": scope.ready and any(item.ready for item in managed),
+                "scope": "vt_rss_task_downloader_category",
                 "configured": len(downloaders),
-                "available": sum(1 for item in downloaders if item.ready),
+                "managed": len(managed),
+                "available": sum(1 for item in managed if item.ready),
+                "managed_scope": scope.to_dict(),
                 "phase": "readonly_sync",
             }
         except Exception as error:
@@ -394,6 +466,10 @@ class RssAllInOne(_PluginBase):
                 "message": str(error),
             }
         return capabilities
+
+    def _qb_scope(self) -> RssTaskQbScope:
+        tasks = self._store.list_all_rss_tasks() if self._store else []
+        return RssTaskQbScope.from_tasks(tasks)
 
     def _database_path(self) -> Path:
         getter = getattr(self, "get_data_path", None)

@@ -191,7 +191,33 @@ class RepositoryContractTest(unittest.TestCase):
         ):
             self.assertIn(expected, prompt)
             self.assertIn(expected, config)
-        self.assertIn("series: [儿童剧, 动漫, 国产剧, 日韩剧, 欧美剧, 纪录片, 综艺]", prompt)
+        self.assertIn("默认覆盖 MoviePilot 返回的全部分类", prompt)
+
+    def test_qb_management_is_scoped_by_saved_rss_tasks(self) -> None:
+        backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
+        prompt = (
+            PLUGIN_DIR / "MoviePilot_ReelHarbor_V1_plugin_prompt.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("RssTaskQbScope", backend)
+        self.assertIn("VT+ RSS 任务声明的 `(QB下载器, QB分类)`", prompt)
+        self.assertIn("禁止回退为全量扫描", prompt)
+
+    def test_vt_rss_task_editor_contract(self) -> None:
+        editor = (
+            PLUGIN_DIR / "src" / "components" / "RssTaskEditor.vue"
+        ).read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        config = (
+            PLUGIN_DIR / "src" / "components" / "Config.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("添加任务", editor)
+        self.assertIn("QB下载器", editor)
+        self.assertIn("QB分类", editor)
+        self.assertIn("saveRssTasks", app_page)
+        self.assertNotIn("电影目录组分类", config)
+        self.assertNotIn("剧集目录组分类", config)
 
 
 class PluginLifecycleTest(unittest.TestCase):
@@ -200,11 +226,30 @@ class PluginLifecycleTest(unittest.TestCase):
         app.__path__ = []
         app_log = types.ModuleType("app.log")
         app_plugins = types.ModuleType("app.plugins")
+        app_db = types.ModuleType("app.db")
+        app_db.__path__ = []
+        app_site_oper = types.ModuleType("app.db.site_oper")
 
         class Logger:
             @staticmethod
             def error(*_args, **_kwargs):
                 return None
+
+        class SiteOper:
+            @staticmethod
+            def list():
+                return [types.SimpleNamespace(
+                    id=1,
+                    name="测试站点",
+                    url="https://tracker.example.test/",
+                    is_active=True,
+                    public=False,
+                    apikey=None,
+                    token=None,
+                    cookie="secret-cookie",
+                    proxy=False,
+                    render=False,
+                )]
 
         with tempfile.TemporaryDirectory() as directory:
             data_path = Path(directory)
@@ -219,13 +264,19 @@ class PluginLifecycleTest(unittest.TestCase):
 
             app_log.logger = Logger()
             app_plugins._PluginBase = PluginBase
+            app_site_oper.SiteOper = SiteOper
             previous = {
                 name: sys.modules.get(name)
-                for name in ("app", "app.log", "app.plugins", "rssallinone")
+                for name in (
+                    "app", "app.log", "app.plugins", "app.db",
+                    "app.db.site_oper", "rssallinone",
+                )
             }
             sys.modules["app"] = app
             sys.modules["app.log"] = app_log
             sys.modules["app.plugins"] = app_plugins
+            sys.modules["app.db"] = app_db
+            sys.modules["app.db.site_oper"] = app_site_oper
             try:
                 spec = importlib.util.spec_from_file_location(
                     "rssallinone",
@@ -240,6 +291,18 @@ class PluginLifecycleTest(unittest.TestCase):
                 plugin.init_plugin({"enabled": True})
                 overview = plugin.api_overview()
                 health = plugin.api_health()
+                saved = plugin.api_save_rss_tasks({
+                    "items": [{
+                        "id": "movies",
+                        "name": "电影 RSS",
+                        "enabled": True,
+                        "config": {
+                            "qb_downloader": "qb-main",
+                            "qb_category": "movie",
+                        },
+                    }],
+                })
+                sites = plugin.api_sites()
 
                 self.assertTrue(plugin.get_state())
                 self.assertTrue(overview["success"])
@@ -247,6 +310,15 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(health["database"]["ready"])
                 self.assertTrue((data_path / "rssallinone.db").is_file())
                 self.assertEqual(plugin.get_sidebar_nav()[0]["nav_key"], "rssallinone")
+                self.assertTrue(saved["success"])
+                self.assertEqual(saved["items"][0]["config"]["qb_category"], "movie")
+                self.assertEqual(
+                    plugin._qb_scope().categories_for("qb-main"),
+                    ["movie"],
+                )
+                self.assertTrue(sites["success"])
+                self.assertEqual(sites["items"][0]["auth_mode"], "Cookie")
+                self.assertNotIn("secret-cookie", repr(sites))
 
                 from rssallinone.generated import clouddrive_pb2_grpc
 

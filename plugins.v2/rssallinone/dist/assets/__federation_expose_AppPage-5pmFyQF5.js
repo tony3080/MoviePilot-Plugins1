@@ -1,6 +1,511 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
 import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
+const {toDisplayString:_toDisplayString$1,createElementVNode:_createElementVNode$1,resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,mergeProps:_mergeProps$1,withCtx:_withCtx$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1,renderList:_renderList$1,Fragment:_Fragment$1,createElementBlock:_createElementBlock$1,withModifiers:_withModifiers} = await importShared('vue');
+
+
+const _hoisted_1$1 = { class: "rss-editor" };
+const _hoisted_2$1 = { class: "rss-toolbar" };
+const _hoisted_3$1 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_4$1 = { class: "task-title" };
+const _hoisted_5$1 = { class: "switch-grid" };
+
+const {computed: computed$1,ref: ref$1,watch: watch$1} = await importShared('vue');
+
+
+
+const _sfc_main$1 = {
+  __name: 'RssTaskEditor',
+  props: {
+  items: { type: Array, default: () => [] },
+  downloaders: { type: Array, default: () => [] },
+  sites: { type: Array, default: () => [] },
+  loading: { type: Boolean, default: false },
+},
+  emits: ['save', 'reload'],
+  setup(__props, { emit: __emit }) {
+
+const props = __props;
+
+const emit = __emit;
+
+const tasks = ref$1([]);
+const expanded = ref$1([]);
+
+const booleanOptions = [
+  { key: 'pause_on_add', label: '添加种子时暂停' },
+  { key: 'push_torrent_file', label: '推送种子文件' },
+  { key: 'recognize_cn', label: '识别国语' },
+  { key: 'recognize_fx', label: '识别特效' },
+  { key: 'add_chinese_title', label: '添加中文标题' },
+  { key: 'import_enabled', label: '入库' },
+  { key: 'rename_enabled', label: '重命名' },
+  { key: 'download_enabled', label: '下载' },
+  { key: 'delete_files', label: '删除文件' },
+];
+
+const downloaderOptions = computed$1(() => props.downloaders.map(item => ({
+  title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
+  value: item.name,
+  disabled: !item.enabled,
+})));
+
+const siteOptions = computed$1(() => [
+  { title: '不使用站点标签识别', value: '' },
+  ...props.sites.map(item => ({
+    title: `${item.name || item.domain}${item.enabled ? '' : ' · 未启用'}`,
+    value: String(item.id || ''),
+  })),
+]);
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.().replaceAll('-', '')
+    || `rss-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function defaultConfig() {
+  return {
+    rss_url: '',
+    qb_downloader: '',
+    rss_cron: '*/10 * * * *',
+    save_path: '',
+    qb_category: '',
+    name_contains: '',
+    start_cron: '*/5 * * * *',
+    fallback_cron: '*/10 * * * *',
+    delete_after_minutes: 0,
+    upload_limit_kbps: 0,
+    path_mappings: '',
+    rename_rules: '',
+    site_id: '',
+    cn_keywords: '国语,国配',
+    pause_on_add: true,
+    push_torrent_file: false,
+    recognize_cn: false,
+    recognize_fx: false,
+    add_chinese_title: false,
+    import_enabled: true,
+    rename_enabled: false,
+    download_enabled: true,
+    delete_files: false,
+  }
+}
+
+function normalizeTask(item = {}, index = 0) {
+  return {
+    ...clone(item),
+    id: item.id || newId(),
+    name: item.name || `RSS任务 ${index + 1}`,
+    enabled: item.enabled !== false && item.enabled !== 0,
+    position: index,
+    config: {
+      ...defaultConfig(),
+      ...(clone(item.config || {})),
+    },
+  }
+}
+
+function addTask() {
+  const task = normalizeTask({}, tasks.value.length);
+  tasks.value.push(task);
+  expanded.value = [...expanded.value, task.id];
+}
+
+function removeTask(index) {
+  const [removed] = tasks.value.splice(index, 1);
+  expanded.value = expanded.value.filter(id => id !== removed?.id);
+  tasks.value.forEach((task, position) => { task.position = position; });
+}
+
+function saveTasks() {
+  emit('save', tasks.value.map((task, position) => ({
+    ...clone(task),
+    position,
+  })));
+}
+
+watch$1(
+  () => props.items,
+  value => {
+    tasks.value = (value || []).map(normalizeTask);
+    expanded.value = tasks.value.length === 1 ? [tasks.value[0].id] : [];
+  },
+  { immediate: true, deep: true },
+);
+
+return (_ctx, _cache) => {
+  const _component_VSpacer = _resolveComponent$1("VSpacer");
+  const _component_VBtn = _resolveComponent$1("VBtn");
+  const _component_VTooltip = _resolveComponent$1("VTooltip");
+  const _component_VAlert = _resolveComponent$1("VAlert");
+  const _component_VSwitch = _resolveComponent$1("VSwitch");
+  const _component_VChip = _resolveComponent$1("VChip");
+  const _component_VExpansionPanelTitle = _resolveComponent$1("VExpansionPanelTitle");
+  const _component_VTextField = _resolveComponent$1("VTextField");
+  const _component_VCol = _resolveComponent$1("VCol");
+  const _component_VSelect = _resolveComponent$1("VSelect");
+  const _component_VTextarea = _resolveComponent$1("VTextarea");
+  const _component_VRow = _resolveComponent$1("VRow");
+  const _component_VDivider = _resolveComponent$1("VDivider");
+  const _component_VExpansionPanelText = _resolveComponent$1("VExpansionPanelText");
+  const _component_VExpansionPanel = _resolveComponent$1("VExpansionPanel");
+  const _component_VExpansionPanels = _resolveComponent$1("VExpansionPanels");
+
+  return (_openBlock$1(), _createElementBlock$1("div", _hoisted_1$1, [
+    _createElementVNode$1("div", _hoisted_2$1, [
+      _createElementVNode$1("span", _hoisted_3$1, _toDisplayString$1(tasks.value.length) + " 条任务", 1),
+      _createVNode$1(_component_VSpacer),
+      _createVNode$1(_component_VTooltip, { text: "重新读取" }, {
+        activator: _withCtx$1(({ props: tooltipProps }) => [
+          _createVNode$1(_component_VBtn, _mergeProps$1(tooltipProps, {
+            icon: "mdi-refresh",
+            variant: "text",
+            loading: __props.loading,
+            "aria-label": "重新读取",
+            onClick: _cache[0] || (_cache[0] = $event => (emit('reload')))
+          }), null, 16, ["loading"])
+        ]),
+        _: 1
+      }),
+      _createVNode$1(_component_VBtn, {
+        "prepend-icon": "mdi-plus",
+        variant: "text",
+        onClick: addTask
+      }, {
+        default: _withCtx$1(() => [...(_cache[3] || (_cache[3] = [
+          _createTextVNode$1(" 添加任务 ", -1)
+        ]))]),
+        _: 1
+      }),
+      _createVNode$1(_component_VBtn, {
+        "prepend-icon": "mdi-content-save",
+        color: "primary",
+        variant: "tonal",
+        loading: __props.loading,
+        onClick: saveTasks
+      }, {
+        default: _withCtx$1(() => [...(_cache[4] || (_cache[4] = [
+          _createTextVNode$1(" 保存 ", -1)
+        ]))]),
+        _: 1
+      }, 8, ["loading"])
+    ]),
+    (tasks.value.length === 0)
+      ? (_openBlock$1(), _createBlock$1(_component_VAlert, {
+          key: 0,
+          type: "info",
+          variant: "tonal"
+        }, {
+          default: _withCtx$1(() => [...(_cache[5] || (_cache[5] = [
+            _createTextVNode$1(" 暂无 RSS 任务 ", -1)
+          ]))]),
+          _: 1
+        }))
+      : (_openBlock$1(), _createBlock$1(_component_VExpansionPanels, {
+          key: 1,
+          modelValue: expanded.value,
+          "onUpdate:modelValue": _cache[2] || (_cache[2] = $event => ((expanded).value = $event)),
+          multiple: "",
+          class: "task-panels"
+        }, {
+          default: _withCtx$1(() => [
+            (_openBlock$1(true), _createElementBlock$1(_Fragment$1, null, _renderList$1(tasks.value, (task, index) => {
+              return (_openBlock$1(), _createBlock$1(_component_VExpansionPanel, {
+                key: task.id,
+                value: task.id
+              }, {
+                default: _withCtx$1(() => [
+                  _createVNode$1(_component_VExpansionPanelTitle, null, {
+                    default: _withCtx$1(() => [
+                      _createElementVNode$1("div", _hoisted_4$1, [
+                        _createVNode$1(_component_VSwitch, {
+                          modelValue: task.enabled,
+                          "onUpdate:modelValue": $event => ((task.enabled) = $event),
+                          density: "compact",
+                          "hide-details": "",
+                          color: "primary",
+                          onClick: _cache[1] || (_cache[1] = _withModifiers(() => {}, ["stop"]))
+                        }, null, 8, ["modelValue", "onUpdate:modelValue"]),
+                        _createElementVNode$1("strong", null, _toDisplayString$1(task.name || `RSS任务 ${index + 1}`), 1),
+                        (task.config.qb_category)
+                          ? (_openBlock$1(), _createBlock$1(_component_VChip, {
+                              key: 0,
+                              size: "small",
+                              variant: "tonal"
+                            }, {
+                              default: _withCtx$1(() => [
+                                _createTextVNode$1(_toDisplayString$1(task.config.qb_category), 1)
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$1("", true),
+                        _createVNode$1(_component_VSpacer),
+                        _createVNode$1(_component_VTooltip, { text: "删除任务" }, {
+                          activator: _withCtx$1(({ props: tooltipProps }) => [
+                            _createVNode$1(_component_VBtn, _mergeProps$1({ ref_for: true }, tooltipProps, {
+                              icon: "mdi-delete-outline",
+                              size: "small",
+                              variant: "text",
+                              color: "error",
+                              "aria-label": "删除任务",
+                              onClick: _withModifiers($event => (removeTask(index)), ["stop"])
+                            }), null, 16, ["onClick"])
+                          ]),
+                          _: 2
+                        }, 1024)
+                      ])
+                    ]),
+                    _: 2
+                  }, 1024),
+                  _createVNode$1(_component_VExpansionPanelText, null, {
+                    default: _withCtx$1(() => [
+                      _createVNode$1(_component_VRow, { dense: "" }, {
+                        default: _withCtx$1(() => [
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.name,
+                                "onUpdate:modelValue": $event => ((task.name) = $event),
+                                label: "任务名称"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "8"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.rss_url,
+                                "onUpdate:modelValue": $event => ((task.config.rss_url) = $event),
+                                label: "RSS URL"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VSelect, {
+                                modelValue: task.config.qb_downloader,
+                                "onUpdate:modelValue": $event => ((task.config.qb_downloader) = $event),
+                                items: downloaderOptions.value,
+                                label: "QB下载器"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "items"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.qb_category,
+                                "onUpdate:modelValue": $event => ((task.config.qb_category) = $event),
+                                label: "QB分类"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.save_path,
+                                "onUpdate:modelValue": $event => ((task.config.save_path) = $event),
+                                label: "保存路径"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.rss_cron,
+                                "onUpdate:modelValue": $event => ((task.config.rss_cron) = $event),
+                                label: "RSS周期 (CRON)"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.start_cron,
+                                "onUpdate:modelValue": $event => ((task.config.start_cron) = $event),
+                                label: "开始任务 CRON"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "4"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.fallback_cron,
+                                "onUpdate:modelValue": $event => ((task.config.fallback_cron) = $event),
+                                label: "轮询兜底 CRON"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.name_contains,
+                                "onUpdate:modelValue": $event => ((task.config.name_contains) = $event),
+                                label: "限制条件 (名称包含)"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "3"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.delete_after_minutes,
+                                "onUpdate:modelValue": $event => ((task.config.delete_after_minutes) = $event),
+                                modelModifiers: { number: true },
+                                label: "完成后删除任务 (分钟)",
+                                type: "number",
+                                min: "0"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "3"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.upload_limit_kbps,
+                                "onUpdate:modelValue": $event => ((task.config.upload_limit_kbps) = $event),
+                                modelModifiers: { number: true },
+                                label: "上传限速 (kb/s)",
+                                type: "number",
+                                min: "0"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextarea, {
+                                modelValue: task.config.path_mappings,
+                                "onUpdate:modelValue": $event => ((task.config.path_mappings) = $event),
+                                label: "路径映射",
+                                rows: "3",
+                                "auto-grow": ""
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextarea, {
+                                modelValue: task.config.rename_rules,
+                                "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
+                                label: "重命名规则",
+                                rows: "3",
+                                "auto-grow": ""
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VSelect, {
+                                modelValue: task.config.site_id,
+                                "onUpdate:modelValue": $event => ((task.config.site_id) = $event),
+                                items: siteOptions.value,
+                                label: "站点访问身份"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "items"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$1(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$1(() => [
+                              _createVNode$1(_component_VTextField, {
+                                modelValue: task.config.cn_keywords,
+                                "onUpdate:modelValue": $event => ((task.config.cn_keywords) = $event),
+                                label: "国语关键词"
+                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                            ]),
+                            _: 2
+                          }, 1024)
+                        ]),
+                        _: 2
+                      }, 1024),
+                      _createVNode$1(_component_VDivider, { class: "mb-3" }),
+                      _createElementVNode$1("div", _hoisted_5$1, [
+                        (_openBlock$1(), _createElementBlock$1(_Fragment$1, null, _renderList$1(booleanOptions, (option) => {
+                          return _createVNode$1(_component_VSwitch, {
+                            key: option.key,
+                            modelValue: task.config[option.key],
+                            "onUpdate:modelValue": $event => ((task.config[option.key]) = $event),
+                            label: option.label,
+                            density: "compact",
+                            color: "primary",
+                            "hide-details": ""
+                          }, null, 8, ["modelValue", "onUpdate:modelValue", "label"])
+                        }), 64))
+                      ])
+                    ]),
+                    _: 2
+                  }, 1024)
+                ]),
+                _: 2
+              }, 1032, ["value"]))
+            }), 128))
+          ]),
+          _: 1
+        }, 8, ["modelValue"]))
+  ]))
+}
+}
+
+};
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-9dd422d3"]]);
+
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 
 
@@ -37,7 +542,6 @@ const _hoisted_20 = { class: "section-count" };
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
 
-
 const _sfc_main = {
   __name: 'AppPage',
   props: {
@@ -54,9 +558,13 @@ const activeTab = ref('overview');
 const vtTab = ref('rss_tasks');
 const loading = ref(false);
 const errorMessage = ref('');
+const successMessage = ref('');
 const overview = ref({ plugin: {}, counts: {}, capabilities: {} });
 const rows = ref([]);
 const total = ref(0);
+const rssTasks = ref([]);
+const allQbDownloaders = ref([]);
+const siteIdentities = ref([]);
 const mediaState = ref('');
 const mediaType = ref('');
 const qbDownloaders = ref([]);
@@ -98,19 +606,20 @@ const torrentHeaders = [
   { title: 'Hash', key: 'info_hash', width: 120 },
 ];
 
-const rssTaskHeaders = [
-  { title: '任务', key: 'name', minWidth: 200 },
-  { title: '启用', key: 'enabled', width: 80 },
-  { title: '顺序', key: 'position', width: 80 },
-  { title: '更新时间', key: 'updated_at', minWidth: 170 },
-];
-
 const rssHistoryHeaders = [
   { title: '标题', key: 'title', minWidth: 220 },
   { title: '任务', key: 'task_id', width: 150 },
   { title: '状态', key: 'status', width: 120 },
   { title: '原因', key: 'reason', minWidth: 220 },
   { title: '时间', key: 'updated_at', minWidth: 170 },
+];
+
+const siteHeaders = [
+  { title: '站点', key: 'name', minWidth: 180 },
+  { title: '地址', key: 'domain', minWidth: 260 },
+  { title: '认证方式', key: 'auth_mode', width: 120 },
+  { title: '启用', key: 'enabled', width: 90 },
+  { title: '状态', key: 'ready', width: 100 },
 ];
 
 const taskHeaders = [
@@ -176,21 +685,56 @@ async function loadQbDownloaders() {
   const response = unwrap(
     await props.api.get('plugin/RssAllInOne/qb/downloaders'),
   );
-  qbDownloaders.value = (response?.items || []).map(item => ({
-    title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
-    value: item.name,
-    disabled: !item.ready,
-  }));
+  allQbDownloaders.value = response?.items || [];
+  qbDownloaders.value = allQbDownloaders.value
+    .filter(item => (item.categories || []).length > 0)
+    .map(item => ({
+      title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'} · ${item.categories?.join(', ') || '无管理分类'}`,
+      value: item.name,
+      disabled: !item.ready,
+    }));
+}
+
+async function loadSites(strict = false) {
+  const response = unwrap(await props.api.get('plugin/RssAllInOne/sites'));
+  if (!response?.success) {
+    siteIdentities.value = [];
+    if (strict) throw new Error(response?.message || '读取站点身份失败')
+    return
+  }
+  siteIdentities.value = response.items || [];
 }
 
 async function loadActive() {
   loading.value = true;
   errorMessage.value = '';
+  successMessage.value = '';
   try {
     await loadOverview();
     if (activeTab.value === 'overview') {
       rows.value = [];
       total.value = 0;
+      return
+    }
+
+    if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
+      const [response] = await Promise.all([
+        props.api.get('plugin/RssAllInOne/rss/tasks', {
+          params: { offset: 0, limit: 100 },
+        }).then(unwrap),
+        loadQbDownloaders(),
+        loadSites(false),
+      ]);
+      rssTasks.value = response?.items || [];
+      rows.value = [];
+      total.value = Number(response?.total || 0);
+      return
+    }
+
+    if (activeTab.value === 'vt' && vtTab.value === 'sites') {
+      await loadSites(true);
+      rows.value = siteIdentities.value;
+      total.value = siteIdentities.value.length;
       return
     }
 
@@ -213,8 +757,6 @@ async function loadActive() {
       };
     } else if (activeTab.value === 'tasks') {
       path = 'tasks';
-    } else if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
-      path = 'rss/tasks';
     } else if (activeTab.value === 'vt' && vtTab.value === 'rss_history') {
       path = 'rss/history';
     }
@@ -245,6 +787,28 @@ async function loadActive() {
     errorMessage.value = error?.message || '数据加载失败';
     rows.value = [];
     total.value = 0;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function saveRssTasks(items) {
+  loading.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/tasks', { items }),
+    );
+    if (!response?.success) {
+      throw new Error(response?.message || 'RSS 任务保存失败')
+    }
+    rssTasks.value = response.items || [];
+    total.value = Number(response.total || 0);
+    successMessage.value = response.message || 'RSS 任务已保存';
+    await Promise.all([loadOverview(), loadQbDownloaders()]);
+  } catch (error) {
+    errorMessage.value = error?.message || 'RSS 任务保存失败';
   } finally {
     loading.value = false;
   }
@@ -380,7 +944,7 @@ return (_ctx, _cache) => {
           class: "me-2"
         }, {
           default: _withCtx(() => [
-            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.3.0'), 1)
+            _createTextVNode("v" + _toDisplayString(overview.value.plugin?.version || '0.4.0'), 1)
           ]),
           _: 1
         }),
@@ -436,6 +1000,19 @@ return (_ctx, _cache) => {
         }, {
           default: _withCtx(() => [
             _createTextVNode(_toDisplayString(errorMessage.value), 1)
+          ]),
+          _: 1
+        }))
+      : _createCommentVNode("", true),
+    (successMessage.value)
+      ? (_openBlock(), _createBlock(_component_VAlert, {
+          key: 1,
+          type: "success",
+          variant: "tonal",
+          class: "status-alert"
+        }, {
+          default: _withCtx(() => [
+            _createTextVNode(_toDisplayString(successMessage.value), 1)
           ]),
           _: 1
         }))
@@ -750,7 +1327,7 @@ return (_ctx, _cache) => {
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
                         default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
-                          _createTextVNode("站点身份", -1)
+                          _createTextVNode("站点访问身份", -1)
                         ]))]),
                         _: 1
                       })
@@ -758,17 +1335,15 @@ return (_ctx, _cache) => {
                     _: 1
                   }, 8, ["modelValue"]),
                   (vtTab.value === 'rss_tasks')
-                    ? (_openBlock(), _createBlock(_component_VDataTable, {
+                    ? (_openBlock(), _createBlock(RssTaskEditor, {
                         key: 0,
-                        headers: rssTaskHeaders,
-                        items: rows.value,
+                        items: rssTasks.value,
+                        downloaders: allQbDownloaders.value,
+                        sites: siteIdentities.value,
                         loading: loading.value,
-                        density: "compact",
-                        "item-value": "id",
-                        "hide-default-footer": "",
-                        class: "data-table",
-                        "no-data-text": "暂无 RSS 任务"
-                      }, null, 8, ["items", "loading"]))
+                        onSave: saveRssTasks,
+                        onReload: loadActive
+                      }, null, 8, ["items", "downloaders", "sites", "loading"]))
                     : (vtTab.value === 'rss_history')
                       ? (_openBlock(), _createBlock(_component_VDataTable, {
                           key: 1,
@@ -781,40 +1356,43 @@ return (_ctx, _cache) => {
                           class: "data-table",
                           "no-data-text": "暂无 RSS 历史"
                         }, null, 8, ["items", "loading"]))
-                      : (_openBlock(), _createBlock(_component_VTable, {
+                      : (_openBlock(), _createBlock(_component_VDataTable, {
                           key: 2,
+                          headers: siteHeaders,
+                          items: siteIdentities.value,
+                          loading: loading.value,
                           density: "compact",
-                          class: "capability-table"
+                          "item-value": "id",
+                          "hide-default-footer": "",
+                          class: "data-table",
+                          "no-data-text": "暂无可用站点身份"
                         }, {
-                          default: _withCtx(() => [
-                            _cache[23] || (_cache[23] = _createElementVNode("thead", null, [
-                              _createElementVNode("tr", null, [
-                                _createElementVNode("th", null, "来源"),
-                                _createElementVNode("th", null, "模式"),
-                                _createElementVNode("th", null, "状态")
-                              ])
-                            ], -1)),
-                            _createElementVNode("tbody", null, [
-                              _createElementVNode("tr", null, [
-                                _cache[21] || (_cache[21] = _createElementVNode("td", null, "当前 MoviePilot", -1)),
-                                _cache[22] || (_cache[22] = _createElementVNode("td", null, "站点服务", -1)),
-                                _createElementVNode("td", null, [
-                                  _createVNode(_component_VChip, {
-                                    size: "small",
-                                    variant: "tonal",
-                                    color: "warning"
-                                  }, {
-                                    default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
-                                      _createTextVNode("适配器待接入", -1)
-                                    ]))]),
-                                    _: 1
-                                  })
-                                ])
-                              ])
-                            ])
+                          "item.enabled": _withCtx(({ item }) => [
+                            _createVNode(_component_VChip, {
+                              color: item.enabled ? 'success' : 'default',
+                              size: "small",
+                              variant: "tonal"
+                            }, {
+                              default: _withCtx(() => [
+                                _createTextVNode(_toDisplayString(item.enabled ? '已启用' : '未启用'), 1)
+                              ]),
+                              _: 2
+                            }, 1032, ["color"])
+                          ]),
+                          "item.ready": _withCtx(({ item }) => [
+                            _createVNode(_component_VChip, {
+                              color: item.ready ? 'success' : 'warning',
+                              size: "small",
+                              variant: "tonal"
+                            }, {
+                              default: _withCtx(() => [
+                                _createTextVNode(_toDisplayString(item.ready ? '可用' : '未就绪'), 1)
+                              ]),
+                              _: 2
+                            }, 1032, ["color"])
                           ]),
                           _: 1
-                        }))
+                        }, 8, ["items", "loading"]))
                 ]))
               : (activeTab.value === 'tasks')
                 ? (_openBlock(), _createElementBlock("section", _hoisted_19, [
@@ -837,6 +1415,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c4014c0b"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-26377412"]]);
 
 export { AppPage as default };

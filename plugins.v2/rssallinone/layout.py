@@ -26,9 +26,14 @@ DEFAULT_SOURCE_ROUTES = [
         "enabled": True,
     },
 ]
-DEFAULT_CATEGORY_GROUPS = {
-    "movie": ["演唱会", "动画电影", "华语电影", "外语电影"],
-    "series": ["儿童剧", "动漫", "国产剧", "日韩剧", "欧美剧", "纪录片", "综艺"],
+MEDIA_GROUP_ALIASES = {
+    "movie": "movie",
+    "movies": "movie",
+    "电影": "movie",
+    "tv": "series",
+    "series": "series",
+    "电视剧": "series",
+    "剧集": "series",
 }
 
 
@@ -69,27 +74,17 @@ class LibraryLayout:
         self,
         inventory_root: str,
         routes: Sequence[SourceRoute],
-        category_groups: Dict[str, Sequence[str]],
         errors: Iterable[str] = (),
     ):
         self.inventory_root = str(inventory_root or "").strip()
         self.routes = list(routes)
-        self.category_groups = {
-            str(group): [str(item) for item in items]
-            for group, items in category_groups.items()
-        }
         self.config_errors = list(errors)
-        self._categories: Dict[str, Tuple[str, str]] = {}
-        for group, categories in self.category_groups.items():
-            for category in categories:
-                self._categories[category.casefold()] = (category, group)
 
     @classmethod
     def from_config(
         cls,
         inventory_root: object,
         source_routes: object,
-        category_groups: object,
     ) -> "LibraryLayout":
         errors: List[str] = []
         normalized_root = str(inventory_root or "").strip()
@@ -132,41 +127,22 @@ class LibraryLayout:
                 enabled=enabled,
             ))
 
-        group_payload = _structured_value(category_groups, {})
-        groups: Dict[str, List[str]] = {}
-        category_owner: Dict[str, str] = {}
-        if not isinstance(group_payload, dict):
-            errors.append("分类分组必须是对象")
-            group_payload = {}
-        for group, values in group_payload.items():
-            if isinstance(values, str):
-                values = [line.strip() for line in values.splitlines() if line.strip()]
-            if not isinstance(values, list):
-                errors.append(f"分类组 {group} 必须是列表")
-                continue
-            normalized: List[str] = []
-            for value in values:
-                category = str(value or "").strip()
-                if not category:
-                    continue
-                identity = category.casefold()
-                if identity in category_owner:
-                    errors.append(
-                        f"分类 {category} 同时出现在 {category_owner[identity]} 和 {group}"
-                    )
-                    continue
-                category_owner[identity] = str(group)
-                normalized.append(category)
-            groups[str(group)] = normalized
-        return cls(normalized_root, routes, groups, errors)
+        return cls(normalized_root, routes, errors)
 
-    def category_group(self, category: str) -> str:
-        item = self._categories.get(str(category or "").strip().casefold())
-        return item[1] if item else ""
+    @staticmethod
+    def media_group(media_type: str) -> str:
+        return MEDIA_GROUP_ALIASES.get(
+            str(media_type or "").strip().casefold(),
+            "",
+        )
 
-    def canonical_category(self, category: str) -> str:
-        item = self._categories.get(str(category or "").strip().casefold())
-        return item[0] if item else ""
+    @staticmethod
+    def canonical_category(category: str) -> str:
+        value = str(category or "").strip()
+        path = _pure_path(value)
+        if not value or len(path.parts) != 1 or path.parts[0] in {".", ".."}:
+            return ""
+        return value
 
     def inventory_base(self, category: str) -> str:
         canonical = self.canonical_category(category)
@@ -183,11 +159,18 @@ class LibraryLayout:
             return None
         return max(matches, key=lambda route: len(_pure_path(route.prefix).parts))
 
-    def link_base(self, source_path: str, category: str) -> Tuple[str, str]:
+    def link_base(
+        self,
+        source_path: str,
+        category: str,
+        media_type: str,
+    ) -> Tuple[str, str]:
         canonical = self.canonical_category(category)
-        group = self.category_group(category)
-        if not canonical or not group:
-            return "", "MP 分类未配置目录分组"
+        group = self.media_group(media_type)
+        if not canonical:
+            return "", "MoviePilot 未返回有效分类"
+        if not group:
+            return "", "MoviePilot 未返回可用的电影或剧集类型"
         route = self.select_route(source_path)
         if not route:
             return "", "源路径没有命中任何已启用路由"
@@ -201,12 +184,13 @@ class LibraryLayout:
         source_path: str,
         category: str,
         expected_files: Sequence[Dict[str, Any]],
+        media_type: str = "",
     ) -> Dict[str, Any]:
         canonical = self.canonical_category(category)
-        group = self.category_group(category)
+        group = self.media_group(media_type)
         inventory_base = self.inventory_base(category)
         route = self.select_route(source_path)
-        link_base, link_error = self.link_base(source_path, category)
+        link_base, link_error = self.link_base(source_path, category, media_type)
         inventory_files = []
         link_files = []
         path_errors: List[str] = []
@@ -232,13 +216,14 @@ class LibraryLayout:
                 })
         errors = list(self.config_errors)
         if not canonical:
-            errors.append(f"MP 分类未配置：{category or '<empty>'}")
+            errors.append(f"MoviePilot 分类无效：{category or '<empty>'}")
         if not inventory_base:
             errors.append("无法生成最终媒体库库存目录")
         errors.extend(path_errors)
         return {
             "category": canonical or str(category or ""),
             "group": group,
+            "media_type": str(media_type or ""),
             "source_path": str(source_path or ""),
             "source_route": route.to_dict() if route else None,
             "inventory_base": inventory_base,
@@ -252,12 +237,12 @@ class LibraryLayout:
     def capability(self) -> Dict[str, Any]:
         root = Path(self.inventory_root) if self.inventory_root else None
         return {
-            "ready": bool(root and root.is_dir() and self._categories),
-            "phase": "category_layout",
+            "ready": bool(root and root.is_dir()),
+            "phase": "moviepilot_media_type_layout",
             "inventory_root": self.inventory_root,
             "inventory_accessible": bool(root and root.is_dir()),
             "routes": len([route for route in self.routes if route.enabled]),
-            "categories": len(self._categories),
+            "category_scope": "all_moviepilot_categories",
             "config_errors": list(self.config_errors),
         }
 
@@ -265,7 +250,6 @@ class LibraryLayout:
         return {
             "inventory_root": self.inventory_root,
             "source_routes": [route.to_dict() for route in self.routes],
-            "category_groups": self.category_groups,
             "config_errors": list(self.config_errors),
         }
 
@@ -274,7 +258,6 @@ def default_layout_config() -> Dict[str, Any]:
     return {
         "inventory_root": DEFAULT_INVENTORY_ROOT,
         "source_routes": json.loads(json.dumps(DEFAULT_SOURCE_ROUTES, ensure_ascii=False)),
-        "category_groups": json.loads(json.dumps(DEFAULT_CATEGORY_GROUPS, ensure_ascii=False)),
     }
 
 

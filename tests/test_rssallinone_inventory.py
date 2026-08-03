@@ -1,6 +1,8 @@
 """Local inventory and read-only qB synchronization checks."""
 
 import importlib.util
+import json
+import sqlite3
 import sys
 import tempfile
 import types
@@ -105,6 +107,58 @@ class LocalInventoryCheckerTest(unittest.TestCase):
 
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
+    @staticmethod
+    def add_rss_task(
+        store,
+        *,
+        task_id="rss-task",
+        downloader="qb-main",
+        category="movie",
+        enabled=True,
+    ):
+        now = database.utc_now()
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                """INSERT INTO rss_tasks(
+                    id, name, enabled, position, config_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    task_id,
+                    int(enabled),
+                    0,
+                    json.dumps({
+                        "qb_downloader": downloader,
+                        "qb_category": category,
+                    }, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    @staticmethod
+    def update_rss_task_category(store, task_id, category):
+        connection = sqlite3.connect(store.path)
+        try:
+            connection.execute(
+                "UPDATE rss_tasks SET config_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps({
+                        "qb_downloader": "qb-main",
+                        "qb_category": category,
+                    }, ensure_ascii=False),
+                    database.utc_now(),
+                    task_id,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
     def test_sync_reuses_recognition_but_rechecks_local_inventory(self) -> None:
         class Meta:
             begin_season = None
@@ -201,6 +255,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             directory = Path(directory)
             store = database.SQLiteStore(directory / "state.db")
             store.initialize()
+            self.add_rss_task(store)
             library_root = directory / "library"
             expected = (
                 library_root
@@ -223,7 +278,6 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                         "link_roots": {"movie": str(directory / "staging")},
                         "enabled": True,
                     }],
-                    {"movie": ["华语电影"]},
                 ),
             )
 
@@ -245,6 +299,114 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(second["inventory_state"], "missing")
             self.assertEqual(gateway.recognitions, 1)
             self.assertEqual(gateway.plans, 1)
+
+    def test_sync_only_recognizes_rss_task_downloader_category_pairs(self) -> None:
+        class Gateway:
+            recognitions = []
+
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [
+                    {
+                        "hash": "MANAGED",
+                        "title": "Managed.Movie.2026",
+                        "category": "movie",
+                        "content_path": "/downloads/managed.mkv",
+                    },
+                    {
+                        "hash": "OTHER",
+                        "title": "Private.Movie.2026",
+                        "category": "private",
+                        "content_path": "/downloads/private.mkv",
+                    },
+                ]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            def recognize(self, title):
+                self.recognitions.append(title)
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, category="movie", enabled=False)
+            gateway = Gateway()
+            store.create_background_task("filtered", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(store=store, gateway=gateway).run(
+                "filtered"
+            )
+
+            self.assertEqual(gateway.recognitions, ["Managed.Movie.2026"])
+            self.assertEqual(result["scanned"], 1)
+            self.assertEqual(result["filtered_out"], 1)
+            self.assertIsNotNone(store.get_torrent_snapshot("qb-main", "managed"))
+            self.assertIsNone(store.get_torrent_snapshot("qb-main", "other"))
+            self.assertEqual(
+                result["managed_scope"]["downloaders"],
+                {"qb-main": ["movie"]},
+            )
+
+            self.update_rss_task_category(store, "rss-task", "new-category")
+
+            class OfflineGateway(Gateway):
+                @staticmethod
+                def list_downloaders():
+                    return [qb_sync.DownloaderView(
+                        name="qb-main",
+                        type="qbittorrent",
+                        enabled=True,
+                        default=True,
+                        ready=False,
+                    )]
+
+            store.create_background_task("scope-changed", qb_sync.QB_TASK_TYPE)
+            changed = qb_sync.QbSyncService(
+                store=store,
+                gateway=OfflineGateway(),
+            ).run("scope-changed")
+            self.assertEqual(changed["out_of_scope"], 1)
+            self.assertEqual(store.list_torrents()["total"], 0)
+            self.assertEqual(store.list_media()["total"], 0)
+
+    def test_sync_never_falls_back_to_all_torrents_without_rss_scope(self) -> None:
+        class Gateway:
+            listed = False
+
+            @staticmethod
+            def list_downloaders():
+                raise AssertionError("无 RSS 分类时不应读取下载器")
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            store.create_background_task("empty-scope", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "empty-scope"
+            )
+
+            task = store.get_background_task("empty-scope")
+            self.assertEqual(result["scanned"], 0)
+            self.assertEqual(task["state"], "failed")
+            self.assertIn("VT+", task["error_message"])
 
 
 if __name__ == "__main__":

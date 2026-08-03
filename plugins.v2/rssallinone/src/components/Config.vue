@@ -39,10 +39,6 @@ const defaults = {
   qb_refresh_cron: '*/10 * * * *',
   inventory_root: '/SSD/云盘/strm/影视库',
   source_routes: defaultRoutes,
-  category_groups: {
-    movie: ['演唱会', '动画电影', '华语电影', '外语电影'],
-    series: ['儿童剧', '动漫', '国产剧', '日韩剧', '欧美剧', '纪录片', '综艺'],
-  },
   cd2_grpc_addr: '',
   cd2_token: '',
   catchup_base_url: '',
@@ -91,19 +87,8 @@ function normalizeConfig(initial = {}) {
   }
   const routeValue = parseStructured(initial.source_routes, defaultRoutes)
   const routes = Array.isArray(routeValue) ? routeValue : defaultRoutes
-  const groupValue = parseStructured(initial.category_groups, defaults.category_groups)
-  const groups = groupValue && typeof groupValue === 'object'
-    ? groupValue
-    : defaults.category_groups
   next.source_routes = routes.map(normalizeRoute)
-  next.category_groups = {
-    movie: Array.isArray(groups.movie)
-      ? [...groups.movie]
-      : [...defaults.category_groups.movie],
-    series: Array.isArray(groups.series)
-      ? [...groups.series]
-      : [...defaults.category_groups.series],
-  }
+  delete next.category_groups
   return next
 }
 
@@ -239,26 +224,6 @@ onMounted(() => {
                 </tr>
               </tbody>
             </VTable>
-          </VCol>
-          <VCol cols="12" md="6">
-            <VCombobox
-              v-model="config.category_groups.movie"
-              label="电影目录组分类"
-              multiple
-              chips
-              closable-chips
-              hide-selected
-            />
-          </VCol>
-          <VCol cols="12" md="6">
-            <VCombobox
-              v-model="config.category_groups.series"
-              label="剧集目录组分类"
-              multiple
-              chips
-              closable-chips
-              hide-selected
-            />
           </VCol>
         </VRow>
       </VWindowItem>

@@ -79,7 +79,7 @@ return (_ctx, _cache) => {
         }),
         _createElementVNode("div", null, [
           _cache[1] || (_cache[1] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
-          _createElementVNode("div", _hoisted_2, "v" + _toDisplayString(overview.value.plugin?.version || '0.3.0'), 1)
+          _createElementVNode("div", _hoisted_2, "v" + _toDisplayString(overview.value.plugin?.version || '0.4.0'), 1)
         ]),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "刷新状态" }, {
@@ -211,6 +211,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-46fb352d"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-55ca8926"]]);
 
 export { Page as default };

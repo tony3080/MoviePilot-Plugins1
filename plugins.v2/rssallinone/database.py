@@ -367,6 +367,55 @@ class SQLiteStore:
                     [seen_at, downloader_id, *batch],
                 )
 
+    def mark_torrents_outside_scope(
+        self,
+        allowed_scope: Dict[str, List[str]],
+        changed_at: str,
+    ) -> int:
+        normalized = {
+            str(downloader or "").strip(): {
+                str(category or "").strip()
+                for category in categories
+                if str(category or "").strip()
+            }
+            for downloader, categories in (allowed_scope or {}).items()
+            if str(downloader or "").strip()
+        }
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT downloader_id, info_hash, category, media_id
+                   FROM torrent_snapshots WHERE present = 1"""
+            ).fetchall()
+            outside = [
+                (
+                    str(row["downloader_id"]),
+                    str(row["info_hash"]),
+                    str(row["media_id"] or ""),
+                )
+                for row in rows
+                if str(row["category"] or "").strip()
+                not in normalized.get(str(row["downloader_id"]), set())
+            ]
+            connection.executemany(
+                """UPDATE torrent_snapshots
+                   SET present = 0,
+                       missing_since = COALESCE(missing_since, ?),
+                       updated_at = ?
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                [
+                    (changed_at, changed_at, downloader, info_hash)
+                    for downloader, info_hash, _media_id in outside
+                ],
+            )
+            connection.executemany(
+                """DELETE FROM media_items
+                   WHERE id = ? AND state IN (
+                       'discovered', 'identified', 'unidentified', 'existing'
+                   )""",
+                [(media_id,) for _downloader, _info_hash, media_id in outside if media_id],
+            )
+        return len(outside)
+
     def upsert_torrent_snapshot(self, record: Dict[str, Any]) -> None:
         fields = (
             "downloader_id", "info_hash", "name", "state", "category",
@@ -547,6 +596,46 @@ class SQLiteStore:
                 (safe_limit, safe_offset),
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
+
+    def list_all_rss_tasks(self) -> List[Dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM rss_tasks
+                   ORDER BY position ASC, created_at ASC"""
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
+    def replace_rss_tasks(
+        self,
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        now = utc_now()
+        with self.connection() as connection:
+            existing = {
+                str(row["id"]): str(row["created_at"])
+                for row in connection.execute(
+                    "SELECT id, created_at FROM rss_tasks"
+                ).fetchall()
+            }
+            connection.execute("DELETE FROM rss_tasks")
+            connection.executemany(
+                """INSERT INTO rss_tasks(
+                    id, name, enabled, position, config_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        task["id"],
+                        task["name"],
+                        int(bool(task.get("enabled"))),
+                        int(task.get("position") or 0),
+                        self._json_dump(task.get("config") or {}),
+                        existing.get(task["id"], now),
+                        now,
+                    )
+                    for task in tasks
+                ],
+            )
+        return self.list_all_rss_tasks()
 
     def list_rss_history(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
         return self._list_table("rss_history", "created_at", offset, limit)

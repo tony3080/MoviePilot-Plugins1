@@ -40,7 +40,7 @@ onMounted(loadOverview)
       <VIcon icon="mdi-rss" color="primary" class="ms-3 me-3" />
       <div>
         <div class="text-h6">RSS一条龙</div>
-        <div class="text-caption text-medium-emphasis">v{{ overview.plugin?.version || '0.3.0' }}</div>
+        <div class="text-caption text-medium-emphasis">v{{ overview.plugin?.version || '0.4.0' }}</div>
       </div>
       <VSpacer />
       <VTooltip text="刷新状态">

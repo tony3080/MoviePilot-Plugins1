@@ -6,7 +6,7 @@ import hashlib
 import threading
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
@@ -14,6 +14,18 @@ from .layout import LibraryLayout
 
 
 QB_TASK_TYPE = "qb_refresh"
+QB_DOWNLOADER_KEYS = (
+    "qb_downloader",
+    "qb_downloader_id",
+    "downloader",
+    "downloader_id",
+)
+QB_CATEGORY_KEYS = (
+    "qb_category",
+    "qbittorrent_category",
+    "download_category",
+    "category",
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +43,98 @@ class DownloaderView:
             "enabled": self.enabled,
             "default": self.default,
             "ready": self.ready,
+        }
+
+
+@dataclass(frozen=True)
+class RssTaskQbRule:
+    task_id: str
+    task_name: str
+    downloader: str
+    category: str
+    enabled: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "task_name": self.task_name,
+            "downloader": self.downloader,
+            "category": self.category,
+            "enabled": self.enabled,
+        }
+
+
+class RssTaskQbScope:
+    """Exact qB downloader/category pairs declared by saved VT+ RSS tasks."""
+
+    def __init__(
+        self,
+        rules: Sequence[RssTaskQbRule],
+        ignored_tasks: Sequence[Dict[str, str]] = (),
+    ):
+        self.rules = list(rules)
+        self.ignored_tasks = list(ignored_tasks)
+        self._categories: Dict[str, List[str]] = {}
+        for rule in self.rules:
+            categories = self._categories.setdefault(rule.downloader, [])
+            if rule.category not in categories:
+                categories.append(rule.category)
+
+    @classmethod
+    def from_tasks(cls, tasks: Iterable[Dict[str, Any]]) -> "RssTaskQbScope":
+        rules: List[RssTaskQbRule] = []
+        ignored: List[Dict[str, str]] = []
+        for index, task in enumerate(tasks or [], start=1):
+            task_id = str(task.get("id") or f"task-{index}").strip()
+            task_name = str(task.get("name") or task_id).strip()
+            config = task.get("config") if isinstance(task.get("config"), dict) else {}
+            qb_config = config.get("qb") if isinstance(config.get("qb"), dict) else {}
+            sources = (qb_config, config, task)
+            downloader = _first_text(sources, QB_DOWNLOADER_KEYS)
+            category = _first_text(sources, QB_CATEGORY_KEYS)
+            if not downloader or not category:
+                missing = []
+                if not downloader:
+                    missing.append("QB下载器")
+                if not category:
+                    missing.append("QB分类")
+                ignored.append({
+                    "task_id": task_id,
+                    "task_name": task_name,
+                    "reason": f"缺少{'和'.join(missing)}",
+                })
+                continue
+            rules.append(RssTaskQbRule(
+                task_id=task_id,
+                task_name=task_name,
+                downloader=downloader,
+                category=category,
+                enabled=bool(task.get("enabled")),
+            ))
+        return cls(rules, ignored)
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.rules)
+
+    def categories_for(self, downloader: str) -> List[str]:
+        return list(self._categories.get(str(downloader or "").strip(), []))
+
+    def downloader_categories(self) -> Dict[str, List[str]]:
+        return {
+            downloader: list(categories)
+            for downloader, categories in self._categories.items()
+        }
+
+    def matches(self, downloader: str, category: str) -> bool:
+        return str(category or "").strip() in self.categories_for(downloader)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "downloaders": self.downloader_categories(),
+            "rules": [rule.to_dict() for rule in self.rules],
+            "ignored_tasks": list(self.ignored_tasks),
         }
 
 
@@ -264,7 +368,7 @@ class QbSyncService:
         self.store = store
         self.gateway = gateway or MoviePilotQbGateway()
         self.inventory_checker = inventory_checker or LocalInventoryChecker([])
-        self.library_layout = library_layout or LibraryLayout("", [], {})
+        self.library_layout = library_layout or LibraryLayout("", [])
         self.logger = logger
 
     def run(
@@ -277,12 +381,30 @@ class QbSyncService:
         result: Dict[str, Any] = {
             "downloaders": 0,
             "scanned": 0,
+            "filtered_out": 0,
             "recognized": 0,
             "unrecognized": 0,
             "existing": 0,
             "errors": [],
         }
-        batches: List[Tuple[DownloaderView, List[Any]]] = []
+        scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
+        result["managed_scope"] = scope.to_dict()
+        result["out_of_scope"] = self.store.mark_torrents_outside_scope(
+            scope.downloader_categories(),
+            utc_now(),
+        )
+        if not scope.ready:
+            message = "VT+ 没有已保存且同时配置 QB下载器、QB分类的 RSS 任务"
+            result["errors"].append({"message": message})
+            self.store.finish_background_task(
+                task_id,
+                "failed",
+                result=result,
+                error_message=message,
+            )
+            return result
+
+        batches: List[Tuple[DownloaderView, List[Dict[str, Any]]]] = []
         downloaders = self.gateway.list_downloaders()
         if not downloaders:
             raise RuntimeError("当前 MoviePilot 没有已启用的 qBittorrent 下载器")
@@ -290,6 +412,10 @@ class QbSyncService:
         for downloader in downloaders:
             if stop_event and stop_event.is_set():
                 return self._cancel(task_id, result)
+            categories = scope.categories_for(downloader.name)
+            if not categories:
+                self.store.mark_downloader_seen(downloader.name, [], utc_now())
+                continue
             if not downloader.ready:
                 result["errors"].append({
                     "downloader": downloader.name,
@@ -297,10 +423,18 @@ class QbSyncService:
                 })
                 continue
             try:
-                torrents = self.gateway.list_torrents(downloader.name)
+                all_torrents = [
+                    self.gateway.torrent_dict(item)
+                    for item in self.gateway.list_torrents(downloader.name)
+                ]
+                torrents = [
+                    item for item in all_torrents
+                    if scope.matches(downloader.name, item.get("category") or "")
+                ]
+                result["filtered_out"] += len(all_torrents) - len(torrents)
                 seen_at = utc_now()
                 seen_hashes = [
-                    str(self.gateway.torrent_dict(item).get("hash") or "").lower()
+                    str(item.get("hash") or "").lower()
                     for item in torrents
                 ]
                 self.store.mark_downloader_seen(
@@ -320,10 +454,9 @@ class QbSyncService:
         processed = succeeded = failed = 0
 
         for downloader, torrents in batches:
-            for torrent in torrents:
+            for raw in torrents:
                 if stop_event and stop_event.is_set():
                     return self._cancel(task_id, result)
-                raw = self.gateway.torrent_dict(torrent)
                 title = str(raw.get("title") or raw.get("name") or "").strip()
                 info_hash = str(raw.get("hash") or "").strip().lower()
                 processed += 1
@@ -438,6 +571,7 @@ class QbSyncService:
                     source_path=content_path,
                     category=category,
                     expected_files=inventory_plan.get("expected_files") or [],
+                    media_type=media_type,
                 )
                 inventory_state, inventory_details = self.inventory_checker.check_root(
                     path_plan.get("inventory_base") or "",
@@ -600,3 +734,20 @@ class QbSyncService:
     def _log(self, level: str, message: str) -> None:
         if self.logger and hasattr(self.logger, level):
             getattr(self.logger, level)(message)
+
+
+def _first_text(
+    sources: Iterable[Dict[str, Any]],
+    keys: Sequence[str],
+) -> str:
+    for source in sources:
+        for key in keys:
+            if key not in source:
+                continue
+            value = source.get(key)
+            if isinstance(value, dict):
+                value = value.get("value") or value.get("name") or value.get("id")
+            text = str(value or "").strip()
+            if text:
+                return text
+    return ""

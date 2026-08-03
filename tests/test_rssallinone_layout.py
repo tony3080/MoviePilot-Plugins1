@@ -34,27 +34,28 @@ class LibraryLayoutTest(unittest.TestCase):
         self.layout = layout.LibraryLayout.from_config(
             defaults["inventory_root"],
             defaults["source_routes"],
-            defaults["category_groups"],
         )
 
     def test_current_moviepilot_paths_are_preconfigured(self) -> None:
         self.assertEqual(self.layout.inventory_root, "/SSD/云盘/strm/影视库")
-        self.assertEqual(self.layout.category_group("纪录片"), "series")
-        self.assertEqual(self.layout.category_group("华语电影"), "movie")
+        self.assertEqual(self.layout.media_group("tv"), "series")
+        self.assertEqual(self.layout.media_group("movie"), "movie")
         self.assertEqual(self.layout.config_errors, [])
 
-    def test_up_route_uses_category_group(self) -> None:
+    def test_up_route_uses_media_type_for_all_categories(self) -> None:
         movie = self.layout.plan(
             "/MP/downloads/movie.mkv",
-            "华语电影",
+            "实验电影",
             [{"relative_path": "电影 (2026)/电影 (2026).mkv", "size": 4}],
+            media_type="movie",
         )
         documentary = self.layout.plan(
             "/MP/downloads/doc/S01E01.mkv",
             "纪录片",
             [{"relative_path": "纪录片 (2026)/Season 01/纪录片 S01E01.mkv", "size": 4}],
+            media_type="tv",
         )
-        self.assertEqual(movie["link_base"], "/MP/电影UP/华语电影")
+        self.assertEqual(movie["link_base"], "/MP/电影UP/实验电影")
         self.assertEqual(documentary["link_base"], "/MP/剧集UP/纪录片")
         self.assertEqual(
             documentary["inventory_base"],
@@ -66,6 +67,7 @@ class LibraryLayoutTest(unittest.TestCase):
             "/SSD/downloads/show/S01E01.mkv",
             "国产剧",
             [{"relative_path": "剧名 (2026)/Season 01/剧名 S01E01.mkv", "size": 4}],
+            media_type="tv",
         )
         self.assertEqual(result["source_route"]["name"], "SSD")
         self.assertEqual(result["link_base"], "/SSD/云盘/l/国产剧")
@@ -91,16 +93,16 @@ class LibraryLayoutTest(unittest.TestCase):
                     "enabled": True,
                 },
             ],
-            {"series": ["国产剧"]},
         )
         self.assertEqual(configured.select_route("/SSD/fast/a.mkv").name, "nested")
         self.assertIsNone(configured.select_route("/SSD2/a.mkv"))
 
-    def test_unknown_category_does_not_guess_a_directory(self) -> None:
+    def test_unsafe_category_does_not_create_a_directory(self) -> None:
         result = self.layout.plan(
             "/MP/downloads/other.mkv",
-            "未配置分类",
+            "../未配置分类",
             [{"relative_path": "Other/Other.mkv", "size": 4}],
+            media_type="movie",
         )
         self.assertEqual(result["inventory_base"], "")
         self.assertEqual(result["link_base"], "")
@@ -111,12 +113,12 @@ class LibraryLayoutTest(unittest.TestCase):
         configured = layout.LibraryLayout.from_config(
             defaults["inventory_root"],
             json.dumps(defaults["source_routes"], ensure_ascii=False),
-            json.dumps(defaults["category_groups"], ensure_ascii=False),
         )
         result = configured.plan(
             "/MP/downloads/movie.mkv",
             "华语电影",
             [{"relative_path": "电影 (2026)/电影 (2026).mkv", "size": 4}],
+            media_type="movie",
         )
         self.assertEqual(configured.config_errors, [])
         self.assertEqual(result["link_base"], "/MP/电影UP/华语电影")
