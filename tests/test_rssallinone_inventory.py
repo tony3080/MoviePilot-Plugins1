@@ -158,6 +158,46 @@ class LocalInventoryCheckerTest(unittest.TestCase):
             self.assertEqual(state, "ambiguous")
             self.assertEqual(len(details["folder"]["candidates"]), 2)
 
+    def test_expected_directory_disambiguates_duplicate_tmdb_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected_name = "Show (2026) - {tmdbid=42}"
+            media_root = root / expected_name
+            stale_root = root / "Show (2026) - (2026) - {tmdbid=42}"
+            inventory_file = media_root / "Season 1" / "Show - S01E01 - 1080p.strm"
+            inventory_file.parent.mkdir(parents=True)
+            inventory_file.write_text("cloud://episode-1", encoding="utf-8")
+            stale_root.mkdir()
+            checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
+
+            state, details = checker.check(
+                "tv",
+                [
+                    {
+                        "relative_path": (
+                            f"{expected_name}/Season 1/Show - S01E01 - 1080p.mkv"
+                        )
+                    },
+                    {
+                        "relative_path": (
+                            f"{expected_name}/Season 1/Show - S01E02 - 1080p.mkv"
+                        )
+                    },
+                ],
+                tmdb_id=42,
+                expected_directory=expected_name,
+            )
+
+            self.assertEqual(state, "partial")
+            self.assertEqual(details["folder_status"], "exists")
+            self.assertEqual(
+                details["folder"]["match_method"],
+                "tmdb_id_expected_directory",
+            )
+            self.assertEqual(details["exists_count"], 1)
+            self.assertEqual(details["missing_count"], 1)
+            self.assertEqual(len(details["files"]), 2)
+
     def test_inventory_title_removes_year_and_template_separators(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

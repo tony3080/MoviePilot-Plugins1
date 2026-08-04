@@ -1121,7 +1121,10 @@ function inventoryText(item) {
   const inventory = item.details?.inventory || {};
   const totalFiles = Number(inventory.total_files ?? inventory.total ?? 0);
   const existsCount = Number(inventory.exists_count ?? inventory.exists ?? 0);
-  if (totalFiles > 0 && ['exists', 'partial', 'missing'].includes(item.inventory_state)) {
+  if (totalFiles > 0 && ['exists', 'partial'].includes(item.inventory_state)) {
+    return `已存在 ${existsCount}/${totalFiles}`
+  }
+  if (totalFiles > 0 && item.inventory_state === 'missing') {
     return `${label} ${existsCount}/${totalFiles}`
   }
   return label
@@ -1893,6 +1896,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-1a17665e"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-b57644f4"]]);
 
 export { AppPage as default };

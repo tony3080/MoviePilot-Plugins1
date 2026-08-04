@@ -187,6 +187,21 @@ class LocalInventoryChecker:
                 title=_directory_title(matched.name),
             )
         if len(tmdb_matches) > 1:
+            expected_name = str(expected_directory or "").strip()
+            expected_tmdb_matches = [
+                item for item in tmdb_matches
+                if expected_name and item.name.casefold() == expected_name.casefold()
+            ]
+            if len(expected_tmdb_matches) == 1:
+                matched = expected_tmdb_matches[0]
+                return InventoryFolder(
+                    status="exists",
+                    category_root=category_root,
+                    path=matched,
+                    match_method="tmdb_id_expected_directory",
+                    title=_directory_title(matched.name),
+                    candidates=tuple(str(item) for item in tmdb_matches),
+                )
             return InventoryFolder(
                 status="ambiguous",
                 category_root=category_root,
