@@ -274,7 +274,7 @@ class MoviePilotQbGateway:
         ignored: List[Dict[str, str]] = []
         plan_errors: List[Dict[str, str]] = []
         media_extensions = {str(ext).casefold() for ext in settings.RMT_MEDIAEXT}
-        for file_item in torrent_files:
+        for fallback_index, file_item in enumerate(torrent_files):
             raw = MoviePilotQbGateway.torrent_file_dict(file_item)
             name = str(raw.get("name") or raw.get("path") or "").strip()
             source_path = PurePosixPath(name.replace("\\", "/"))
@@ -292,7 +292,20 @@ class MoviePilotQbGateway:
                 size = max(0, int(raw.get("size") or 0))
             except (TypeError, ValueError):
                 size = 0
-            candidates.append({"source_name": name, "size": size})
+            file_index = raw.get("index")
+            if file_index is None:
+                file_index = raw.get("id")
+            try:
+                file_index = int(
+                    fallback_index if file_index is None else file_index
+                )
+            except (TypeError, ValueError):
+                file_index = fallback_index
+            candidates.append({
+                "file_index": file_index,
+                "source_name": name,
+                "size": size,
+            })
 
         if media_type == "movie" and candidates:
             candidates = [max(candidates, key=lambda item: item["size"])]
@@ -359,6 +372,7 @@ class MoviePilotQbGateway:
                 else pure_path.with_name(f"{pure_path.name}.strm")
             )
             expected_files.append({
+                "file_index": item["file_index"],
                 "source_name": source_name,
                 "relative_path": pure_path.as_posix(),
                 "new_rel": pure_path.as_posix(),
@@ -775,6 +789,8 @@ class QbSyncService:
         inventory_details: Dict[str, Any] = {}
         inventory_plan: Dict[str, Any] = {}
         path_plan: Dict[str, Any] = {}
+        file_mappings: List[Dict[str, Any]] = []
+        mapping_refresh_succeeded = False
         if media:
             media_type = self.gateway.media_type(media)
             media_payload = self.gateway.media_payload(media)
@@ -858,6 +874,16 @@ class QbSyncService:
                     )
                     inventory_details["group"] = path_plan.get("group") or ""
                     inventory_details["layout_errors"] = path_plan.get("errors") or []
+                    file_mappings = build_source_target_mappings(
+                        downloader_id=downloader.name,
+                        info_hash=info_hash,
+                        media_id=media_id,
+                        torrent=raw,
+                        expected_files=inventory_plan.get("expected_files") or [],
+                        path_plan=path_plan,
+                        inventory_details=inventory_details,
+                    )
+                    mapping_refresh_succeeded = True
                 except Exception as error:
                     inventory_state = "unknown"
                     inventory_details = {
@@ -893,6 +919,7 @@ class QbSyncService:
             "inventory_plan": inventory_plan,
             "path_plan": path_plan,
             "inventory": inventory_details,
+            "file_mappings": file_mappings,
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -923,6 +950,12 @@ class QbSyncService:
             "details": details,
             "updated_at": now,
         })
+        if media and _valid_tmdb_id(tmdb_id) and mapping_refresh_succeeded:
+            self.store.replace_file_mappings(
+                downloader.name,
+                info_hash,
+                file_mappings,
+            )
         self.store.upsert_torrent_snapshot({
             "downloader_id": downloader.name,
             "info_hash": info_hash,
@@ -1037,6 +1070,120 @@ def _first_text(
             if text:
                 return text
     return ""
+
+
+def build_source_target_mappings(
+    *,
+    downloader_id: str,
+    info_hash: str,
+    media_id: str,
+    torrent: Dict[str, Any],
+    expected_files: Sequence[Dict[str, Any]],
+    path_plan: Dict[str, Any],
+    inventory_details: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Bind authoritative qB source paths to independent MP target paths."""
+
+    link_files = _index_planned_files(path_plan.get("link_files") or [])
+    inventory_files = _index_planned_files(path_plan.get("inventory_files") or [])
+    inventory_results = _index_planned_files(
+        inventory_details.get("files") or []
+    )
+    mappings: List[Dict[str, Any]] = []
+    for fallback_index, expected in enumerate(expected_files or []):
+        source_relative = str(expected.get("source_name") or "").replace("\\", "/")
+        if not source_relative:
+            continue
+        file_index = expected.get("file_index")
+        try:
+            file_index = int(
+                fallback_index if file_index is None else file_index
+            )
+        except (TypeError, ValueError):
+            file_index = fallback_index
+        key = _planned_file_key(expected, fallback_index)
+        link = link_files.get(key) or link_files.get(source_relative.casefold()) or {}
+        inventory = (
+            inventory_files.get(key)
+            or inventory_files.get(source_relative.casefold())
+            or {}
+        )
+        checked = (
+            inventory_results.get(key)
+            or inventory_results.get(source_relative.casefold())
+            or {}
+        )
+        inventory_exists = bool(checked.get("inventory_exists"))
+        mappings.append({
+            "downloader_id": str(downloader_id or ""),
+            "info_hash": str(info_hash or "").lower(),
+            "file_index": file_index,
+            "media_id": str(media_id or ""),
+            "source_relative_path": source_relative,
+            "current_source_path": resolve_current_source_path(
+                torrent,
+                source_relative,
+            ),
+            "new_rel": str(expected.get("new_rel") or expected.get("relative_path") or ""),
+            "local_hardlink_path": str(link.get("path") or ""),
+            "inventory_path": str(inventory.get("path") or ""),
+            "inventory_exists": inventory_exists,
+            "file_size": max(0, int(expected.get("size") or 0)),
+            "state": "existing" if inventory_exists else "planned",
+            "details": {
+                "inventory_status": str(checked.get("status") or ""),
+                "matched_inventory_path": str(checked.get("matched_path") or ""),
+                "recognition": expected.get("recognition") or {},
+            },
+        })
+    return mappings
+
+
+def resolve_current_source_path(
+    torrent: Dict[str, Any],
+    source_relative_path: str,
+) -> str:
+    source = PurePosixPath(str(source_relative_path or "").replace("\\", "/"))
+    save_path = str(torrent.get("save_path") or "").strip().replace("\\", "/")
+    if save_path:
+        return PurePosixPath(save_path).joinpath(source).as_posix()
+
+    content_value = str(
+        torrent.get("content_path") or torrent.get("path") or ""
+    ).strip().replace("\\", "/")
+    if not content_value:
+        return source.as_posix()
+    content = PurePosixPath(content_value)
+    if content.name.casefold() == source.name.casefold() and len(source.parts) == 1:
+        return content.as_posix()
+    if source.parts and content.name.casefold() == source.parts[0].casefold():
+        return content.parent.joinpath(source).as_posix()
+    if content.suffix and len(source.parts) == 1:
+        return content.parent.joinpath(source).as_posix()
+    return content.joinpath(source).as_posix()
+
+
+def _index_planned_files(
+    items: Sequence[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    result: Dict[str, Dict[str, Any]] = {}
+    for fallback_index, item in enumerate(items or []):
+        result[_planned_file_key(item, fallback_index)] = item
+        source_name = str(item.get("source_name") or "").replace("\\", "/")
+        if source_name:
+            result.setdefault(source_name.casefold(), item)
+    return result
+
+
+def _planned_file_key(item: Dict[str, Any], fallback_index: int) -> str:
+    file_index = item.get("file_index")
+    if file_index is not None:
+        try:
+            return f"index:{int(file_index)}"
+        except (TypeError, ValueError):
+            pass
+    source_name = str(item.get("source_name") or "").replace("\\", "/")
+    return source_name.casefold() or f"fallback:{fallback_index}"
 
 
 def _valid_tmdb_id(value: object) -> bool:

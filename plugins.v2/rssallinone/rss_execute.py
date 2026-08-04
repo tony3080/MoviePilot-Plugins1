@@ -21,6 +21,7 @@ from .rss_feed import (
     prepare_entry,
     validate_feed_url,
 )
+from .rss_rename import QbSourceRenameService
 
 
 RSS_RUN_TASK_TYPE = "rss_run"
@@ -237,6 +238,49 @@ class MoviePilotRssGateway:
         except Exception:
             return False
 
+    @staticmethod
+    def list_torrent_files(server: Any, info_hash: str) -> List[Any]:
+        try:
+            return list(server.get_files(info_hash, retry=6, interval=0.5) or [])
+        except Exception as error:
+            raise RssExecutionError(f"读取 qB 文件列表失败：{error}") from error
+
+    @staticmethod
+    def rename_torrent_file(
+        server: Any,
+        info_hash: str,
+        old_path: str,
+        new_path: str,
+    ) -> None:
+        try:
+            server.qbc.torrents_rename_file(
+                torrent_hash=info_hash,
+                old_path=old_path,
+                new_path=new_path,
+            )
+        except Exception as error:
+            raise RssExecutionError(
+                f"qB 文件改名失败：{old_path} -> {new_path}：{error}"
+            ) from error
+
+    @staticmethod
+    def rename_torrent_folder(
+        server: Any,
+        info_hash: str,
+        old_path: str,
+        new_path: str,
+    ) -> None:
+        try:
+            server.qbc.torrents_rename_folder(
+                torrent_hash=info_hash,
+                old_path=old_path,
+                new_path=new_path,
+            )
+        except Exception as error:
+            raise RssExecutionError(
+                f"qB 目录改名失败：{old_path} -> {new_path}：{error}"
+            ) from error
+
 
 class RssExecutionService:
     """Execute one saved RSS task and persist durable source/content identities."""
@@ -245,6 +289,7 @@ class RssExecutionService:
         self,
         store: SQLiteStore,
         gateway: Optional[MoviePilotRssGateway] = None,
+        renamer: Optional[QbSourceRenameService] = None,
         feed_fetcher: Any = None,
         sleeper: Any = None,
         logger: Any = None,
@@ -253,6 +298,10 @@ class RssExecutionService:
         self.gateway = gateway or MoviePilotRssGateway()
         self.feed_fetcher = feed_fetcher or fetch_feed
         self.sleeper = sleeper or time.sleep
+        self.renamer = renamer or QbSourceRenameService(
+            self.gateway,
+            sleeper=self.sleeper,
+        )
         self.logger = logger
 
     def run(
@@ -378,6 +427,7 @@ class RssExecutionService:
                             "category": category,
                             "info_hash": outcome.get("info_hash") or "",
                             "mode": outcome.get("mode") or "",
+                            "source_rename": outcome.get("source_rename") or {},
                         },
                     )
                     if source_key:
@@ -438,7 +488,7 @@ class RssExecutionService:
         server: Any,
         access: SiteAccess,
         stop_event: Optional[threading.Event] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
             raise RssExecutionCancelled()
         torrent_content = b""
@@ -510,18 +560,33 @@ class RssExecutionService:
                         info_hash,
                         int(config.get("upload_limit_kbps") or 0),
                     )
-                    status = "queued" if limit_ok else "queued_warning"
-                    reason = (
-                        "种子已加入 qBittorrent"
-                        if limit_ok
-                        else "种子已加入，但上传限速设置失败"
+                    source_rename = self.renamer.apply(
+                        server,
+                        info_hash,
+                        rss_title=str(prepared.get("title") or entry.title or ""),
+                        rename_enabled=bool(config.get("rename_enabled")),
+                        rename_rules=config.get("rename_rules") or "",
+                        add_chinese_title=bool(config.get("add_chinese_title")),
                     )
+                    warnings = []
+                    if not limit_ok:
+                        warnings.append("上传限速设置失败")
+                    if source_rename.get("status") == "failed":
+                        warnings.append(
+                            "qB 源名称处理失败："
+                            f"{source_rename.get('error') or '未知错误'}"
+                        )
+                    status = "queued_warning" if warnings else "queued"
+                    reason = "种子已加入 qBittorrent"
+                    if warnings:
+                        reason = f"{reason}，但{'；'.join(warnings)}"
                     return {
                         "status": status,
                         "reason": reason,
                         "content_key": f"{downloader}:{info_hash}",
                         "info_hash": info_hash,
                         "mode": mode,
+                        "source_rename": source_rename,
                     }
                 errors.append(outcome.reason or f"{mode} 模式添加失败")
                 existing_hash = self.gateway.find_existing(server, hash_candidates)

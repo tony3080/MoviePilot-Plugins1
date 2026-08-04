@@ -37,7 +37,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.6.1"
+    plugin_version = "0.7.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -232,7 +232,7 @@ class RssAllInOne(_PluginBase):
                 "version": self.plugin_version,
                 "enabled": self._enabled,
                 "rss_enabled": self._rss_enabled,
-                "phase": "rss_enqueue",
+                "phase": "dual_stage_naming",
             },
             "counts": store.counts(),
             "capabilities": self._capabilities(),

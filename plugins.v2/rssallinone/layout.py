@@ -214,6 +214,7 @@ class LibraryLayout:
                 )
                 continue
             payload = {
+                "file_index": item.get("file_index"),
                 "relative_path": pure_relative.as_posix(),
                 "new_rel": pure_relative.as_posix(),
                 "inventory_relative_path": PurePosixPath(

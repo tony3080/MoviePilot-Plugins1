@@ -69,6 +69,20 @@ class FakeGateway:
         return True
 
 
+class FakeRenamer:
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result or {
+            "status": "renamed",
+            "chinese_title": "演示电影",
+            "final_files": [{"index": 0, "name": "[演示电影].Demo.Movie.mkv"}],
+        }
+
+    def apply(self, server, info_hash, **kwargs):
+        self.calls.append((server, info_hash, kwargs))
+        return dict(self.result)
+
+
 class FakeQbServer:
     def __init__(self, state=True, added_ids=None, existing_hash=""):
         self.state = state
@@ -124,11 +138,12 @@ class RssExecutionServiceTest(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def _run(self, gateway, **config):
+    def _run(self, gateway, renamer=None, **config):
         background_id = config.pop("background_id", "run-1")
         service = rss_execute.RssExecutionService(
             self.store,
             gateway=gateway,
+            renamer=renamer,
             feed_fetcher=feed_fetcher,
             sleeper=gateway.sleeps.append,
         )
@@ -180,6 +195,37 @@ class RssExecutionServiceTest(unittest.TestCase):
         self.assertEqual(result["existing"], 1)
         self.assertEqual(gateway.add_calls, [])
 
+    def test_source_rename_runs_after_enqueue_and_is_saved_in_history(self):
+        gateway = FakeGateway()
+        renamer = FakeRenamer()
+        result = self._run(
+            gateway,
+            renamer=renamer,
+            rename_enabled=True,
+            rename_rules="Demo => Release",
+            add_chinese_title=True,
+        )
+
+        self.assertEqual(result["queued"], 1)
+        self.assertEqual(renamer.calls[0][1], "abc123")
+        self.assertEqual(renamer.calls[0][2]["rename_rules"], "Demo => Release")
+        row = self.store.list_rss_history()["items"][0]
+        self.assertEqual(row["payload"]["source_rename"]["status"], "renamed")
+        self.assertEqual(
+            row["payload"]["source_rename"]["final_files"][0]["name"],
+            "[演示电影].Demo.Movie.mkv",
+        )
+
+    def test_source_rename_failure_keeps_dedup_history_as_warning(self):
+        gateway = FakeGateway()
+        renamer = FakeRenamer({"status": "failed", "error": "rename rejected"})
+        result = self._run(gateway, renamer=renamer, rename_enabled=True)
+
+        self.assertEqual(result["queued_warning"], 1)
+        row = self.store.list_rss_history()["items"][0]
+        self.assertEqual(row["status"], "queued_warning")
+        self.assertIn("rename rejected", row["reason"])
+
 
 class MoviePilotRssGatewayTest(unittest.TestCase):
     def test_internal_lookup_tag_is_removed_and_category_is_preserved(self):
@@ -217,6 +263,33 @@ class MoviePilotRssGatewayTest(unittest.TestCase):
         self.assertTrue(result.existing)
         temporary_tag = server.add_kwargs["tag"][0]
         self.assertEqual(server.deleted_tags, [(["existing123"], temporary_tag)])
+
+    def test_rename_adapter_uses_qbittorrent_api_file_and_folder_calls(self):
+        class Qbc:
+            def __init__(self):
+                self.calls = []
+
+            def torrents_rename_file(self, **kwargs):
+                self.calls.append(("file", kwargs))
+
+            def torrents_rename_folder(self, **kwargs):
+                self.calls.append(("folder", kwargs))
+
+        server = types.SimpleNamespace(qbc=Qbc())
+        gateway = rss_execute.MoviePilotRssGateway()
+        gateway.rename_torrent_file(server, "abc123", "Old.mkv", "New.mkv")
+        gateway.rename_torrent_folder(server, "abc123", "Old", "New")
+
+        self.assertEqual(server.qbc.calls[0][1], {
+            "torrent_hash": "abc123",
+            "old_path": "Old.mkv",
+            "new_path": "New.mkv",
+        })
+        self.assertEqual(server.qbc.calls[1][1], {
+            "torrent_hash": "abc123",
+            "old_path": "Old",
+            "new_path": "New",
+        })
 
 
 if __name__ == "__main__":

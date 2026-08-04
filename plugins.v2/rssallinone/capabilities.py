@@ -22,9 +22,9 @@ def runtime_capabilities(plugin_dir: Path) -> Dict[str, Any]:
             "sites": "host_runtime",
         },
         "qbittorrent": {
-            "ready": False,
+            "ready": True,
             "scope": "moviepilot_configured_qbittorrent_only",
-            "phase": "adapter_pending",
+            "phase": "rss_enqueue_and_source_rename",
         },
         "clouddrive": {
             "ready": bool(grpc_ready and generated_ready and proto_ready),

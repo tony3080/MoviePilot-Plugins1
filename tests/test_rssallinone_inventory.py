@@ -777,5 +777,61 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertIn("VT+", task["error_message"])
 
 
+class SourceTargetMappingTest(unittest.TestCase):
+    def test_mapping_keeps_qb_source_and_mp_target_as_independent_paths(self) -> None:
+        mappings = qb_sync.build_source_target_mappings(
+            downloader_id="qb-main",
+            info_hash="ABC123",
+            media_id="qb:qb-main:abc123",
+            torrent={
+                "save_path": "/MP/downloads",
+                "content_path": "/MP/downloads/[沙丘].Dune",
+            },
+            expected_files=[{
+                "file_index": 3,
+                "source_name": "[沙丘].Dune/[沙丘].Dune-国配-REMUX.mkv",
+                "relative_path": "沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.mkv",
+                "new_rel": "沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.mkv",
+                "inventory_relative_path": "沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.strm",
+                "size": 100,
+            }],
+            path_plan={
+                "link_files": [{
+                    "file_index": 3,
+                    "source_name": "[沙丘].Dune/[沙丘].Dune-国配-REMUX.mkv",
+                    "path": "/MP/电影UP/华语电影/沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.mkv",
+                }],
+                "inventory_files": [{
+                    "file_index": 3,
+                    "source_name": "[沙丘].Dune/[沙丘].Dune-国配-REMUX.mkv",
+                    "path": "/SSD/云盘/strm/影视库/华语电影/沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.strm",
+                }],
+            },
+            inventory_details={
+                "files": [{
+                    "file_index": 3,
+                    "source_name": "[沙丘].Dune/[沙丘].Dune-国配-REMUX.mkv",
+                    "inventory_exists": False,
+                    "status": "missing",
+                }],
+            },
+        )
+
+        self.assertEqual(len(mappings), 1)
+        mapping = mappings[0]
+        self.assertEqual(
+            mapping["current_source_path"],
+            "/MP/downloads/[沙丘].Dune/[沙丘].Dune-国配-REMUX.mkv",
+        )
+        self.assertEqual(
+            mapping["new_rel"],
+            "沙丘2 (2024) [tmdbid=693134]/沙丘2 - 2160p.mkv",
+        )
+        self.assertNotEqual(
+            Path(mapping["current_source_path"]).name,
+            Path(mapping["local_hardlink_path"]).name,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

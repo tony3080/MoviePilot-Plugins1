@@ -64,6 +64,7 @@ const torrentHeaders = [
   { title: '进度', key: 'progress', width: 100 },
   { title: '节点', key: 'downloader_id', width: 130 },
   { title: '分类', key: 'category', width: 110 },
+  { title: '双阶段映射', key: 'mapping_summary', width: 150 },
   { title: '库存路径', key: 'target_name', minWidth: 280 },
   { title: '硬链接路径', key: 'link_target', minWidth: 280 },
   { title: 'Hash', key: 'info_hash', width: 120 },
@@ -284,6 +285,8 @@ async function loadActive() {
     } else if (activeTab.value === 'qb') {
       rows.value = items.map(item => {
         const recognition = torrentRecognition(item)
+        const mappings = item.details?.file_mappings || []
+        const pendingMappings = mappings.filter(mapping => !mapping.inventory_exists).length
         return {
           ...item,
           row_key: `${item.downloader_id}:${item.info_hash}`,
@@ -293,6 +296,9 @@ async function loadActive() {
           applied_words: recognition.words,
           customizations: recognition.customizations,
           inherited_meta_fields: recognition.inherited,
+          mapping_summary: mappings.length
+            ? `${mappings.length} 个 · 待建 ${pendingMappings}`
+            : '未生成',
         }
       })
     } else {

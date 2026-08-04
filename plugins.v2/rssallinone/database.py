@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def utc_now() -> str:
@@ -164,6 +164,27 @@ class SQLiteStore:
                         FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
                     );
 
+                    CREATE TABLE IF NOT EXISTS file_mappings (
+                        downloader_id TEXT NOT NULL,
+                        info_hash TEXT NOT NULL,
+                        file_index INTEGER NOT NULL,
+                        media_id TEXT NOT NULL DEFAULT '',
+                        source_relative_path TEXT NOT NULL DEFAULT '',
+                        current_source_path TEXT NOT NULL DEFAULT '',
+                        new_rel TEXT NOT NULL DEFAULT '',
+                        local_hardlink_path TEXT NOT NULL DEFAULT '',
+                        inventory_path TEXT NOT NULL DEFAULT '',
+                        inventory_exists INTEGER NOT NULL DEFAULT 0,
+                        file_size INTEGER NOT NULL DEFAULT 0,
+                        state TEXT NOT NULL DEFAULT 'planned',
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (downloader_id, info_hash, file_index)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_file_mappings_media
+                        ON file_mappings(media_id, state, updated_at DESC);
+
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         action TEXT NOT NULL,
@@ -177,6 +198,7 @@ class SQLiteStore:
                     """
                 )
                 self._migrate_v2(connection)
+                self._migrate_v3(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -212,6 +234,33 @@ class SQLiteStore:
             """CREATE INDEX IF NOT EXISTS idx_torrent_snapshots_present
                ON torrent_snapshots(present, downloader_id, updated_at DESC)"""
         )
+
+    @staticmethod
+    def _migrate_v3(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS file_mappings (
+                downloader_id TEXT NOT NULL,
+                info_hash TEXT NOT NULL,
+                file_index INTEGER NOT NULL,
+                media_id TEXT NOT NULL DEFAULT '',
+                source_relative_path TEXT NOT NULL DEFAULT '',
+                current_source_path TEXT NOT NULL DEFAULT '',
+                new_rel TEXT NOT NULL DEFAULT '',
+                local_hardlink_path TEXT NOT NULL DEFAULT '',
+                inventory_path TEXT NOT NULL DEFAULT '',
+                inventory_exists INTEGER NOT NULL DEFAULT 0,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'planned',
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (downloader_id, info_hash, file_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_mappings_media
+                ON file_mappings(media_id, state, updated_at DESC);
+            """
+        )
         connection.execute(
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_media_items_downloader_hash
                ON media_items(downloader_id, info_hash)
@@ -238,6 +287,7 @@ class SQLiteStore:
             "rss_history": "rss_history",
             "background_tasks": "background_tasks",
             "import_watches": "import_watches",
+            "file_mappings": "file_mappings",
         }
         with self.connection() as connection:
             counts = {
@@ -485,6 +535,74 @@ class SQLiteStore:
                     updated_at = excluded.updated_at""",
                 values,
             )
+
+    def replace_file_mappings(
+        self,
+        downloader_id: object,
+        info_hash: object,
+        records: Iterable[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            raise ValueError("文件映射缺少下载器或 info-hash")
+        now = utc_now()
+        prepared = []
+        for fallback_index, record in enumerate(records or []):
+            try:
+                file_index = int(record.get("file_index", fallback_index))
+            except (TypeError, ValueError):
+                file_index = fallback_index
+            prepared.append((
+                downloader,
+                normalized_hash,
+                file_index,
+                str(record.get("media_id") or ""),
+                str(record.get("source_relative_path") or ""),
+                str(record.get("current_source_path") or ""),
+                str(record.get("new_rel") or ""),
+                str(record.get("local_hardlink_path") or ""),
+                str(record.get("inventory_path") or ""),
+                int(bool(record.get("inventory_exists"))),
+                max(0, int(record.get("file_size") or 0)),
+                str(record.get("state") or "planned"),
+                self._json_dump(record.get("details") or {}),
+                str(record.get("created_at") or now),
+                now,
+            ))
+        with self.connection() as connection:
+            connection.execute(
+                "DELETE FROM file_mappings WHERE downloader_id = ? AND info_hash = ?",
+                (downloader, normalized_hash),
+            )
+            connection.executemany(
+                """INSERT INTO file_mappings(
+                    downloader_id, info_hash, file_index, media_id,
+                    source_relative_path, current_source_path, new_rel,
+                    local_hardlink_path, inventory_path, inventory_exists,
+                    file_size, state, details_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                prepared,
+            )
+        return self.list_file_mappings(downloader, normalized_hash)
+
+    def list_file_mappings(
+        self,
+        downloader_id: object,
+        info_hash: object,
+    ) -> List[Dict[str, Any]]:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            return []
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM file_mappings
+                   WHERE downloader_id = ? AND info_hash = ?
+                   ORDER BY file_index""",
+                (downloader, normalized_hash),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
 
     def create_background_task(self, task_id: str, task_type: str) -> None:
         now = utc_now()

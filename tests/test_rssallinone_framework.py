@@ -57,6 +57,28 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(store.list_media()["items"], [])
             self.assertEqual(store.list_torrents()["items"], [])
             self.assertEqual(store.list_rss_history()["items"], [])
+            self.assertEqual(store.counts()["file_mappings"], 0)
+
+    def test_file_mappings_replace_source_and_target_pairs_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            records = store.replace_file_mappings("qb-main", "ABC123", [{
+                "file_index": 7,
+                "media_id": "qb:qb-main:abc123",
+                "source_relative_path": "Show/Show.S01E01.mkv",
+                "current_source_path": "/downloads/Show/Show.S01E01.mkv",
+                "new_rel": "剧名/Season 01/剧名 S01E01.mkv",
+                "local_hardlink_path": "/staging/剧名/Season 01/剧名 S01E01.mkv",
+                "inventory_path": "/library/剧名/Season 01/剧名 S01E01.strm",
+                "inventory_exists": False,
+                "file_size": 1024,
+            }])
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["info_hash"], "abc123")
+            self.assertEqual(records[0]["file_index"], 7)
+            self.assertEqual(records[0]["state"], "planned")
 
     def test_schema_accepts_specials_season_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -110,7 +132,7 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(migrated["name"], "旧快照")
             self.assertEqual(migrated["present"], 1)
             self.assertEqual(migrated["inventory_state"], "unknown")
-            self.assertEqual(store.health()["schema_version"], 2)
+            self.assertEqual(store.health()["schema_version"], 3)
 
 
 class RepositoryContractTest(unittest.TestCase):

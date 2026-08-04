@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.6.1",
+    "version": "0.7.0",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.7.0": "实现双阶段命名：RSS 入队后按任务规则和中文标题实际修改 qB 文件/目录；MoviePilot 命名继续独立生成硬链接与 STRM 目标，并持久化 qB 文件索引、当前源路径、new_rel 和目标路径映射",
       "v0.6.1": "修复 RSS CRON 注册时任务 ID 参数字段错误，改用 MoviePilot 的 func_kwargs 传递任务参数",
       "v0.6.0": "新增正式 RSS 执行链路：按任务 CRON 或立即执行读取 RSS，执行来源与 info-hash 去重，通过 MoviePilot 配置的 qBittorrent 加入种子，支持 URL/种子文件切换、重试、暂停状态、分类、保存路径和上传限速；VT+ 增加 RSS 调度总开关，可随时暂停测试批次",
       "v0.5.0": "新增 RSS/Atom 只读测试：解析标题、详情、GUID、enclosure、发布时间和种子 ID，执行标题过滤与来源身份去重预检，并统一遮蔽 RSS 密钥；测试过程不写入历史、不推送 qB",

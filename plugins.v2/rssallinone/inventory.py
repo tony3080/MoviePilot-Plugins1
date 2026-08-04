@@ -334,6 +334,7 @@ class LocalInventoryChecker:
                 continue
             seen.add(identity)
             normalized.append({
+                "file_index": item.get("file_index"),
                 "source_name": str(item.get("source_name") or ""),
                 "relative_path": pure_path.as_posix(),
                 "new_rel": pure_path.as_posix(),
