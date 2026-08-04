@@ -149,6 +149,30 @@ class MoviePilotRssGateway:
                 return info_hash
         return ""
 
+    @staticmethod
+    def clear_temporary_tag(server: Any, tag: str, info_hash: str = "") -> None:
+        """Remove the internal lookup tag so qB keeps only the task category."""
+        torrent_ids: List[str] = []
+        if info_hash:
+            torrent_ids.append(str(info_hash).strip().lower())
+        else:
+            try:
+                torrents, error = server.get_torrents(tags=[tag])
+                if not error:
+                    torrent_ids.extend(
+                        str(item.get("hash") or "").strip().lower()
+                        for item in torrents or []
+                    )
+            except Exception:
+                return
+        torrent_ids = [item for item in dict.fromkeys(torrent_ids) if item]
+        if not torrent_ids:
+            return
+        try:
+            server.delete_torrents_tag(torrent_ids, tag)
+        except Exception:
+            pass
+
     def add_torrent(
         self,
         server: Any,
@@ -187,17 +211,15 @@ class MoviePilotRssGateway:
                 info_hash = str(server.get_torrent_id_by_tag(tags=tag) or "").lower()
             except Exception:
                 info_hash = ""
-        if info_hash:
-            try:
-                server.delete_torrents_tag(info_hash, tag)
-            except Exception:
-                pass
         if state and info_hash:
+            self.clear_temporary_tag(server, tag, info_hash)
             return AddResult(True, info_hash=info_hash)
         if not state:
             existing = self.find_existing(server, hash_candidates)
             if existing:
+                self.clear_temporary_tag(server, tag, existing)
                 return AddResult(True, info_hash=existing, existing=True)
+        self.clear_temporary_tag(server, tag)
         if state:
             return AddResult(False, reason=f"{mode} 模式添加成功但未取得 info-hash")
         return AddResult(False, reason=f"qB 拒绝 {mode} 模式添加")

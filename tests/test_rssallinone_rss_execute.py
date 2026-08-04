@@ -69,6 +69,28 @@ class FakeGateway:
         return True
 
 
+class FakeQbServer:
+    def __init__(self, state=True, added_ids=None, existing_hash=""):
+        self.state = state
+        self.added_ids = list(added_ids or [])
+        self.existing_hash = existing_hash
+        self.add_kwargs = None
+        self.deleted_tags = []
+
+    def add_torrent(self, **kwargs):
+        self.add_kwargs = kwargs
+        return self.state, self.added_ids
+
+    def get_torrents(self, ids=None, tags=None):
+        if ids and self.existing_hash:
+            return [{"hash": self.existing_hash}], False
+        return [], False
+
+    def delete_torrents_tag(self, ids, tag):
+        self.deleted_tags.append((ids, tag))
+        return True
+
+
 def task_config(**overrides):
     config = {
         "rss_url": "https://pt.example/rss.xml?passkey=secret",
@@ -157,6 +179,44 @@ class RssExecutionServiceTest(unittest.TestCase):
 
         self.assertEqual(result["existing"], 1)
         self.assertEqual(gateway.add_calls, [])
+
+
+class MoviePilotRssGatewayTest(unittest.TestCase):
+    def test_internal_lookup_tag_is_removed_and_category_is_preserved(self):
+        server = FakeQbServer(state=True, added_ids=["ABC123"])
+        result = rss_execute.MoviePilotRssGateway().add_torrent(
+            server,
+            content="https://pt.example/download.php?id=42",
+            mode="url",
+            save_path="/downloads",
+            category="电影",
+            paused=True,
+            cookie="cookie",
+            hash_candidates=[],
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(server.add_kwargs["category"], "电影")
+        temporary_tag = server.add_kwargs["tag"][0]
+        self.assertTrue(temporary_tag.startswith("rssallinone-"))
+        self.assertEqual(server.deleted_tags, [(["abc123"], temporary_tag)])
+
+    def test_duplicate_path_also_removes_internal_lookup_tag(self):
+        server = FakeQbServer(state=False, existing_hash="existing123")
+        result = rss_execute.MoviePilotRssGateway().add_torrent(
+            server,
+            content=TORRENT,
+            mode="file",
+            save_path="/downloads",
+            category="电影",
+            paused=True,
+            cookie="cookie",
+            hash_candidates=["candidate"],
+        )
+
+        self.assertTrue(result.existing)
+        temporary_tag = server.add_kwargs["tag"][0]
+        self.assertEqual(server.deleted_tags, [(["existing123"], temporary_tag)])
 
 
 if __name__ == "__main__":
