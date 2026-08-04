@@ -226,6 +226,11 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("电影目录组分类", config)
         self.assertNotIn("剧集目录组分类", config)
 
+    def test_rss_scheduler_uses_function_kwargs_for_task_id(self) -> None:
+        backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn('"func_kwargs": {"task_id": task_id}', backend)
+        self.assertNotIn('"kwargs": {"task_id": task_id}', backend)
+
 
 class PluginLifecycleTest(unittest.TestCase):
     def test_plugin_loads_inside_a_minimal_moviepilot_host(self) -> None:

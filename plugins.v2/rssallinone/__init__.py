@@ -37,7 +37,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.6.0"
+    plugin_version = "0.6.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -163,7 +163,7 @@ class RssAllInOne(_PluginBase):
                     "name": "RSS一条龙 QB 只读同步",
                     "trigger": trigger,
                     "func": self._scheduled_qb_refresh,
-                    "kwargs": {},
+                    "func_kwargs": {},
                 })
         except (ImportError, TypeError, ValueError) as error:
             logger.error(f"RSS一条龙：无效的 QB 刷新周期 {self._qb_refresh_cron}：{error}")
@@ -191,7 +191,7 @@ class RssAllInOne(_PluginBase):
                     "name": f"RSS一条龙 RSS：{task.get('name') or task_id}",
                     "trigger": trigger,
                     "func": self._scheduled_rss_run,
-                    "kwargs": {"task_id": task_id},
+                    "func_kwargs": {"task_id": task_id},
                 })
         except ImportError:
             logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS CRON")
