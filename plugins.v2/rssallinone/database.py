@@ -8,7 +8,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
 SCHEMA_VERSION = 2
@@ -639,6 +639,32 @@ class SQLiteStore:
 
     def list_rss_history(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
         return self._list_table("rss_history", "created_at", offset, limit)
+
+    def find_rss_source_keys(
+        self,
+        task_id: object,
+        source_keys: Iterable[object],
+    ) -> Set[str]:
+        normalized_task_id = str(task_id or "").strip()
+        normalized_keys = sorted({
+            str(item or "").strip()
+            for item in source_keys or []
+            if str(item or "").strip()
+        })
+        if not normalized_task_id or not normalized_keys:
+            return set()
+        found: Set[str] = set()
+        with self.connection() as connection:
+            for offset in range(0, len(normalized_keys), 500):
+                chunk = normalized_keys[offset:offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    f"""SELECT source_key FROM rss_history
+                        WHERE task_id = ? AND source_key IN ({placeholders})""",
+                    (normalized_task_id, *chunk),
+                ).fetchall()
+                found.update(str(row["source_key"]) for row in rows)
+        return found
 
     def list_background_tasks(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
         return self._list_table("background_tasks", "updated_at", offset, limit)

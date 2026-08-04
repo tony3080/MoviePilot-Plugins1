@@ -21,6 +21,7 @@ from .qb_sync import (
     QbSyncService,
     RssTaskQbScope,
 )
+from .rss_feed import RssFeedError, RssPreviewService
 from .rss_tasks import normalize_rss_tasks
 
 
@@ -30,12 +31,12 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 
 class RssAllInOne(_PluginBase):
     plugin_name = "RSS一条龙"
-    plugin_desc = "统一管理 PT RSS、qBittorrent、硬链接 staging 与 CloudDrive2 备份流程。"
+    plugin_desc = "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。"
     plugin_icon = (
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.4.5"
+    plugin_version = "0.5.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -170,6 +171,7 @@ class RssAllInOne(_PluginBase):
             self._api("/layout", self.api_layout, "GET", "目录规划配置"),
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
             self._api("/rss/tasks", self.api_save_rss_tasks, "POST", "保存 RSS 任务"),
+            self._api("/rss/test", self.api_rss_test, "POST", "只读测试 RSS 任务"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
@@ -185,7 +187,7 @@ class RssAllInOne(_PluginBase):
                 "name": self.plugin_name,
                 "version": self.plugin_version,
                 "enabled": self._enabled,
-                "phase": "qb_readonly",
+                "phase": "rss_preview",
             },
             "counts": store.counts(),
             "capabilities": self._capabilities(),
@@ -336,6 +338,37 @@ class RssAllInOne(_PluginBase):
             **self._require_store().list_rss_history(offset=offset, limit=limit),
         }
 
+    def api_rss_test(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            raw_task = (payload or {}).get("task")
+            if not isinstance(raw_task, dict):
+                raise ValueError("缺少需要测试的 RSS 任务配置")
+            task = normalize_rss_tasks([raw_task])[0]
+            result = RssPreviewService(
+                existing_keys=self._require_store().find_rss_source_keys,
+            ).run(task)
+            counts = result.get("counts") or {}
+            return {
+                "success": True,
+                "message": (
+                    f"读取 {counts.get('total', 0)} 条，"
+                    f"可处理 {counts.get('ready', 0)} 条"
+                ),
+                "result": result,
+            }
+        except (RssFeedError, TypeError, ValueError) as error:
+            return {"success": False, "message": str(error), "result": None}
+        except Exception as error:
+            logger.error(f"RSS一条龙：RSS 只读测试失败：{error}", exc_info=True)
+            return {
+                "success": False,
+                "message": "RSS 测试失败，请查看 MoviePilot 日志",
+                "result": None,
+            }
+
     def api_background_tasks(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
         return {
             "success": True,
@@ -439,6 +472,12 @@ class RssAllInOne(_PluginBase):
 
     def _capabilities(self) -> Dict[str, Any]:
         capabilities = runtime_capabilities(PLUGIN_DIR)
+        capabilities["rss_reader"] = {
+            "ready": True,
+            "phase": "readonly_preview",
+            "formats": ["rss", "atom"],
+            "qb_write": False,
+        }
         capabilities["local_inventory"] = self._library_layout.capability()
         try:
             downloaders = MoviePilotQbGateway.list_downloaders()

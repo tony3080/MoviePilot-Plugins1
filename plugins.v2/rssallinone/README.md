@@ -1,11 +1,18 @@
 # RSS一条龙
 
-RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统一管理 PT RSS、MoviePilot 已配置的 qBittorrent、媒体识别、同盘 staging 硬链接和 CloudDrive2 备份流程。
+RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统一管理 PT RSS、MoviePilot 已配置的 qBittorrent、媒体识别和同盘硬链接入库流程。CloudDrive2 只负责监听硬链接目录并自动备份，插件不调用其备份 API。
 
 ## 当前版本
 
-`v0.4.5` 在可运行框架上完成了可编辑 RSS 任务、受任务范围约束的 qB 只读同步、本地 STRM 库存核对和目录规划：
+`v0.5.0` 在可运行框架上增加了 RSS/Atom 只读测试，并保留受任务范围约束的 qB 只读同步、本地 STRM 库存核对和目录规划：
 
+- 每张 RSS 任务卡片可直接执行只读测试，支持未保存的当前表单内容。
+- 解析 RSS 2.0 与 Atom 的标题、详情链接、GUID、enclosure 种子链接、发布时间和站点 torrent ID。
+- 按“torrent ID、opaque GUID、enclosure URL、详情 URL、标题加发布时间”的优先级生成稳定来源身份和 SHA-256 去重键。
+- 在测试结果中执行不区分大小写的“名称包含”筛选，并预检数据库中已有 RSS 历史与订阅内重复条目。
+- 缺少 enclosure 的条目单独标记，不会被视为可推送种子。
+- RSS URL、详情 URL 和 enclosure URL 中的 `passkey`、`authkey`、`token`、`rsskey`、`signature` 等参数统一脱敏。
+- RSS 测试不会写入历史、不会推送 qB，也不会影响以后正式执行的去重判断。
 - MoviePilot V2 插件入口、市场元数据和 Vue 模块联邦页面。
 - 只读枚举当前 MoviePilot 已配置且就绪的 qBittorrent 节点。
 - 增量保存 torrent 快照，并复用 MoviePilot 的媒体识别和命名结果。
@@ -26,13 +33,13 @@ RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统�
 - SQLite schema、迁移、任务恢复和只读分页 API。
 - CloudDrive2 原始 `clouddrive.proto` 及生成的 Python gRPC 客户端代码。
 
-当前版本不会执行 qB 写操作、创建或删除硬链接、暂停或取消 CD2 任务，也不会切换外部追更或扫库开关。
+当前版本不会执行 qB 写操作、创建或删除硬链接、调用 CloudDrive2 API，也不会切换外部追更或扫库开关。
 
 QB 管理范围取所有已保存 RSS 任务的 `QB下载器` 和 `QB分类`。分类按 qB 返回值精确匹配；任务未填写下载器或分类时会被忽略，完全没有有效组合时刷新任务直接失败并隐藏旧的全量扫描快照，绝不会退化为扫描整个下载器。RSS 任务即使暂时停用，其已下载种子仍保留在 QB 管理范围；删除任务或修改分类后，下次刷新会退出旧范围。
 
 “站点身份”来自当前 MoviePilot 的站点管理。RSS 任务只保存站点 ID，后续需要识别国语或特效标签时，由 MoviePilot 站点服务在后端携带认证信息访问详情页；插件页面只显示站点名称、地址、启用状态和认证方式，不显示 Cookie、Token、API Key 或 passkey。
 
-`v0.4.5` 已实现 RSS 任务配置的持久化、QB 管理范围联动、本地 STRM 库存判断和 MoviePilot 文件/任务双来源资源元数据命名，并修正 `customization` 的实时识别、模板传递和列表完整显示。添加中文标题属于后续 qB 重命名流程，不参与当前库存目标命名；国配/特效若已存在于任务或文件名中，会按 MoviePilot 自定义占位符进入 `customization`，固定归位动作留待 qB 重命名执行阶段。尚未实现 RSS 拉取、种子推送和“立即执行”。
+`v0.5.0` 已实现 RSS 任务配置持久化和手动只读抓取测试，尚未实现 RSS CRON 调度、种子推送和“立即执行”。添加中文标题属于后续 qB 重命名流程，不参与当前库存目标命名；国配/特效若已存在于任务或文件名中，会按 MoviePilot 自定义占位符进入 `customization`，固定归位动作留待 qB 重命名执行阶段。
 
 ## 本地库存检查
 
@@ -69,7 +76,7 @@ source_routes:
 
 1. 使用 MoviePilot 的媒体识别和命名结果。
 2. 在与下载源同一文件系统的 staging 目录创建硬链接。
-3. 由 CloudDrive2 备份到云端目标。
+3. 硬链接目录触发外部 CloudDrive2 自动备份。
 4. 等待云端目录重新挂载到 MoviePilot/Emby 媒体库。
 
 ## 前端构建
@@ -81,9 +88,9 @@ npm.cmd run build
 
 构建输出必须保存在 `dist/assets`，并提交 `remoteEntry.js` 及其引用的资源。
 
-## CloudDrive2 绑定代码
+## CloudDrive2 参考代码
 
-运行时依赖在 `requirements.txt` 中声明。更新 `clouddrive.proto` 后，可重新生成绑定：
+`clouddrive.proto` 与生成代码仅作为 V1 历史接口参考，当前插件运行时不连接 CloudDrive2，也不创建或跟踪备份任务。需要校验原接口时，可重新生成绑定：
 
 ```powershell
 python -m grpc_tools.protoc -I . --python_out=generated --grpc_python_out=generated clouddrive.proto

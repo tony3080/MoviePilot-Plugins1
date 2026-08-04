@@ -27,6 +27,9 @@ const qbDownloader = ref('')
 const qbView = ref('')
 const qbKeyword = ref('')
 const qbTask = ref(null)
+const rssTestingTaskId = ref('')
+const rssTestDialog = ref(false)
+const rssTestResult = ref(null)
 let qbPollTimer = null
 
 const tabs = [
@@ -68,6 +71,16 @@ const rssHistoryHeaders = [
   { title: '状态', key: 'status', width: 120 },
   { title: '原因', key: 'reason', minWidth: 220 },
   { title: '时间', key: 'updated_at', minWidth: 170 },
+]
+
+const rssTestHeaders = [
+  { title: '状态', key: 'status', width: 130 },
+  { title: '标题', key: 'title', minWidth: 300 },
+  { title: '种子 ID', key: 'torrent_id', width: 100 },
+  { title: '发布时间', key: 'published', minWidth: 180 },
+  { title: '种子链接', key: 'enclosure_url_masked', minWidth: 300 },
+  { title: '详情链接', key: 'detail_url_masked', minWidth: 300 },
+  { title: '原因', key: 'reason', minWidth: 220 },
 ]
 
 const siteHeaders = [
@@ -117,6 +130,14 @@ const recognitionLabels = {
   unidentified: '未识别',
   error: '失败',
   pending: '待识别',
+}
+
+const rssTestLabels = {
+  ready: '可处理',
+  filtered: '已过滤',
+  missing_enclosure: '缺少种子链接',
+  duplicate: '重复',
+  invalid: '无效',
 }
 
 function unwrap(response) {
@@ -300,6 +321,28 @@ async function saveRssTasks(items) {
   }
 }
 
+async function testRssTask(task) {
+  rssTestingTaskId.value = String(task?.id || '')
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/test', { task }),
+    )
+    if (!response?.success || !response?.result) {
+      throw new Error(response?.message || 'RSS 测试失败')
+    }
+    rssTestResult.value = response.result
+    rssTestDialog.value = true
+    successMessage.value = response.message || 'RSS 测试完成'
+  } catch (error) {
+    rssTestResult.value = null
+    errorMessage.value = error?.message || 'RSS 测试失败'
+  } finally {
+    rssTestingTaskId.value = ''
+  }
+}
+
 function scheduleQbPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(qbPollTimer)
@@ -376,6 +419,16 @@ function recognitionColor(state) {
     identified: 'success',
     unidentified: 'warning',
     error: 'error',
+  }[state] || 'default'
+}
+
+function rssTestColor(state) {
+  return {
+    ready: 'success',
+    filtered: 'default',
+    missing_enclosure: 'warning',
+    duplicate: 'info',
+    invalid: 'error',
   }[state] || 'default'
 }
 
@@ -690,8 +743,10 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :downloaders="allQbDownloaders"
           :sites="siteIdentities"
           :loading="loading"
+          :testing-task-id="rssTestingTaskId"
           @save="saveRssTasks"
           @reload="loadActive"
+          @test="testRssTask"
         />
         <VDataTable
           v-else-if="vtTab === 'rss_history'"
@@ -745,6 +800,74 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
         />
       </section>
     </main>
+
+    <VDialog v-model="rssTestDialog" max-width="1280">
+      <VCard>
+        <VCardTitle class="rss-test-title">
+          <VIcon icon="mdi-rss" color="primary" />
+          <span>{{ rssTestResult?.task?.name || 'RSS 测试结果' }}</span>
+          <VSpacer />
+          <VBtn
+            icon="mdi-close"
+            variant="text"
+            aria-label="关闭"
+            @click="rssTestDialog = false"
+          />
+        </VCardTitle>
+        <VDivider />
+        <VCardText v-if="rssTestResult" class="rss-test-content">
+          <div class="rss-test-summary">
+            <VChip size="small" variant="tonal">
+              {{ rssTestResult.feed?.type?.toUpperCase() || 'RSS' }}
+            </VChip>
+            <VChip size="small" variant="tonal">
+              共 {{ rssTestResult.counts?.total || 0 }} 条
+            </VChip>
+            <VChip size="small" color="success" variant="tonal">
+              可处理 {{ rssTestResult.counts?.ready || 0 }}
+            </VChip>
+            <VChip size="small" variant="tonal">
+              已过滤 {{ rssTestResult.counts?.filtered || 0 }}
+            </VChip>
+            <VChip size="small" color="warning" variant="tonal">
+              缺少种子链接 {{ rssTestResult.counts?.missing_enclosure || 0 }}
+            </VChip>
+            <VChip size="small" color="info" variant="tonal">
+              重复 {{ rssTestResult.counts?.duplicate || 0 }}
+            </VChip>
+            <VChip v-if="rssTestResult.truncated" size="small" color="warning" variant="tonal">
+              仅显示前 {{ rssTestResult.items?.length || 0 }} 条
+            </VChip>
+          </div>
+          <div v-if="rssTestResult.feed?.title" class="rss-feed-title">
+            {{ rssTestResult.feed.title }}
+          </div>
+          <code class="rss-feed-url">{{ rssTestResult.feed?.final_url_masked }}</code>
+          <VDataTable
+            :headers="rssTestHeaders"
+            :items="rssTestResult.items || []"
+            density="compact"
+            item-value="row_key"
+            :items-per-page="-1"
+            hide-default-footer
+            class="data-table rss-test-table"
+            no-data-text="RSS 中没有可解析条目"
+          >
+            <template #item.status="{ item }">
+              <VChip :color="rssTestColor(item.status)" size="small" variant="tonal">
+                {{ rssTestLabels[item.status] || item.status }}
+              </VChip>
+            </template>
+            <template #item.enclosure_url_masked="{ item }">
+              <code class="url-cell">{{ item.enclosure_url_masked || '-' }}</code>
+            </template>
+            <template #item.detail_url_masked="{ item }">
+              <code class="url-cell">{{ item.detail_url_masked || '-' }}</code>
+            </template>
+          </VDataTable>
+        </VCardText>
+      </VCard>
+    </VDialog>
   </div>
 </template>
 
@@ -835,6 +958,49 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
 
 .qb-task-status {
   margin-bottom: 12px;
+}
+
+.rss-test-title,
+.rss-test-summary {
+  display: flex;
+  align-items: center;
+}
+
+.rss-test-title {
+  min-height: 56px;
+  gap: 10px;
+}
+
+.rss-test-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rss-test-content {
+  display: grid;
+  gap: 10px;
+}
+
+.rss-test-summary {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rss-feed-title {
+  font-weight: 600;
+}
+
+.rss-feed-url,
+.url-cell {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.rss-test-table {
+  max-height: min(65vh, 720px);
+  overflow: auto;
 }
 
 .qb-task-line,

@@ -6,9 +6,10 @@ const props = defineProps({
   downloaders: { type: Array, default: () => [] },
   sites: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
+  testingTaskId: { type: String, default: '' },
 })
 
-const emit = defineEmits(['save', 'reload'])
+const emit = defineEmits(['save', 'reload', 'test'])
 
 const tasks = ref([])
 const expanded = ref([])
@@ -109,6 +110,13 @@ function saveTasks() {
   })))
 }
 
+function testTask(task, position) {
+  emit('test', {
+    ...clone(task),
+    position,
+  })
+}
+
 watch(
   () => props.items,
   value => {
@@ -170,6 +178,21 @@ watch(
               {{ task.config.qb_category }}
             </VChip>
             <VSpacer />
+            <VTooltip text="测试 RSS">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-flask-outline"
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  :loading="testingTaskId === task.id"
+                  :disabled="!String(task.config.rss_url || '').trim()"
+                  aria-label="测试 RSS"
+                  @click.stop="testTask(task, index)"
+                />
+              </template>
+            </VTooltip>
             <VTooltip text="删除任务">
               <template #activator="{ props: tooltipProps }">
                 <VBtn

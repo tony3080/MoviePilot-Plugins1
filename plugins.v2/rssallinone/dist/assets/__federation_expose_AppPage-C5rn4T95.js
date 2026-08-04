@@ -21,8 +21,9 @@ const _sfc_main$1 = {
   downloaders: { type: Array, default: () => [] },
   sites: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
+  testingTaskId: { type: String, default: '' },
 },
-  emits: ['save', 'reload'],
+  emits: ['save', 'reload', 'test'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -126,6 +127,13 @@ function saveTasks() {
     ...clone(task),
     position,
   })));
+}
+
+function testTask(task, position) {
+  emit('test', {
+    ...clone(task),
+    position,
+  });
 }
 
 watch$1(
@@ -244,6 +252,21 @@ return (_ctx, _cache) => {
                             }, 1024))
                           : _createCommentVNode$1("", true),
                         _createVNode$1(_component_VSpacer),
+                        _createVNode$1(_component_VTooltip, { text: "测试 RSS" }, {
+                          activator: _withCtx$1(({ props: tooltipProps }) => [
+                            _createVNode$1(_component_VBtn, _mergeProps$1({ ref_for: true }, tooltipProps, {
+                              icon: "mdi-flask-outline",
+                              size: "small",
+                              variant: "text",
+                              color: "primary",
+                              loading: __props.testingTaskId === task.id,
+                              disabled: !String(task.config.rss_url || '').trim(),
+                              "aria-label": "测试 RSS",
+                              onClick: _withModifiers($event => (testTask(task, index)), ["stop"])
+                            }), null, 16, ["loading", "disabled", "onClick"])
+                          ]),
+                          _: 2
+                        }, 1024),
                         _createVNode$1(_component_VTooltip, { text: "删除任务" }, {
                           activator: _withCtx$1(({ props: tooltipProps }) => [
                             _createVNode$1(_component_VBtn, _mergeProps$1({ ref_for: true }, tooltipProps, {
@@ -504,7 +527,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-9dd422d3"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-198861f8"]]);
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 
@@ -554,6 +577,14 @@ const _hoisted_24 = { class: "progress-cell" };
 const _hoisted_25 = { key: 3 };
 const _hoisted_26 = { key: 4 };
 const _hoisted_27 = { class: "section-count" };
+const _hoisted_28 = { class: "rss-test-summary" };
+const _hoisted_29 = {
+  key: 0,
+  class: "rss-feed-title"
+};
+const _hoisted_30 = { class: "rss-feed-url" };
+const _hoisted_31 = { class: "url-cell" };
+const _hoisted_32 = { class: "url-cell" };
 
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
@@ -588,6 +619,9 @@ const qbDownloader = ref('');
 const qbView = ref('');
 const qbKeyword = ref('');
 const qbTask = ref(null);
+const rssTestingTaskId = ref('');
+const rssTestDialog = ref(false);
+const rssTestResult = ref(null);
 let qbPollTimer = null;
 
 const tabs = [
@@ -629,6 +663,16 @@ const rssHistoryHeaders = [
   { title: '状态', key: 'status', width: 120 },
   { title: '原因', key: 'reason', minWidth: 220 },
   { title: '时间', key: 'updated_at', minWidth: 170 },
+];
+
+const rssTestHeaders = [
+  { title: '状态', key: 'status', width: 130 },
+  { title: '标题', key: 'title', minWidth: 300 },
+  { title: '种子 ID', key: 'torrent_id', width: 100 },
+  { title: '发布时间', key: 'published', minWidth: 180 },
+  { title: '种子链接', key: 'enclosure_url_masked', minWidth: 300 },
+  { title: '详情链接', key: 'detail_url_masked', minWidth: 300 },
+  { title: '原因', key: 'reason', minWidth: 220 },
 ];
 
 const siteHeaders = [
@@ -678,6 +722,14 @@ const recognitionLabels = {
   unidentified: '未识别',
   error: '失败',
   pending: '待识别',
+};
+
+const rssTestLabels = {
+  ready: '可处理',
+  filtered: '已过滤',
+  missing_enclosure: '缺少种子链接',
+  duplicate: '重复',
+  invalid: '无效',
 };
 
 function unwrap(response) {
@@ -861,6 +913,28 @@ async function saveRssTasks(items) {
   }
 }
 
+async function testRssTask(task) {
+  rssTestingTaskId.value = String(task?.id || '');
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/test', { task }),
+    );
+    if (!response?.success || !response?.result) {
+      throw new Error(response?.message || 'RSS 测试失败')
+    }
+    rssTestResult.value = response.result;
+    rssTestDialog.value = true;
+    successMessage.value = response.message || 'RSS 测试完成';
+  } catch (error) {
+    rssTestResult.value = null;
+    errorMessage.value = error?.message || 'RSS 测试失败';
+  } finally {
+    rssTestingTaskId.value = '';
+  }
+}
+
 function scheduleQbPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(qbPollTimer);
@@ -940,6 +1014,16 @@ function recognitionColor(state) {
   }[state] || 'default'
 }
 
+function rssTestColor(state) {
+  return {
+    ready: 'success',
+    filtered: 'default',
+    missing_enclosure: 'warning',
+    duplicate: 'info',
+    invalid: 'error',
+  }[state] || 'default'
+}
+
 watch(activeTab, async value => {
   if (value === 'qb' && qbDownloaders.value.length === 0) {
     try {
@@ -979,6 +1063,11 @@ return (_ctx, _cache) => {
   const _component_VBtnToggle = _resolveComponent("VBtnToggle");
   const _component_VTextField = _resolveComponent("VTextField");
   const _component_VProgressLinear = _resolveComponent("VProgressLinear");
+  const _component_VCardTitle = _resolveComponent("VCardTitle");
+  const _component_VDivider = _resolveComponent("VDivider");
+  const _component_VCardText = _resolveComponent("VCardText");
+  const _component_VCard = _resolveComponent("VCard");
+  const _component_VDialog = _resolveComponent("VDialog");
 
   return (_openBlock(), _createElementBlock("div", _hoisted_1, [
     _createVNode(_component_VToolbar, {
@@ -993,7 +1082,7 @@ return (_ctx, _cache) => {
           class: "ms-3 me-3"
         }),
         _createElementVNode("div", _hoisted_2, [
-          _cache[7] || (_cache[7] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
+          _cache[9] || (_cache[9] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
           _createElementVNode("div", _hoisted_3, _toDisplayString(overview.value.plugin?.enabled ? '运行已启用' : '运行未启用'), 1)
         ]),
         _createVNode(_component_VSpacer),
@@ -1086,7 +1175,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[8] || (_cache[8] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
+                  _cache[10] || (_cache[10] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.media || 0), 1)
                 ]),
                 _: 1
@@ -1096,7 +1185,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[9] || (_cache[9] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
+                  _cache[11] || (_cache[11] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.torrents || 0), 1)
                 ]),
                 _: 1
@@ -1106,7 +1195,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[10] || (_cache[10] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
+                  _cache[12] || (_cache[12] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.rss_history || 0), 1)
                 ]),
                 _: 1
@@ -1116,7 +1205,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[11] || (_cache[11] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
+                  _cache[13] || (_cache[13] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.background_tasks || 0), 1)
                 ]),
                 _: 1
@@ -1127,7 +1216,7 @@ return (_ctx, _cache) => {
               class: "capability-table"
             }, {
               default: _withCtx(() => [
-                _cache[12] || (_cache[12] = _createElementVNode("thead", null, [
+                _cache[14] || (_cache[14] = _createElementVNode("thead", null, [
                   _createElementVNode("tr", null, [
                     _createElementVNode("th", null, "能力"),
                     _createElementVNode("th", null, "状态"),
@@ -1231,19 +1320,19 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VBtn, { value: "" }, {
-                        default: _withCtx(() => [...(_cache[13] || (_cache[13] = [
+                        default: _withCtx(() => [...(_cache[15] || (_cache[15] = [
                           _createTextVNode("全部", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "existing" }, {
-                        default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
+                        default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
                           _createTextVNode("已存在", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "pending" }, {
-                        default: _withCtx(() => [...(_cache[15] || (_cache[15] = [
+                        default: _withCtx(() => [...(_cache[17] || (_cache[17] = [
                           _createTextVNode("待下载", -1)
                         ]))]),
                         _: 1
@@ -1273,7 +1362,7 @@ return (_ctx, _cache) => {
                     disabled: qbRefreshing.value || !overview.value.plugin?.enabled,
                     onClick: refreshQb
                   }, {
-                    default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
+                    default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
                       _createTextVNode(" 刷新识别 ", -1)
                     ]))]),
                     _: 1
@@ -1329,7 +1418,7 @@ return (_ctx, _cache) => {
                   "item.resource_info": _withCtx(({ item }) => [
                     _createElementVNode("div", _hoisted_17, [
                       _createElementVNode("span", _hoisted_18, [
-                        _cache[17] || (_cache[17] = _createElementVNode("strong", null, "customization", -1)),
+                        _cache[19] || (_cache[19] = _createElementVNode("strong", null, "customization", -1)),
                         _createTextVNode(" " + _toDisplayString(item.customizations?.join(' / ') || '空'), 1)
                       ]),
                       (item.resource_tokens?.length)
@@ -1421,19 +1510,19 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                        default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
+                        default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
                           _createTextVNode("RSS任务", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "rss_history" }, {
-                        default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
+                        default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
                           _createTextVNode("RSS历史", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
-                        default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
+                        default: _withCtx(() => [...(_cache[22] || (_cache[22] = [
                           _createTextVNode("站点访问身份", -1)
                         ]))]),
                         _: 1
@@ -1448,9 +1537,11 @@ return (_ctx, _cache) => {
                         downloaders: allQbDownloaders.value,
                         sites: siteIdentities.value,
                         loading: loading.value,
+                        "testing-task-id": rssTestingTaskId.value,
                         onSave: saveRssTasks,
-                        onReload: loadActive
-                      }, null, 8, ["items", "downloaders", "sites", "loading"]))
+                        onReload: loadActive,
+                        onTest: testRssTask
+                      }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id"]))
                     : (vtTab.value === 'rss_history')
                       ? (_openBlock(), _createBlock(_component_VDataTable, {
                           key: 1,
@@ -1519,12 +1610,160 @@ return (_ctx, _cache) => {
                     }, null, 8, ["items", "loading"])
                   ]))
                 : _createCommentVNode("", true)
-    ])
+    ]),
+    _createVNode(_component_VDialog, {
+      modelValue: rssTestDialog.value,
+      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((rssTestDialog).value = $event)),
+      "max-width": "1280"
+    }, {
+      default: _withCtx(() => [
+        _createVNode(_component_VCard, null, {
+          default: _withCtx(() => [
+            _createVNode(_component_VCardTitle, { class: "rss-test-title" }, {
+              default: _withCtx(() => [
+                _createVNode(_component_VIcon, {
+                  icon: "mdi-rss",
+                  color: "primary"
+                }),
+                _createElementVNode("span", null, _toDisplayString(rssTestResult.value?.task?.name || 'RSS 测试结果'), 1),
+                _createVNode(_component_VSpacer),
+                _createVNode(_component_VBtn, {
+                  icon: "mdi-close",
+                  variant: "text",
+                  "aria-label": "关闭",
+                  onClick: _cache[7] || (_cache[7] = $event => (rssTestDialog.value = false))
+                })
+              ]),
+              _: 1
+            }),
+            _createVNode(_component_VDivider),
+            (rssTestResult.value)
+              ? (_openBlock(), _createBlock(_component_VCardText, {
+                  key: 0,
+                  class: "rss-test-content"
+                }, {
+                  default: _withCtx(() => [
+                    _createElementVNode("div", _hoisted_28, [
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(_toDisplayString(rssTestResult.value.feed?.type?.toUpperCase() || 'RSS'), 1)
+                        ]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(" 共 " + _toDisplayString(rssTestResult.value.counts?.total || 0) + " 条 ", 1)
+                        ]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        color: "success",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(" 可处理 " + _toDisplayString(rssTestResult.value.counts?.ready || 0), 1)
+                        ]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(" 已过滤 " + _toDisplayString(rssTestResult.value.counts?.filtered || 0), 1)
+                        ]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        color: "warning",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(" 缺少种子链接 " + _toDisplayString(rssTestResult.value.counts?.missing_enclosure || 0), 1)
+                        ]),
+                        _: 1
+                      }),
+                      _createVNode(_component_VChip, {
+                        size: "small",
+                        color: "info",
+                        variant: "tonal"
+                      }, {
+                        default: _withCtx(() => [
+                          _createTextVNode(" 重复 " + _toDisplayString(rssTestResult.value.counts?.duplicate || 0), 1)
+                        ]),
+                        _: 1
+                      }),
+                      (rssTestResult.value.truncated)
+                        ? (_openBlock(), _createBlock(_component_VChip, {
+                            key: 0,
+                            size: "small",
+                            color: "warning",
+                            variant: "tonal"
+                          }, {
+                            default: _withCtx(() => [
+                              _createTextVNode(" 仅显示前 " + _toDisplayString(rssTestResult.value.items?.length || 0) + " 条 ", 1)
+                            ]),
+                            _: 1
+                          }))
+                        : _createCommentVNode("", true)
+                    ]),
+                    (rssTestResult.value.feed?.title)
+                      ? (_openBlock(), _createElementBlock("div", _hoisted_29, _toDisplayString(rssTestResult.value.feed.title), 1))
+                      : _createCommentVNode("", true),
+                    _createElementVNode("code", _hoisted_30, _toDisplayString(rssTestResult.value.feed?.final_url_masked), 1),
+                    _createVNode(_component_VDataTable, {
+                      headers: rssTestHeaders,
+                      items: rssTestResult.value.items || [],
+                      density: "compact",
+                      "item-value": "row_key",
+                      "items-per-page": -1,
+                      "hide-default-footer": "",
+                      class: "data-table rss-test-table",
+                      "no-data-text": "RSS 中没有可解析条目"
+                    }, {
+                      "item.status": _withCtx(({ item }) => [
+                        _createVNode(_component_VChip, {
+                          color: rssTestColor(item.status),
+                          size: "small",
+                          variant: "tonal"
+                        }, {
+                          default: _withCtx(() => [
+                            _createTextVNode(_toDisplayString(rssTestLabels[item.status] || item.status), 1)
+                          ]),
+                          _: 2
+                        }, 1032, ["color"])
+                      ]),
+                      "item.enclosure_url_masked": _withCtx(({ item }) => [
+                        _createElementVNode("code", _hoisted_31, _toDisplayString(item.enclosure_url_masked || '-'), 1)
+                      ]),
+                      "item.detail_url_masked": _withCtx(({ item }) => [
+                        _createElementVNode("code", _hoisted_32, _toDisplayString(item.detail_url_masked || '-'), 1)
+                      ]),
+                      _: 1
+                    }, 8, ["items"])
+                  ]),
+                  _: 1
+                }))
+              : _createCommentVNode("", true)
+          ]),
+          _: 1
+        })
+      ]),
+      _: 1
+    }, 8, ["modelValue"])
   ]))
 }
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-46d565f1"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4c745f31"]]);
 
 export { AppPage as default };

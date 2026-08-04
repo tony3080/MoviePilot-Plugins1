@@ -31,9 +31,9 @@
   },
   "RssAllInOne": {
     "name": "RSS一条龙",
-    "description": "统一管理 PT RSS、qBittorrent、硬链接 staging 与 CloudDrive2 备份流程。",
+    "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.4.5",
+    "version": "0.5.0",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.5.0": "新增 RSS/Atom 只读测试：解析标题、详情、GUID、enclosure、发布时间和种子 ID，执行标题过滤与来源身份去重预检，并统一遮蔽 RSS 密钥；测试过程不写入历史、不推送 qB",
       "v0.4.5": "修复隐藏分页栏的数据表仍按默认每页 10 条截断显示的问题，站点身份、QB、入库、RSS 历史和后台任务完整显示已加载记录",
       "v0.4.4": "使用 MoviePilot 实时自定义占位符匹配器重建 customization，按 @ 保序合并任务标题与文件名结果并单独显示命名输入",
       "v0.4.3": "补齐 qB 任务标题中的 MoviePilot 资源识别字段并传入文件命名，QB 管理新增资源信息、命中识别词和字段来源展示",
