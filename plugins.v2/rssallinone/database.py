@@ -660,11 +660,72 @@ class SQLiteStore:
                 placeholders = ",".join("?" for _ in chunk)
                 rows = connection.execute(
                     f"""SELECT source_key FROM rss_history
-                        WHERE task_id = ? AND source_key IN ({placeholders})""",
+                        WHERE task_id = ?
+                          AND status IN (
+                            'queued', 'queued_warning', 'content_duplicate',
+                            'existing', 'processed'
+                          )
+                          AND source_key IN ({placeholders})""",
                     (normalized_task_id, *chunk),
                 ).fetchall()
                 found.update(str(row["source_key"]) for row in rows)
         return found
+
+    def find_rss_content_keys(self, content_keys: Iterable[object]) -> Set[str]:
+        normalized_keys = sorted({
+            str(item or "").strip()
+            for item in content_keys or []
+            if str(item or "").strip()
+        })
+        if not normalized_keys:
+            return set()
+        found: Set[str] = set()
+        with self.connection() as connection:
+            for offset in range(0, len(normalized_keys), 500):
+                chunk = normalized_keys[offset:offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = connection.execute(
+                    f"""SELECT DISTINCT content_key FROM rss_history
+                        WHERE content_key IN ({placeholders})
+                          AND status IN (
+                            'queued', 'queued_warning', 'content_duplicate',
+                            'existing', 'processed'
+                          )""",
+                    chunk,
+                ).fetchall()
+                found.update(str(row["content_key"]) for row in rows)
+        return found
+
+    def upsert_rss_history(self, record: Dict[str, Any]) -> None:
+        now = str(record.get("updated_at") or utc_now())
+        values = (
+            str(record.get("task_id") or ""),
+            str(record.get("source_key") or ""),
+            str(record.get("content_key") or ""),
+            str(record.get("title") or ""),
+            str(record.get("status") or ""),
+            str(record.get("reason") or ""),
+            str(record.get("detail_url_masked") or ""),
+            self._json_dump(record.get("payload") or {}),
+            str(record.get("created_at") or now),
+            now,
+        )
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO rss_history(
+                    task_id, source_key, content_key, title, status, reason,
+                    detail_url_masked, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(task_id, source_key) DO UPDATE SET
+                    content_key = excluded.content_key,
+                    title = excluded.title,
+                    status = excluded.status,
+                    reason = excluded.reason,
+                    detail_url_masked = excluded.detail_url_masked,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at""",
+                values,
+            )
 
     def list_background_tasks(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
         return self._list_table("background_tasks", "updated_at", offset, limit)

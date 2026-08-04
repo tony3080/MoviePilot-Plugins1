@@ -28,9 +28,13 @@ const qbView = ref('')
 const qbKeyword = ref('')
 const qbTask = ref(null)
 const rssTestingTaskId = ref('')
+const rssRunningTaskId = ref('')
+const rssBackgroundTask = ref(null)
+const rssControlLoading = ref(false)
 const rssTestDialog = ref(false)
 const rssTestResult = ref(null)
 let qbPollTimer = null
+let rssPollTimer = null
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -108,6 +112,7 @@ const capabilityRows = computed(() => Object.entries(
 })))
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state))
+const rssEnabled = computed(() => overview.value.plugin?.rss_enabled !== false)
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0)
   const taskTotal = Number(qbTask.value?.total || 0)
@@ -178,6 +183,10 @@ async function loadOverview() {
   if (response?.qb_task?.id && !qbTask.value?.id) {
     qbTask.value = response.qb_task
     scheduleQbPoll(response.qb_task.id)
+  }
+  if (response?.rss_task?.id && !rssBackgroundTask.value?.id) {
+    rssBackgroundTask.value = response.rss_task
+    scheduleRssPoll(response.rss_task.id)
   }
 }
 
@@ -343,6 +352,82 @@ async function testRssTask(task) {
   }
 }
 
+async function controlRss(enabled) {
+  rssControlLoading.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/control', { enabled }),
+    )
+    if (!response?.success) throw new Error(response?.message || 'RSS 调度开关保存失败')
+    overview.value.plugin = {
+      ...(overview.value.plugin || {}),
+      rss_enabled: Boolean(response.enabled),
+    }
+    successMessage.value = response.message || 'RSS 调度状态已更新'
+  } catch (error) {
+    errorMessage.value = error?.message || 'RSS 调度开关保存失败'
+  } finally {
+    rssControlLoading.value = false
+  }
+}
+
+async function runRssTask(task) {
+  const configuredTaskId = String(task?.id || '')
+  rssRunningTaskId.value = configuredTaskId
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/run', { task_id: configuredTaskId }),
+    )
+    if (!response?.success || !response?.task_id) {
+      throw new Error(response?.message || 'RSS 执行启动失败')
+    }
+    rssBackgroundTask.value = {
+      id: response.task_id,
+      state: 'running',
+      processed: 0,
+      total: 0,
+    }
+    successMessage.value = response.message || 'RSS 执行已启动'
+    scheduleRssPoll(response.task_id)
+  } catch (error) {
+    rssRunningTaskId.value = ''
+    errorMessage.value = error?.message || 'RSS 执行启动失败'
+  }
+}
+
+function scheduleRssPoll(taskId) {
+  if (!taskId) return
+  window.clearTimeout(rssPollTimer)
+  rssPollTimer = window.setTimeout(() => pollRssTask(taskId), 1200)
+}
+
+async function pollRssTask(taskId) {
+  try {
+    const response = unwrap(
+      await props.api.get(`plugin/RssAllInOne/tasks/${taskId}`),
+    )
+    if (!response?.success || !response?.task) return
+    rssBackgroundTask.value = response.task
+    if (['queued', 'running'].includes(response.task.state)) {
+      scheduleRssPoll(taskId)
+      return
+    }
+    const result = response.task.result || {}
+    successMessage.value = response.task.state === 'succeeded'
+      ? `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`
+      : `RSS 执行已${response.task.state === 'cancelled' ? '停止' : '结束'}`
+    rssRunningTaskId.value = ''
+    await loadOverview()
+  } catch (error) {
+    rssRunningTaskId.value = ''
+    errorMessage.value = error?.message || '读取 RSS 执行进度失败'
+  }
+}
+
 function scheduleQbPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(qbPollTimer)
@@ -452,7 +537,10 @@ watch([qbDownloader, qbView], () => {
   if (activeTab.value === 'qb') loadActive()
 })
 onMounted(loadActive)
-onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
+onBeforeUnmount(() => {
+  window.clearTimeout(qbPollTimer)
+  window.clearTimeout(rssPollTimer)
+})
 </script>
 
 <template>
@@ -744,9 +832,14 @@ onBeforeUnmount(() => window.clearTimeout(qbPollTimer))
           :sites="siteIdentities"
           :loading="loading"
           :testing-task-id="rssTestingTaskId"
+          :running-task-id="rssRunningTaskId"
+          :rss-enabled="rssEnabled"
+          :controlling="rssControlLoading"
           @save="saveRssTasks"
           @reload="loadActive"
           @test="testRssTask"
+          @run="runRssTask"
+          @control="controlRss"
         />
         <VDataTable
           v-else-if="vtTab === 'rss_history'"

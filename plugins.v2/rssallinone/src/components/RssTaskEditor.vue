@@ -7,9 +7,12 @@ const props = defineProps({
   sites: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   testingTaskId: { type: String, default: '' },
+  runningTaskId: { type: String, default: '' },
+  rssEnabled: { type: Boolean, default: true },
+  controlling: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['save', 'reload', 'test'])
+const emit = defineEmits(['save', 'reload', 'test', 'run', 'control'])
 
 const tasks = ref([])
 const expanded = ref([])
@@ -132,6 +135,15 @@ watch(
     <div class="rss-toolbar">
       <span class="text-caption text-medium-emphasis">{{ tasks.length }} 条任务</span>
       <VSpacer />
+      <VBtn
+        :prepend-icon="rssEnabled ? 'mdi-pause-circle-outline' : 'mdi-play-circle-outline'"
+        :color="rssEnabled ? 'warning' : 'success'"
+        variant="tonal"
+        :loading="controlling"
+        @click="emit('control', !rssEnabled)"
+      >
+        {{ rssEnabled ? '暂停 RSS 调度' : '恢复 RSS 调度' }}
+      </VBtn>
       <VTooltip text="重新读取">
         <template #activator="{ props: tooltipProps }">
           <VBtn
@@ -178,6 +190,21 @@ watch(
               {{ task.config.qb_category }}
             </VChip>
             <VSpacer />
+            <VTooltip text="立即执行已保存配置">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-play-circle-outline"
+                  size="small"
+                  variant="text"
+                  color="success"
+                  :loading="runningTaskId === task.id"
+                  :disabled="!rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim()"
+                  aria-label="立即执行 RSS"
+                  @click.stop="emit('run', task)"
+                />
+              </template>
+            </VTooltip>
             <VTooltip text="测试 RSS">
               <template #activator="{ props: tooltipProps }">
                 <VBtn

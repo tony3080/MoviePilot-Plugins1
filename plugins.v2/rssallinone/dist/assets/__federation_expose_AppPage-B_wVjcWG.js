@@ -1,7 +1,7 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
 import { _ as _export_sfc } from './_plugin-vue_export-helper-pcqpp-6-.js';
 
-const {toDisplayString:_toDisplayString$1,createElementVNode:_createElementVNode$1,resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,mergeProps:_mergeProps$1,withCtx:_withCtx$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1,renderList:_renderList$1,Fragment:_Fragment$1,createElementBlock:_createElementBlock$1,withModifiers:_withModifiers} = await importShared('vue');
+const {toDisplayString:_toDisplayString$1,createElementVNode:_createElementVNode$1,resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,createTextVNode:_createTextVNode$1,withCtx:_withCtx$1,mergeProps:_mergeProps$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1,renderList:_renderList$1,Fragment:_Fragment$1,createElementBlock:_createElementBlock$1,withModifiers:_withModifiers} = await importShared('vue');
 
 
 const _hoisted_1$1 = { class: "rss-editor" };
@@ -22,8 +22,11 @@ const _sfc_main$1 = {
   sites: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   testingTaskId: { type: String, default: '' },
+  runningTaskId: { type: String, default: '' },
+  rssEnabled: { type: Boolean, default: true },
+  controlling: { type: Boolean, default: false },
 },
-  emits: ['save', 'reload', 'test'],
+  emits: ['save', 'reload', 'test', 'run', 'control'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -167,6 +170,18 @@ return (_ctx, _cache) => {
     _createElementVNode$1("div", _hoisted_2$1, [
       _createElementVNode$1("span", _hoisted_3$1, _toDisplayString$1(tasks.value.length) + " 条任务", 1),
       _createVNode$1(_component_VSpacer),
+      _createVNode$1(_component_VBtn, {
+        "prepend-icon": __props.rssEnabled ? 'mdi-pause-circle-outline' : 'mdi-play-circle-outline',
+        color: __props.rssEnabled ? 'warning' : 'success',
+        variant: "tonal",
+        loading: __props.controlling,
+        onClick: _cache[0] || (_cache[0] = $event => (emit('control', !__props.rssEnabled)))
+      }, {
+        default: _withCtx$1(() => [
+          _createTextVNode$1(_toDisplayString$1(__props.rssEnabled ? '暂停 RSS 调度' : '恢复 RSS 调度'), 1)
+        ]),
+        _: 1
+      }, 8, ["prepend-icon", "color", "loading"]),
       _createVNode$1(_component_VTooltip, { text: "重新读取" }, {
         activator: _withCtx$1(({ props: tooltipProps }) => [
           _createVNode$1(_component_VBtn, _mergeProps$1(tooltipProps, {
@@ -174,7 +189,7 @@ return (_ctx, _cache) => {
             variant: "text",
             loading: __props.loading,
             "aria-label": "重新读取",
-            onClick: _cache[0] || (_cache[0] = $event => (emit('reload')))
+            onClick: _cache[1] || (_cache[1] = $event => (emit('reload')))
           }), null, 16, ["loading"])
         ]),
         _: 1
@@ -184,7 +199,7 @@ return (_ctx, _cache) => {
         variant: "text",
         onClick: addTask
       }, {
-        default: _withCtx$1(() => [...(_cache[3] || (_cache[3] = [
+        default: _withCtx$1(() => [...(_cache[4] || (_cache[4] = [
           _createTextVNode$1(" 添加任务 ", -1)
         ]))]),
         _: 1
@@ -196,7 +211,7 @@ return (_ctx, _cache) => {
         loading: __props.loading,
         onClick: saveTasks
       }, {
-        default: _withCtx$1(() => [...(_cache[4] || (_cache[4] = [
+        default: _withCtx$1(() => [...(_cache[5] || (_cache[5] = [
           _createTextVNode$1(" 保存 ", -1)
         ]))]),
         _: 1
@@ -208,7 +223,7 @@ return (_ctx, _cache) => {
           type: "info",
           variant: "tonal"
         }, {
-          default: _withCtx$1(() => [...(_cache[5] || (_cache[5] = [
+          default: _withCtx$1(() => [...(_cache[6] || (_cache[6] = [
             _createTextVNode$1(" 暂无 RSS 任务 ", -1)
           ]))]),
           _: 1
@@ -216,7 +231,7 @@ return (_ctx, _cache) => {
       : (_openBlock$1(), _createBlock$1(_component_VExpansionPanels, {
           key: 1,
           modelValue: expanded.value,
-          "onUpdate:modelValue": _cache[2] || (_cache[2] = $event => ((expanded).value = $event)),
+          "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((expanded).value = $event)),
           multiple: "",
           class: "task-panels"
         }, {
@@ -236,7 +251,7 @@ return (_ctx, _cache) => {
                           density: "compact",
                           "hide-details": "",
                           color: "primary",
-                          onClick: _cache[1] || (_cache[1] = _withModifiers(() => {}, ["stop"]))
+                          onClick: _cache[2] || (_cache[2] = _withModifiers(() => {}, ["stop"]))
                         }, null, 8, ["modelValue", "onUpdate:modelValue"]),
                         _createElementVNode$1("strong", null, _toDisplayString$1(task.name || `RSS任务 ${index + 1}`), 1),
                         (task.config.qb_category)
@@ -252,6 +267,21 @@ return (_ctx, _cache) => {
                             }, 1024))
                           : _createCommentVNode$1("", true),
                         _createVNode$1(_component_VSpacer),
+                        _createVNode$1(_component_VTooltip, { text: "立即执行已保存配置" }, {
+                          activator: _withCtx$1(({ props: tooltipProps }) => [
+                            _createVNode$1(_component_VBtn, _mergeProps$1({ ref_for: true }, tooltipProps, {
+                              icon: "mdi-play-circle-outline",
+                              size: "small",
+                              variant: "text",
+                              color: "success",
+                              loading: __props.runningTaskId === task.id,
+                              disabled: !__props.rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim(),
+                              "aria-label": "立即执行 RSS",
+                              onClick: _withModifiers($event => (emit('run', task)), ["stop"])
+                            }), null, 16, ["loading", "disabled", "onClick"])
+                          ]),
+                          _: 2
+                        }, 1024),
                         _createVNode$1(_component_VTooltip, { text: "测试 RSS" }, {
                           activator: _withCtx$1(({ props: tooltipProps }) => [
                             _createVNode$1(_component_VBtn, _mergeProps$1({ ref_for: true }, tooltipProps, {
@@ -527,7 +557,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-198861f8"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-68802841"]]);
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 
@@ -620,9 +650,13 @@ const qbView = ref('');
 const qbKeyword = ref('');
 const qbTask = ref(null);
 const rssTestingTaskId = ref('');
+const rssRunningTaskId = ref('');
+const rssBackgroundTask = ref(null);
+const rssControlLoading = ref(false);
 const rssTestDialog = ref(false);
 const rssTestResult = ref(null);
 let qbPollTimer = null;
+let rssPollTimer = null;
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -700,6 +734,7 @@ const capabilityRows = computed(() => Object.entries(
 })));
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state));
+const rssEnabled = computed(() => overview.value.plugin?.rss_enabled !== false);
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0);
   const taskTotal = Number(qbTask.value?.total || 0);
@@ -770,6 +805,10 @@ async function loadOverview() {
   if (response?.qb_task?.id && !qbTask.value?.id) {
     qbTask.value = response.qb_task;
     scheduleQbPoll(response.qb_task.id);
+  }
+  if (response?.rss_task?.id && !rssBackgroundTask.value?.id) {
+    rssBackgroundTask.value = response.rss_task;
+    scheduleRssPoll(response.rss_task.id);
   }
 }
 
@@ -935,6 +974,82 @@ async function testRssTask(task) {
   }
 }
 
+async function controlRss(enabled) {
+  rssControlLoading.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/control', { enabled }),
+    );
+    if (!response?.success) throw new Error(response?.message || 'RSS 调度开关保存失败')
+    overview.value.plugin = {
+      ...(overview.value.plugin || {}),
+      rss_enabled: Boolean(response.enabled),
+    };
+    successMessage.value = response.message || 'RSS 调度状态已更新';
+  } catch (error) {
+    errorMessage.value = error?.message || 'RSS 调度开关保存失败';
+  } finally {
+    rssControlLoading.value = false;
+  }
+}
+
+async function runRssTask(task) {
+  const configuredTaskId = String(task?.id || '');
+  rssRunningTaskId.value = configuredTaskId;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/rss/run', { task_id: configuredTaskId }),
+    );
+    if (!response?.success || !response?.task_id) {
+      throw new Error(response?.message || 'RSS 执行启动失败')
+    }
+    rssBackgroundTask.value = {
+      id: response.task_id,
+      state: 'running',
+      processed: 0,
+      total: 0,
+    };
+    successMessage.value = response.message || 'RSS 执行已启动';
+    scheduleRssPoll(response.task_id);
+  } catch (error) {
+    rssRunningTaskId.value = '';
+    errorMessage.value = error?.message || 'RSS 执行启动失败';
+  }
+}
+
+function scheduleRssPoll(taskId) {
+  if (!taskId) return
+  window.clearTimeout(rssPollTimer);
+  rssPollTimer = window.setTimeout(() => pollRssTask(taskId), 1200);
+}
+
+async function pollRssTask(taskId) {
+  try {
+    const response = unwrap(
+      await props.api.get(`plugin/RssAllInOne/tasks/${taskId}`),
+    );
+    if (!response?.success || !response?.task) return
+    rssBackgroundTask.value = response.task;
+    if (['queued', 'running'].includes(response.task.state)) {
+      scheduleRssPoll(taskId);
+      return
+    }
+    const result = response.task.result || {};
+    successMessage.value = response.task.state === 'succeeded'
+      ? `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`
+      : `RSS 执行已${response.task.state === 'cancelled' ? '停止' : '结束'}`;
+    rssRunningTaskId.value = '';
+    await loadOverview();
+  } catch (error) {
+    rssRunningTaskId.value = '';
+    errorMessage.value = error?.message || '读取 RSS 执行进度失败';
+  }
+}
+
 function scheduleQbPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(qbPollTimer);
@@ -1044,7 +1159,10 @@ watch([qbDownloader, qbView], () => {
   if (activeTab.value === 'qb') loadActive();
 });
 onMounted(loadActive);
-onBeforeUnmount(() => window.clearTimeout(qbPollTimer));
+onBeforeUnmount(() => {
+  window.clearTimeout(qbPollTimer);
+  window.clearTimeout(rssPollTimer);
+});
 
 return (_ctx, _cache) => {
   const _component_VIcon = _resolveComponent("VIcon");
@@ -1538,10 +1656,15 @@ return (_ctx, _cache) => {
                         sites: siteIdentities.value,
                         loading: loading.value,
                         "testing-task-id": rssTestingTaskId.value,
+                        "running-task-id": rssRunningTaskId.value,
+                        "rss-enabled": rssEnabled.value,
+                        controlling: rssControlLoading.value,
                         onSave: saveRssTasks,
                         onReload: loadActive,
-                        onTest: testRssTask
-                      }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id"]))
+                        onTest: testRssTask,
+                        onRun: runRssTask,
+                        onControl: controlRss
+                      }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id", "running-task-id", "rss-enabled", "controlling"]))
                     : (vtTab.value === 'rss_history')
                       ? (_openBlock(), _createBlock(_component_VDataTable, {
                           key: 1,
@@ -1764,6 +1887,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-4c745f31"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7133656f"]]);
 
 export { AppPage as default };

@@ -94,7 +94,7 @@ class RssPreviewService:
 
         feed, parsed_entries = parse_feed(body)
         prepared = [
-            _prepare_entry(task_id, entry)
+            prepare_entry(task_id, entry)
             for entry in parsed_entries[:MAX_FEED_ITEMS]
         ]
         source_keys = [item["source_key"] for item in prepared if item["source_key"]]
@@ -111,7 +111,7 @@ class RssPreviewService:
         }
 
         for position, prepared_entry in enumerate(prepared):
-            status, reason = _classify_entry(
+            status, reason = classify_entry(
                 prepared_entry,
                 name_contains=name_contains,
                 existing=existing,
@@ -343,7 +343,7 @@ def _parse_entry(node: ElementTree.Element) -> ParsedEntry:
     )
 
 
-def _prepare_entry(task_id: str, entry: ParsedEntry) -> Dict[str, Any]:
+def prepare_entry(task_id: str, entry: ParsedEntry) -> Dict[str, Any]:
     torrent_id = extract_torrent_id(
         entry.detail_url,
         entry.guid if _looks_like_url(entry.guid) else "",
@@ -380,7 +380,7 @@ def _prepare_entry(task_id: str, entry: ParsedEntry) -> Dict[str, Any]:
     }
 
 
-def _classify_entry(
+def classify_entry(
     item: Dict[str, Any],
     *,
     name_contains: str,

@@ -314,6 +314,7 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(plugin.get_state())
                 self.assertTrue(overview["success"])
                 self.assertEqual(overview["plugin"]["id"], PLUGIN_ID)
+                self.assertTrue(overview["plugin"]["rss_enabled"])
                 self.assertTrue(health["database"]["ready"])
                 self.assertTrue((data_path / "rssallinone.db").is_file())
                 self.assertEqual(plugin.get_sidebar_nav()[0]["nav_key"], "rssallinone")
@@ -323,6 +324,14 @@ class PluginLifecycleTest(unittest.TestCase):
                     plugin._qb_scope().categories_for("qb-main"),
                     ["movie"],
                 )
+                paused = plugin.api_rss_control({"enabled": False})
+                self.assertFalse(paused["enabled"])
+                self.assertEqual(
+                    plugin.api_rss_run({"task_id": "movies"})["message"],
+                    "RSS 调度已暂停",
+                )
+                resumed = plugin.api_rss_control({"enabled": True})
+                self.assertTrue(resumed["enabled"])
                 self.assertTrue(sites["success"])
                 self.assertEqual(sites["items"][0]["auth_mode"], "Cookie")
                 self.assertNotIn("secret-cookie", repr(sites))

@@ -22,6 +22,7 @@ from .qb_sync import (
     RssTaskQbScope,
 )
 from .rss_feed import RssFeedError, RssPreviewService
+from .rss_execute import RSS_RUN_TASK_TYPE, RssExecutionError, RssExecutionService
 from .rss_tasks import normalize_rss_tasks
 
 
@@ -36,7 +37,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.5.0"
+    plugin_version = "0.6.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -46,6 +47,7 @@ class RssAllInOne(_PluginBase):
     _enabled = False
     _database_filename = "rssallinone.db"
     _qb_refresh_cron = "*/10 * * * *"
+    _rss_enabled = True
     _inventory_root = ""
     _cd2_grpc_addr = ""
     _cd2_token = ""
@@ -63,14 +65,19 @@ class RssAllInOne(_PluginBase):
         self._store: Optional[SQLiteStore] = None
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
+        self._rss_run_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._rss_stop_event = threading.Event()
+        self._runtime_config: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
 
     def init_plugin(self, config: dict = None) -> None:
         config = config or {}
+        self._runtime_config = deepcopy(config)
         defaults = self._default_config()
         self._enabled = bool(config.get("enabled", False))
+        self._rss_enabled = bool(config.get("rss_enabled", True))
         self._database_filename = self._safe_database_filename(
             config.get("database_filename") or "rssallinone.db"
         )
@@ -100,6 +107,10 @@ class RssAllInOne(_PluginBase):
 
         self._startup_error = ""
         self._stop_event.clear()
+        if self._rss_enabled:
+            self._rss_stop_event.clear()
+        else:
+            self._rss_stop_event.set()
         try:
             self._store = SQLiteStore(self._database_path())
             self._store.initialize()
@@ -139,25 +150,56 @@ class RssAllInOne(_PluginBase):
         return []
 
     def get_service(self) -> List[Dict[str, Any]]:
-        if not self._enabled or not self._store or not self._qb_refresh_cron:
+        if not self._enabled or not self._store:
             return []
+        services: List[Dict[str, Any]] = []
         try:
             from apscheduler.triggers.cron import CronTrigger
 
-            trigger = CronTrigger.from_crontab(self._qb_refresh_cron)
+            if self._qb_refresh_cron:
+                trigger = CronTrigger.from_crontab(self._qb_refresh_cron)
+                services.append({
+                    "id": "RssAllInOne.QbRefresh",
+                    "name": "RSS一条龙 QB 只读同步",
+                    "trigger": trigger,
+                    "func": self._scheduled_qb_refresh,
+                    "kwargs": {},
+                })
         except (ImportError, TypeError, ValueError) as error:
             logger.error(f"RSS一条龙：无效的 QB 刷新周期 {self._qb_refresh_cron}：{error}")
-            return []
-        return [{
-            "id": "RssAllInOne.QbRefresh",
-            "name": "RSS一条龙 QB 只读同步",
-            "trigger": trigger,
-            "func": self._scheduled_qb_refresh,
-            "kwargs": {},
-        }]
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            for task in self._store.list_all_rss_tasks():
+                if not task.get("enabled"):
+                    continue
+                config = task.get("config") if isinstance(task.get("config"), dict) else {}
+                rss_url = str(config.get("rss_url") or "").strip()
+                rss_cron = str(config.get("rss_cron") or "").strip()
+                if not rss_url or not rss_cron:
+                    continue
+                try:
+                    trigger = CronTrigger.from_crontab(rss_cron)
+                except (TypeError, ValueError) as error:
+                    logger.error(
+                        f"RSS一条龙：任务 {task.get('name') or task.get('id')} 的 RSS CRON 无效：{error}"
+                    )
+                    continue
+                task_id = str(task.get("id") or "").strip()
+                services.append({
+                    "id": f"RssAllInOne.Rss.{task_id}",
+                    "name": f"RSS一条龙 RSS：{task.get('name') or task_id}",
+                    "trigger": trigger,
+                    "func": self._scheduled_rss_run,
+                    "kwargs": {"task_id": task_id},
+                })
+        except ImportError:
+            logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS CRON")
+        return services
 
     def stop_service(self) -> None:
         self._stop_event.set()
+        self._rss_stop_event.set()
         self._store = None
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -172,6 +214,8 @@ class RssAllInOne(_PluginBase):
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
             self._api("/rss/tasks", self.api_save_rss_tasks, "POST", "保存 RSS 任务"),
             self._api("/rss/test", self.api_rss_test, "POST", "只读测试 RSS 任务"),
+            self._api("/rss/run", self.api_rss_run, "POST", "执行 RSS 任务"),
+            self._api("/rss/control", self.api_rss_control, "POST", "暂停或恢复 RSS 执行"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
@@ -187,11 +231,13 @@ class RssAllInOne(_PluginBase):
                 "name": self.plugin_name,
                 "version": self.plugin_version,
                 "enabled": self._enabled,
-                "phase": "rss_preview",
+                "rss_enabled": self._rss_enabled,
+                "phase": "rss_enqueue",
             },
             "counts": store.counts(),
             "capabilities": self._capabilities(),
             "qb_task": store.latest_running_task(QB_TASK_TYPE),
+            "rss_task": store.latest_running_task(RSS_RUN_TASK_TYPE),
         }
 
     def api_health(self) -> Dict[str, Any]:
@@ -369,6 +415,39 @@ class RssAllInOne(_PluginBase):
                 "result": None,
             }
 
+    def api_rss_run(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        task_id = str((payload or {}).get("task_id") or "").strip()
+        if not task_id:
+            return {"success": False, "message": "缺少 RSS 任务 ID"}
+        return self._start_rss_run(task_id=task_id, source="manual")
+
+    def api_rss_control(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        enabled = bool((payload or {}).get("enabled"))
+        self._rss_enabled = enabled
+        if enabled:
+            self._rss_stop_event.clear()
+        else:
+            self._rss_stop_event.set()
+        self._runtime_config["rss_enabled"] = enabled
+        try:
+            update_config = getattr(self, "update_config", None)
+            if callable(update_config):
+                update_config(deepcopy(self._runtime_config))
+        except Exception as error:
+            logger.error(f"RSS一条龙：保存 RSS 运行开关失败：{error}", exc_info=True)
+            return {"success": False, "message": "RSS 运行开关保存失败"}
+        return {
+            "success": True,
+            "enabled": enabled,
+            "message": "RSS 调度已恢复" if enabled else "RSS 调度已暂停",
+        }
+
     def api_background_tasks(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
         return {
             "success": True,
@@ -385,6 +464,87 @@ class RssAllInOne(_PluginBase):
         if not self._qb_scope().ready:
             return
         self._start_qb_refresh(force_recognition=False, source="scheduler")
+
+    def _scheduled_rss_run(self, task_id: str) -> None:
+        if not self._rss_enabled:
+            return
+        self._start_rss_run(task_id=str(task_id or "").strip(), source="scheduler")
+
+    def _start_rss_run(self, *, task_id: str, source: str) -> Dict[str, Any]:
+        store = self._require_store()
+        if not self._rss_enabled:
+            return {"success": False, "message": "RSS 调度已暂停"}
+        task = next(
+            (item for item in store.list_all_rss_tasks() if str(item.get("id") or "") == task_id),
+            None,
+        )
+        if not task:
+            return {"success": False, "message": "RSS 任务不存在"}
+        if not task.get("enabled"):
+            return {"success": False, "message": "RSS 任务未启用"}
+        if not self._rss_run_lock.acquire(blocking=False):
+            running = store.latest_running_task(RSS_RUN_TASK_TYPE)
+            return {
+                "success": False,
+                "message": "RSS 执行正在运行",
+                "task_id": running.get("id") if running else None,
+            }
+        run_id = uuid.uuid4().hex
+        try:
+            store.create_background_task(run_id, RSS_RUN_TASK_TYPE)
+            thread = threading.Thread(
+                target=self._run_rss_task,
+                kwargs={
+                    "background_task_id": run_id,
+                    "task": deepcopy(task),
+                    "source": source,
+                },
+                name=f"rssallinone-rss-{run_id[:8]}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as error:
+            store.finish_background_task(run_id, "failed", error_message=str(error))
+            self._rss_run_lock.release()
+            raise
+        return {
+            "success": True,
+            "message": "RSS 执行已启动",
+            "task_id": run_id,
+        }
+
+    def _run_rss_task(
+        self,
+        *,
+        background_task_id: str,
+        task: Dict[str, Any],
+        source: str,
+    ) -> None:
+        store = self._store
+        if not store:
+            self._rss_run_lock.release()
+            return
+        try:
+            logger.info(
+                f"RSS一条龙：开始执行 RSS 任务 {task.get('name') or task.get('id')}，来源={source}"
+            )
+            RssExecutionService(
+                store=store,
+                logger=logger,
+            ).run(
+                background_task_id,
+                task,
+                stop_event=self._rss_stop_event,
+            )
+        except Exception as error:
+            logger.error(f"RSS一条龙：RSS 执行失败：{error}", exc_info=True)
+            store.finish_background_task(
+                background_task_id,
+                "failed",
+                error_message=str(error),
+            )
+        finally:
+            self._rss_run_lock.release()
 
     def _start_qb_refresh(
         self,
@@ -474,9 +634,9 @@ class RssAllInOne(_PluginBase):
         capabilities = runtime_capabilities(PLUGIN_DIR)
         capabilities["rss_reader"] = {
             "ready": True,
-            "phase": "readonly_preview",
+            "phase": "enqueue",
             "formats": ["rss", "atom"],
-            "qb_write": False,
+            "qb_write": True,
         }
         capabilities["local_inventory"] = self._library_layout.capability()
         try:
@@ -543,6 +703,7 @@ class RssAllInOne(_PluginBase):
         layout = default_layout_config()
         return {
             "enabled": False,
+            "rss_enabled": True,
             "database_filename": "rssallinone.db",
             "qb_refresh_cron": "*/10 * * * *",
             **layout,
