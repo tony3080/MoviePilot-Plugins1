@@ -339,6 +339,29 @@ class SQLiteStore:
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
 
+    def get_media_item(self, media_id: object) -> Optional[Dict[str, Any]]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM media_items WHERE id = ?",
+                (str(media_id or "").strip(),),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def delete_media_item(self, media_id: object) -> bool:
+        identity = str(media_id or "").strip()
+        if not identity:
+            return False
+        with self.connection() as connection:
+            connection.execute(
+                "DELETE FROM file_mappings WHERE media_id = ?",
+                (identity,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM media_items WHERE id = ?",
+                (identity,),
+            )
+        return bool(cursor.rowcount)
+
     def list_torrents(
         self,
         downloader_id: str = "",

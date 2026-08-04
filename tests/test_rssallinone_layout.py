@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -126,6 +127,15 @@ class LibraryLayoutTest(unittest.TestCase):
         )
         self.assertEqual(configured.config_errors, [])
         self.assertEqual(result["link_base"], "/MP/电影UP/华语电影")
+
+    def test_category_options_come_from_inventory_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "国产剧").mkdir()
+            (root / "外语电影").mkdir()
+            configured = layout.LibraryLayout(str(root), [])
+
+            self.assertEqual(configured.category_options(), ["国产剧", "外语电影"])
 
 
 if __name__ == "__main__":

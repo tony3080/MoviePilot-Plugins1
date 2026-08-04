@@ -37,7 +37,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.7.1"
+    plugin_version = "0.8.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -204,6 +204,10 @@ class RssAllInOne(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [
+            self._api("/qb/item/refresh", self.api_qb_item_refresh, "POST", "刷新单个 QB 任务"),
+            self._api("/qb/item/identify", self.api_qb_item_identify, "POST", "手动识别单个 QB 任务"),
+            self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
+            self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
             self._api("/health", self.api_health, "GET", "依赖与数据库状态"),
             self._api("/media", self.api_media, "GET", "入库管理列表"),
@@ -308,6 +312,91 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": "插件尚未启用"}
         force = self._as_bool((payload or {}).get("force_recognition", False))
         return self._start_qb_refresh(force_recognition=force, source="manual")
+
+    def api_qb_item_refresh(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        try:
+            item = self._qb_sync_service().refresh_item(
+                data.get("downloader_id"), data.get("info_hash")
+            )
+            return {"success": True, "message": "任务已刷新", "item": item}
+        except Exception as error:
+            logger.error(f"RSS一条龙：刷新单个 QB 任务失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error), "item": None}
+
+    def api_qb_item_identify(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        media_type = str(data.get("media_type") or "").strip().casefold()
+        if media_type not in {"movie", "tv"}:
+            return {"success": False, "message": "请选择电影或电视剧"}
+        try:
+            tmdb_id = int(data.get("tmdb_id") or 0)
+        except (TypeError, ValueError):
+            tmdb_id = 0
+        if tmdb_id <= 0:
+            return {"success": False, "message": "请输入有效的 TMDB ID"}
+        try:
+            season = int(data.get("season") or 0) if media_type == "tv" else None
+        except (TypeError, ValueError):
+            return {"success": False, "message": "季号必须是大于等于 0 的整数"}
+        if season is not None and season < 0:
+            return {"success": False, "message": "季号必须大于等于 0"}
+        category = self._library_layout.canonical_category(
+            str(data.get("category") or "").strip()
+        )
+        try:
+            item = self._qb_sync_service().refresh_item(
+                data.get("downloader_id"),
+                data.get("info_hash"),
+                manual_override={
+                    "media_type": media_type,
+                    "tmdb_id": tmdb_id,
+                    "season": season,
+                    "category": category,
+                },
+            )
+            return {
+                "success": True,
+                "message": "已按指定信息重新识别",
+                "item": item,
+            }
+        except Exception as error:
+            logger.error(f"RSS一条龙：手动识别失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error), "item": None}
+
+    def api_media_delete(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        media_id = str((payload or {}).get("media_id") or "").strip()
+        deleted = self._require_store().delete_media_item(media_id)
+        return {
+            "success": deleted,
+            "message": "媒体记录已删除" if deleted else "媒体记录不存在",
+        }
+
+    def api_categories(self) -> Dict[str, Any]:
+        categories = set(self._library_layout.category_options())
+        media = self._require_store().list_media(offset=0, limit=200)
+        for item in media.get("items") or []:
+            category = self._library_layout.canonical_category(
+                item.get("category") or ""
+            )
+            if category:
+                categories.add(category)
+        items = sorted(categories, key=str.casefold)
+        return {"success": True, "items": items, "total": len(items)}
+
+    def _qb_sync_service(self) -> QbSyncService:
+        return QbSyncService(
+            store=self._require_store(),
+            inventory_checker=LocalInventoryChecker([]),
+            library_layout=self._library_layout,
+            logger=logger,
+        )
 
     def api_layout(self) -> Dict[str, Any]:
         return {

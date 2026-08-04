@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RssTaskEditor from './RssTaskEditor.vue'
+import MediaPosterCard from './MediaPosterCard.vue'
+import ManualIdentifyDialog from './ManualIdentifyDialog.vue'
 
 const props = defineProps({
   api: {
@@ -20,6 +22,11 @@ const total = ref(0)
 const rssTasks = ref([])
 const allQbDownloaders = ref([])
 const siteIdentities = ref([])
+const categoryOptions = ref([])
+const selectedKeys = ref([])
+const itemBusyKey = ref('')
+const identifyDialog = ref(false)
+const identifyItem = ref(null)
 const mediaState = ref('')
 const mediaType = ref('')
 const qbDownloaders = ref([])
@@ -178,6 +185,26 @@ function torrentRecognition(item) {
   }
 }
 
+function itemKey(item) {
+  return item.row_key || item.id || `${item.downloader_id}:${item.info_hash}`
+}
+
+function toggleSelected(item) {
+  const key = itemKey(item)
+  selectedKeys.value = selectedKeys.value.includes(key)
+    ? selectedKeys.value.filter(value => value !== key)
+    : [...selectedKeys.value, key]
+}
+
+function selectAllVisible() {
+  selectedKeys.value = rows.value.map(itemKey)
+}
+
+async function loadCategories() {
+  const response = unwrap(await props.api.get('plugin/RssAllInOne/categories'))
+  categoryOptions.value = response?.items || []
+}
+
 async function loadOverview() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/overview'))
   overview.value = response || overview.value
@@ -221,6 +248,9 @@ async function loadActive() {
   successMessage.value = ''
   try {
     await loadOverview()
+    if (['library', 'qb'].includes(activeTab.value)) {
+      await loadCategories()
+    }
     if (activeTab.value === 'overview') {
       rows.value = []
       total.value = 0
@@ -282,6 +312,16 @@ async function loadActive() {
     const items = response?.items || []
     if (activeTab.value === 'tasks') {
       rows.value = normalizeTaskRows(items)
+    } else if (activeTab.value === 'library') {
+      rows.value = items.map(item => ({
+        ...item,
+        row_key: item.id,
+        poster: item.poster || item.details?.media?.poster_path || '',
+        inventory_state: item.details?.inventory?.folder_status === 'exists'
+          ? (Number(item.details?.inventory?.missing_count || 0) ? 'partial' : 'exists')
+          : item.details?.inventory?.folder_status || 'missing',
+        recognition_state: item.state === 'unidentified' ? 'unidentified' : 'identified',
+      }))
     } else if (activeTab.value === 'qb') {
       rows.value = items.map(item => {
         const recognition = torrentRecognition(item)
@@ -290,6 +330,8 @@ async function loadActive() {
         return {
           ...item,
           row_key: `${item.downloader_id}:${item.info_hash}`,
+          qb_category: item.category,
+          media_category: item.details?.path_plan?.category || item.details?.automatic_category || '',
           target_name: item.details?.path_plan?.inventory_files?.[0]?.path || '',
           link_target: item.details?.path_plan?.link_files?.[0]?.path || '',
           resource_tokens: recognition.tokens,
@@ -479,6 +521,76 @@ async function refreshQb() {
     scheduleQbPoll(response.task_id)
   } catch (error) {
     errorMessage.value = error?.message || 'QB 刷新启动失败'
+  }
+}
+
+function openIdentify(item) {
+  identifyItem.value = item
+  identifyDialog.value = true
+}
+
+async function refreshItem(item) {
+  const key = itemKey(item)
+  if (!item.downloader_id || !item.info_hash) {
+    errorMessage.value = '该记录没有关联的 qB 任务，暂时无法重新识别'
+    return
+  }
+  itemBusyKey.value = key
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post('plugin/RssAllInOne/qb/item/refresh', {
+      downloader_id: item.downloader_id,
+      info_hash: item.info_hash,
+    }))
+    if (!response?.success) throw new Error(response?.message || '刷新失败')
+    successMessage.value = response.message || '任务已刷新'
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '刷新失败'
+  } finally {
+    itemBusyKey.value = ''
+  }
+}
+
+async function saveManualIdentify(payload) {
+  const key = itemKey(identifyItem.value || payload)
+  itemBusyKey.value = key
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/qb/item/identify', payload),
+    )
+    if (!response?.success) throw new Error(response?.message || '人工识别失败')
+    identifyDialog.value = false
+    identifyItem.value = null
+    successMessage.value = response.message || '已按指定信息重新识别'
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '人工识别失败'
+  } finally {
+    itemBusyKey.value = ''
+  }
+}
+
+async function deleteMediaRecord(item) {
+  if (!window.confirm(`只删除插件记录“${item.title || item.source_name || ''}”？`)) return
+  itemBusyKey.value = itemKey(item)
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/delete', { media_id: item.id }),
+    )
+    if (!response?.success) throw new Error(response?.message || '删除记录失败')
+    successMessage.value = response.message || '媒体记录已删除'
+    selectedKeys.value = selectedKeys.value.filter(value => value !== itemKey(item))
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '删除记录失败'
+  } finally {
+    itemBusyKey.value = ''
   }
 }
 
@@ -674,17 +786,27 @@ onBeforeUnmount(() => {
           />
           <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
         </div>
-        <VDataTable
-          :headers="mediaHeaders"
-          :items="rows"
-          :loading="loading"
-          density="compact"
-          item-value="id"
-          :items-per-page="-1"
-          hide-default-footer
-          class="data-table"
-          no-data-text="暂无媒体记录"
-        />
+        <div v-if="rows.length" class="selection-bar">
+          <span>已选 {{ selectedKeys.length }} 项</span>
+          <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
+          <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
+        </div>
+        <div v-if="rows.length" class="poster-grid">
+          <MediaPosterCard
+            v-for="item in rows"
+            :key="itemKey(item)"
+            :item="item"
+            :mode="item.state === 'imported' ? 'imported' : 'pending'"
+            :selected="selectedKeys.includes(itemKey(item))"
+            :busy="itemBusyKey === itemKey(item)"
+            @toggle="toggleSelected"
+            @refresh="refreshItem"
+            @edit="openIdentify"
+            @delete="deleteMediaRecord"
+          />
+        </div>
+        <VEmptyState v-else-if="!loading" icon="mdi-movie-open-outline" title="暂无媒体记录" />
+        <VProgressLinear v-if="loading" indeterminate color="primary" />
       </section>
 
       <section v-else-if="activeTab === 'qb'">
@@ -754,78 +876,26 @@ onBeforeUnmount(() => {
             {{ qbTask.current_item }}
           </div>
         </VAlert>
-        <VDataTable
-          :headers="torrentHeaders"
-          :items="rows"
-          :loading="loading"
-          density="compact"
-          item-value="row_key"
-          :items-per-page="-1"
-          hide-default-footer
-          class="data-table"
-          no-data-text="暂无 qB 任务快照"
-        >
-          <template #item.media_title="{ item }">
-            <div class="media-cell">
-              <strong>{{ item.media_title || '未识别' }}</strong>
-              <span v-if="item.media_year || item.season !== null" class="text-caption text-medium-emphasis">
-                {{ item.media_year || '' }}{{ item.season !== null && item.season !== undefined ? ` · S${String(item.season).padStart(2, '0')}` : '' }}
-              </span>
-            </div>
-          </template>
-          <template #item.resource_info="{ item }">
-            <div class="resource-cell">
-              <span class="customization-line">
-                <strong>customization</strong>
-                {{ item.customizations?.join(' / ') || '空' }}
-              </span>
-              <span v-if="item.resource_tokens?.length" class="resource-token-line">
-                {{ item.resource_tokens.join(' · ') }}
-              </span>
-              <span v-else class="text-caption text-medium-emphasis">未解析到资源字段</span>
-              <div class="resource-meta-line">
-                <VTooltip v-if="item.applied_words?.length" location="bottom" max-width="560">
-                  <template #activator="{ props: tooltipProps }">
-                    <VChip
-                      v-bind="tooltipProps"
-                      size="x-small"
-                      variant="tonal"
-                      color="info"
-                      prepend-icon="mdi-tag-search-outline"
-                    >
-                      识别词 {{ item.applied_words.length }}
-                    </VChip>
-                  </template>
-                  <div class="recognition-tooltip">
-                    <code v-for="word in item.applied_words" :key="word">{{ word }}</code>
-                  </div>
-                </VTooltip>
-                <span v-if="item.inherited_meta_fields?.length" class="text-caption text-medium-emphasis">
-                  任务标题补全 {{ item.inherited_meta_fields.length }} 项
-                </span>
-              </div>
-            </div>
-          </template>
-          <template #item.inventory_state="{ item }">
-            <VChip :color="inventoryColor(item.inventory_state)" size="small" variant="tonal">
-              {{ inventoryText(item) }}
-            </VChip>
-          </template>
-          <template #item.recognition_state="{ item }">
-            <VChip :color="recognitionColor(item.recognition_state)" size="small" variant="tonal">
-              {{ recognitionLabels[item.recognition_state] || item.recognition_state }}
-            </VChip>
-          </template>
-          <template #item.progress="{ item }">
-            <div class="progress-cell">
-              <VProgressLinear :model-value="Number(item.progress || 0)" height="5" />
-              <span>{{ Math.round(Number(item.progress || 0)) }}%</span>
-            </div>
-          </template>
-          <template #item.info_hash="{ item }">
-            <code>{{ String(item.info_hash || '').slice(0, 10) }}</code>
-          </template>
-        </VDataTable>
+        <div v-if="rows.length" class="selection-bar">
+          <span>已选 {{ selectedKeys.length }} 项</span>
+          <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
+          <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
+        </div>
+        <div v-if="rows.length" class="poster-grid">
+          <MediaPosterCard
+            v-for="item in rows"
+            :key="itemKey(item)"
+            :item="item"
+            mode="qb"
+            :selected="selectedKeys.includes(itemKey(item))"
+            :busy="itemBusyKey === itemKey(item)"
+            @toggle="toggleSelected"
+            @refresh="refreshItem"
+            @edit="openIdentify"
+          />
+        </div>
+        <VEmptyState v-else-if="!loading" icon="mdi-download-box-outline" title="暂无 qB 任务" />
+        <VProgressLinear v-if="loading" indeterminate color="primary" />
       </section>
 
       <section v-else-if="activeTab === 'vt'">
@@ -902,6 +972,14 @@ onBeforeUnmount(() => {
         />
       </section>
     </main>
+
+    <ManualIdentifyDialog
+      v-model="identifyDialog"
+      :item="identifyItem"
+      :categories="categoryOptions"
+      :loading="Boolean(itemBusyKey)"
+      @save="saveManualIdentify"
+    />
 
     <VDialog v-model="rssTestDialog" max-width="1280">
       <VCard>
@@ -1190,6 +1268,23 @@ onBeforeUnmount(() => {
   font-size: 0.8rem;
 }
 
+.selection-bar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.68);
+  font-size: 0.8rem;
+}
+
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
 .sub-tabs {
   margin: -16px -16px 14px;
   padding-inline: 8px;
@@ -1210,6 +1305,11 @@ onBeforeUnmount(() => {
 
   .filter-control {
     flex: 1 1 160px;
+  }
+
+  .poster-grid {
+    grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+    gap: 12px;
   }
 }
 </style>

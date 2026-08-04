@@ -231,6 +231,44 @@ class MoviePilotQbGateway:
         return meta, media
 
     @staticmethod
+    def recognize_manual(
+        title: str,
+        media_type: str,
+        tmdb_id: int,
+        season: Optional[int] = None,
+    ) -> Tuple[Any, Optional[Any]]:
+        from app.chain.media import MediaChain
+        from app.core.metainfo import MetaInfo
+        from app.schemas.types import MediaType
+
+        normalized_type = str(media_type or "").strip().casefold()
+        if normalized_type == "movie":
+            mtype = MediaType.MOVIE
+            normalized_season = None
+        elif normalized_type in {"tv", "series"}:
+            mtype = MediaType.TV
+            normalized_season = int(season or 0)
+        else:
+            raise ValueError("媒体类型必须是 movie 或 tv")
+        normalized_tmdb = int(tmdb_id or 0)
+        if normalized_tmdb <= 0:
+            raise ValueError("TMDB ID 必须大于 0")
+
+        meta = MetaInfo(title=title)
+        meta.type = mtype
+        meta.begin_season = normalized_season
+        MoviePilotQbGateway.refresh_customization(meta, title)
+        media = MediaChain().recognize_media(
+            meta=meta,
+            mtype=mtype,
+            tmdbid=normalized_tmdb,
+            cache=False,
+        )
+        if media and normalized_type != "movie":
+            media.season = normalized_season
+        return meta, media
+
+    @staticmethod
     def restore_media(payload: Dict[str, Any]) -> Optional[Any]:
         if not payload:
             return None
@@ -613,6 +651,48 @@ class QbSyncService:
         self.library_layout = library_layout or LibraryLayout("", [])
         self.logger = logger
 
+    def refresh_item(
+        self,
+        downloader_id: object,
+        info_hash: object,
+        manual_override: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        downloader_name = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader_name or not normalized_hash:
+            raise ValueError("缺少 qB 节点或 info-hash")
+
+        downloader = next(
+            (
+                item for item in self.gateway.list_downloaders()
+                if item.name == downloader_name
+            ),
+            None,
+        )
+        if not downloader or not downloader.ready:
+            raise RuntimeError(f"qBittorrent 节点不可用：{downloader_name}")
+        raw = None
+        for torrent in self.gateway.list_torrents(downloader_name):
+            candidate = self.gateway.torrent_dict(torrent)
+            if str(candidate.get("hash") or "").strip().lower() == normalized_hash:
+                raw = candidate
+                break
+        if not raw:
+            raise RuntimeError("qBittorrent 中没有找到该任务")
+        scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
+        if not scope.matches(downloader_name, raw.get("category") or ""):
+            raise ValueError("该任务不属于任何已保存的 VT+ RSS 分类")
+
+        self._sync_one(
+            downloader=downloader,
+            raw=raw,
+            force_recognition=True,
+            manual_override=manual_override,
+        )
+        return self.store.get_torrent_snapshot(
+            downloader_name, normalized_hash
+        ) or {}
+
     def run(
         self,
         task_id: str,
@@ -752,6 +832,7 @@ class QbSyncService:
         downloader: DownloaderView,
         raw: Dict[str, Any],
         force_recognition: bool,
+        manual_override: Optional[Dict[str, Any]] = None,
     ) -> str:
         now = utc_now()
         info_hash = str(raw.get("hash") or "").strip().lower()
@@ -762,6 +843,10 @@ class QbSyncService:
         ).hexdigest()
         existing = self.store.get_torrent_snapshot(downloader.name, info_hash) or {}
         existing_details = existing.get("details") or {}
+        stored_override = existing_details.get("manual_override") or {}
+        override = _normalize_manual_override(
+            stored_override if manual_override is None else manual_override
+        )
         media_payload = existing_details.get("media") or {}
         recognition_needed = (
             force_recognition
@@ -773,7 +858,15 @@ class QbSyncService:
 
         meta = media = None
         if recognition_needed:
-            meta, media = self.gateway.recognize(title)
+            if override.get("media_type") and override.get("tmdb_id"):
+                meta, media = self.gateway.recognize_manual(
+                    title,
+                    override["media_type"],
+                    override["tmdb_id"],
+                    override.get("season"),
+                )
+            else:
+                meta, media = self.gateway.recognize(title)
         else:
             media = self.gateway.restore_media(media_payload)
             if media:
@@ -781,7 +874,15 @@ class QbSyncService:
                     title, existing_details.get("meta") or {}
                 )
             else:
-                meta, media = self.gateway.recognize(title)
+                if override.get("media_type") and override.get("tmdb_id"):
+                    meta, media = self.gateway.recognize_manual(
+                        title,
+                        override["media_type"],
+                        override["tmdb_id"],
+                        override.get("season"),
+                    )
+                else:
+                    meta, media = self.gateway.recognize(title)
 
         media_id = f"qb:{downloader.name}:{info_hash}"
         recognition_error = ""
@@ -801,7 +902,8 @@ class QbSyncService:
             season = getattr(media, "season", None)
             if season is None:
                 season = getattr(meta, "begin_season", None)
-            category = str(getattr(media, "category", "") or "")
+            automatic_category = str(getattr(media, "category", "") or "")
+            category = str(override.get("category") or automatic_category).strip()
             poster = self.gateway.poster(media)
             if not _valid_tmdb_id(tmdb_id):
                 recognition_error = "MoviePilot 未返回有效 TMDB ID"
@@ -903,9 +1005,14 @@ class QbSyncService:
             meta_payload = self.gateway.meta_payload(meta)
             media_title = ""
             media_year = ""
-            tmdb_id = None
-            season = getattr(meta, "begin_season", None) if meta else None
-            category = ""
+            tmdb_id = override.get("tmdb_id") or None
+            season = (
+                override.get("season")
+                if override.get("media_type") == "tv"
+                else getattr(meta, "begin_season", None) if meta else None
+            )
+            automatic_category = ""
+            category = str(override.get("category") or "").strip()
             poster = ""
             recognition_state = "unidentified"
             recognition_error = "MoviePilot 未识别到可靠媒体信息"
@@ -920,6 +1027,8 @@ class QbSyncService:
             "path_plan": path_plan,
             "inventory": inventory_details,
             "file_mappings": file_mappings,
+            "manual_override": override,
+            "automatic_category": automatic_category,
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -1191,3 +1300,26 @@ def _valid_tmdb_id(value: object) -> bool:
         return int(value or 0) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _normalize_manual_override(value: object) -> Dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    media_type = str(raw.get("media_type") or "").strip().casefold()
+    if media_type == "series":
+        media_type = "tv"
+    if media_type not in {"movie", "tv"}:
+        media_type = ""
+    try:
+        tmdb_id = int(raw.get("tmdb_id") or 0)
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    try:
+        season = int(raw.get("season") or 0) if media_type == "tv" else None
+    except (TypeError, ValueError):
+        season = 0 if media_type == "tv" else None
+    return {
+        "media_type": media_type,
+        "tmdb_id": tmdb_id if tmdb_id > 0 else None,
+        "season": season,
+        "category": LibraryLayout.canonical_category(raw.get("category") or ""),
+    }

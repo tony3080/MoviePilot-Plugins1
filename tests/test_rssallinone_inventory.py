@@ -499,6 +499,21 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
 
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
+    def test_manual_override_preserves_specials_and_category(self) -> None:
+        override = qb_sync._normalize_manual_override({
+            "media_type": "tv",
+            "tmdb_id": "42",
+            "season": 0,
+            "category": "纪录片",
+        })
+
+        self.assertEqual(override, {
+            "media_type": "tv",
+            "tmdb_id": 42,
+            "season": 0,
+            "category": "纪录片",
+        })
+
     @staticmethod
     def add_rss_task(
         store,

@@ -1,0 +1,220 @@
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({
+  item: { type: Object, required: true },
+  mode: { type: String, default: 'qb' },
+  selected: Boolean,
+  busy: Boolean,
+})
+
+const emit = defineEmits(['toggle', 'refresh', 'edit', 'delete'])
+
+const details = computed(() => props.item.details || {})
+const inventory = computed(() => details.value.inventory || {})
+const media = computed(() => details.value.media || {})
+const override = computed(() => details.value.manual_override || {})
+const title = computed(() => props.item.media_title || props.item.title || props.item.source_name || props.item.name || '未识别')
+const sourceName = computed(() => props.item.source_name || props.item.name || '')
+const poster = computed(() => props.item.poster || media.value.poster_path || media.value.poster || '')
+const sourceUrl = computed(() => {
+  const value = props.item.comment_url || details.value.comment_url || details.value.source_url || ''
+  return /^https?:\/\//i.test(value) && !value.includes('***') ? value : ''
+})
+const mediaType = computed(() => props.item.media_type || override.value.media_type || '')
+const tmdbUrl = computed(() => {
+  const tmdbId = Number(props.item.tmdb_id || override.value.tmdb_id || 0)
+  if (!tmdbId) return ''
+  return `https://www.themoviedb.org/${mediaType.value === 'movie' ? 'movie' : 'tv'}/${tmdbId}`
+})
+const totalFiles = computed(() => Number(inventory.value.total_files ?? inventory.value.total ?? 0))
+const existsCount = computed(() => Number(inventory.value.exists_count ?? inventory.value.exists ?? 0))
+const customization = computed(() => {
+  const expected = details.value.inventory_plan?.expected_files || []
+  return [...new Set(expected.map(file => file.recognition?.customization).filter(Boolean))].join('@')
+})
+const resourceTokens = computed(() => {
+  const expected = details.value.inventory_plan?.expected_files || []
+  return [...new Set(expected.flatMap(file => file.recognition?.resource_tokens || []).filter(Boolean))]
+})
+const resolution = computed(() => resourceTokens.value.find(value => /^\d{3,4}p$/i.test(value)) || '')
+const mediaCategory = computed(() => props.item.media_category || details.value.path_plan?.category || props.item.category || '')
+const qbCategory = computed(() => props.item.qb_category || (props.mode === 'qb' ? props.item.category : ''))
+const plannedName = computed(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '')
+const sizeText = computed(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)))
+const isImported = computed(() => props.mode === 'imported')
+const showDelete = computed(() => props.mode === 'pending')
+const showEdit = computed(() => !isImported.value)
+const status = computed(() => {
+  if (props.mode === 'qb') {
+    if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
+    if (props.item.inventory_state === 'exists') return { text: '已存在', color: 'success' }
+    return { text: '待入库', color: 'info' }
+  }
+  const state = props.item.state || ''
+  return {
+    recognized: { text: '已识别', color: 'info' },
+    identified: { text: '已识别', color: 'info' },
+    existing: { text: '已存在', color: 'success' },
+    imported: { text: '已入库', color: 'success' },
+    unidentified: { text: '未识别', color: 'error' },
+    pending: { text: '待入库', color: 'purple' },
+    pending_import: { text: '待入库', color: 'purple' },
+  }[state] || { text: '待入库', color: 'info' }
+})
+const inventoryText = computed(() => {
+  const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || ''
+  if (folderStatus === 'ambiguous' || props.item.inventory_state === 'ambiguous') return '目录冲突'
+  if (folderStatus === 'exists' || ['exists', 'partial'].includes(props.item.inventory_state)) {
+    return `目录已存在（${existsCount.value}/${totalFiles.value}）`
+  }
+  return `目录未建立${totalFiles.value ? `（0/${totalFiles.value}）` : ''}`
+})
+const inventoryClass = computed(() => {
+  if (inventoryText.value === '目录冲突') return 'inventory-warning'
+  return inventoryText.value.startsWith('目录已存在') ? 'inventory-ok' : 'inventory-missing'
+})
+
+function formatSize(bytes) {
+  if (!bytes) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(unit >= 3 ? 2 : 1)} ${units[unit]}`
+}
+
+function openLink(url) {
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+</script>
+
+<template>
+  <VCard
+    class="media-poster-card"
+    :class="{ selected }"
+    elevation="0"
+    @click="emit('toggle', item)"
+  >
+    <div class="poster-area">
+      <VImg v-if="poster" :src="poster" cover class="poster-image">
+        <template #error>
+          <div class="poster-placeholder"><VIcon icon="mdi-broken-image" size="42" /></div>
+        </template>
+      </VImg>
+      <div v-else class="poster-placeholder">
+        <VIcon :icon="item.recognition_state === 'unidentified' ? 'mdi-broken-image' : 'mdi-movie-open-outline'" size="42" />
+      </div>
+
+      <div class="poster-left-actions" @click.stop>
+        <VTooltip v-if="item.rolled_back" text="已回退">
+          <template #activator="{ props: tooltipProps }">
+            <span v-bind="tooltipProps" class="corner-badge rollback">R</span>
+          </template>
+        </VTooltip>
+        <VTooltip v-if="item.failure_message || item.recognition_error" :text="item.failure_message || item.recognition_error || '入库失败'">
+          <template #activator="{ props: tooltipProps }">
+            <span v-bind="tooltipProps" class="corner-badge failure">!</span>
+          </template>
+        </VTooltip>
+        <VTooltip v-if="sourceUrl" text="打开来源页面">
+          <template #activator="{ props: tooltipProps }">
+            <button v-bind="tooltipProps" type="button" class="corner-badge source" @click="openLink(sourceUrl)">P</button>
+          </template>
+        </VTooltip>
+        <VTooltip v-if="tmdbUrl && !isImported" text="打开 TMDB">
+          <template #activator="{ props: tooltipProps }">
+            <button v-bind="tooltipProps" type="button" class="corner-badge tmdb" @click="openLink(tmdbUrl)">T</button>
+          </template>
+        </VTooltip>
+      </div>
+
+      <div class="poster-right-actions" @click.stop>
+        <VTooltip v-if="showDelete" text="删除插件记录">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn v-bind="tooltipProps" icon="mdi-close" size="x-small" class="poster-action" :disabled="busy" @click="emit('delete', item)" />
+          </template>
+        </VTooltip>
+        <VTooltip text="刷新">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn v-bind="tooltipProps" icon="mdi-refresh" size="x-small" class="poster-action" :loading="busy" @click="emit('refresh', item)" />
+          </template>
+        </VTooltip>
+        <VTooltip v-if="showEdit" text="人工识别">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn v-bind="tooltipProps" icon="mdi-pencil" size="x-small" class="poster-action" :disabled="busy" @click="emit('edit', item)" />
+          </template>
+        </VTooltip>
+      </div>
+
+      <VChip v-if="Number(details.version_count || 0) > 1" class="version-chip" size="x-small" color="info">
+        {{ details.version_count }}in1
+      </VChip>
+    </div>
+
+    <VCardText class="card-body">
+      <h3>{{ title }}</h3>
+      <div class="chip-row">
+        <VChip size="x-small" :color="status.color" variant="tonal">{{ status.text }}</VChip>
+        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" color="purple" variant="tonal">
+          {{ Number(item.season) === 0 ? '特别篇(S00)' : `第${Number(item.season)}季` }}
+        </VChip>
+        <VChip v-if="resolution" size="x-small" color="cyan" variant="tonal">{{ resolution }}</VChip>
+        <VChip v-if="mediaCategory" size="x-small" color="deep-purple" variant="tonal">{{ mediaCategory }}</VChip>
+        <VChip v-if="customization" size="x-small" color="teal" variant="tonal">{{ customization }}</VChip>
+        <VChip v-if="mode === 'qb' && qbCategory" size="x-small" variant="tonal">QB: {{ qbCategory }}</VChip>
+        <VChip v-if="mode === 'qb' && item.downloader_id" size="x-small" variant="tonal">节点: {{ item.downloader_id }}</VChip>
+      </div>
+      <p v-if="sourceName" class="source-name">源: {{ sourceName }}</p>
+      <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
+      <p v-if="plannedName && item.recognition_state !== 'unidentified'" class="target-name">{{ plannedName }}</p>
+      <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+    </VCardText>
+  </VCard>
+</template>
+
+<style scoped>
+.media-poster-card {
+  overflow: hidden;
+  border: 1px solid rgba(var(--v-border-color), 0.55);
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.media-poster-card:hover { transform: translateY(-2px); }
+.media-poster-card.selected {
+  border-color: rgb(var(--v-theme-info));
+  box-shadow: 0 0 0 2px rgba(var(--v-theme-info), 0.28);
+}
+
+.poster-area { position: relative; aspect-ratio: 2 / 3; background: #111722; }
+.poster-image, .poster-placeholder { width: 100%; height: 100%; }
+.poster-placeholder { display: grid; place-items: center; color: rgba(255,255,255,.45); }
+.poster-left-actions, .poster-right-actions { position: absolute; top: 10px; z-index: 2; display: flex; gap: 7px; }
+.poster-left-actions { left: 10px; }
+.poster-right-actions { right: 10px; }
+.corner-badge { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; color: #fff; font-weight: 800; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.32); }
+button.corner-badge { cursor: pointer; }
+.rollback { background: #8456e8; }
+.failure { background: #df3c4f; }
+.source { background: #f29a2e; }
+.tmdb { background: #20b7cf; }
+.poster-action { background: rgba(5,10,15,.78) !important; color: #fff !important; border-radius: 5px !important; }
+.version-chip { position: absolute; right: 10px; bottom: 10px; }
+.card-body { display: grid; gap: 9px; padding: 14px 16px 16px; }
+.card-body h3 { display: -webkit-box; min-height: 2.7em; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.35; }
+.chip-row { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; }
+.source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
+.source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.45; }
+.size-label { width: fit-content; padding: 3px 8px; border-radius: 5px; background: rgba(var(--v-theme-on-surface), .14); font-size: .75rem; }
+.target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; }
+.inventory-line { font-size: .78rem; font-weight: 600; }
+.inventory-ok { color: rgb(var(--v-theme-success)); }
+.inventory-missing { color: rgb(var(--v-theme-error)); }
+.inventory-warning { color: rgb(var(--v-theme-warning)); }
+</style>

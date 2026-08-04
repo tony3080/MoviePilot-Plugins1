@@ -265,6 +265,24 @@ class LibraryLayout:
             "config_errors": list(self.config_errors),
         }
 
+    def category_options(self) -> List[str]:
+        if not self.inventory_root:
+            return []
+        root = Path(self.inventory_root)
+        if not root.is_dir():
+            return []
+        try:
+            return sorted(
+                {
+                    item.name
+                    for item in root.iterdir()
+                    if item.is_dir() and self.canonical_category(item.name)
+                },
+                key=str.casefold,
+            )
+        except OSError:
+            return []
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "inventory_root": self.inventory_root,
