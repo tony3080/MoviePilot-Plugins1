@@ -18,7 +18,7 @@ const title = computed(() => props.item.media_title || props.item.title || props
 const sourceName = computed(() => props.item.source_name || props.item.name || '')
 const poster = computed(() => props.item.poster || media.value.poster_path || media.value.poster || '')
 const sourceUrl = computed(() => {
-  const value = props.item.comment_url || details.value.comment_url || details.value.source_url || ''
+  const value = props.item.comment_url || props.item.source_url_masked || details.value.comment_url || details.value.source_url || ''
   return /^https?:\/\//i.test(value) && !value.includes('***') ? value : ''
 })
 const mediaType = computed(() => props.item.media_type || override.value.media_type || '')
@@ -39,7 +39,6 @@ const resourceTokens = computed(() => {
 })
 const resolution = computed(() => resourceTokens.value.find(value => /^\d{3,4}p$/i.test(value)) || '')
 const mediaCategory = computed(() => props.item.media_category || details.value.path_plan?.category || props.item.category || '')
-const qbCategory = computed(() => props.item.qb_category || (props.mode === 'qb' ? props.item.category : ''))
 const plannedName = computed(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '')
 const sizeText = computed(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)))
 const isImported = computed(() => props.mode === 'imported')
@@ -158,15 +157,13 @@ function openLink(url) {
     <VCardText class="card-body">
       <h3>{{ title }}</h3>
       <div class="chip-row">
-        <VChip size="x-small" :color="status.color" variant="tonal">{{ status.text }}</VChip>
-        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" color="purple" variant="tonal">
+        <VChip size="x-small" :color="status.color" variant="flat" class="info-chip status-chip">{{ status.text }}</VChip>
+        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" color="purple" variant="flat" class="info-chip season-chip">
           {{ Number(item.season) === 0 ? '特别篇(S00)' : `第${Number(item.season)}季` }}
         </VChip>
-        <VChip v-if="resolution" size="x-small" color="cyan" variant="tonal">{{ resolution }}</VChip>
-        <VChip v-if="mediaCategory" size="x-small" color="deep-purple" variant="tonal">{{ mediaCategory }}</VChip>
-        <VChip v-if="customization" size="x-small" color="teal" variant="tonal">{{ customization }}</VChip>
-        <VChip v-if="mode === 'qb' && qbCategory" size="x-small" variant="tonal">QB: {{ qbCategory }}</VChip>
-        <VChip v-if="mode === 'qb' && item.downloader_id" size="x-small" variant="tonal">节点: {{ item.downloader_id }}</VChip>
+        <VChip v-if="resolution" size="x-small" color="cyan-darken-2" variant="flat" class="info-chip resolution-chip">{{ resolution }}</VChip>
+        <VChip v-if="mediaCategory" size="x-small" color="indigo" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
+        <VChip v-if="customization" size="x-small" color="teal-darken-1" variant="flat" class="info-chip customization-chip">{{ customization }}</VChip>
       </div>
       <p v-if="sourceName" class="source-name">源: {{ sourceName }}</p>
       <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
@@ -189,7 +186,8 @@ function openLink(url) {
 .media-poster-card:hover { transform: translateY(-2px); }
 .media-poster-card.selected {
   border-color: rgb(var(--v-theme-info));
-  box-shadow: 0 0 0 2px rgba(var(--v-theme-info), 0.28);
+  border-width: 3px;
+  box-shadow: 0 0 0 3px rgba(var(--v-theme-info), 0.52), 0 8px 22px rgba(var(--v-theme-info), 0.22);
 }
 
 .poster-area { position: relative; aspect-ratio: 2 / 3; background: #111722; }
@@ -206,12 +204,13 @@ button.corner-badge { cursor: pointer; }
 .tmdb { background: #20b7cf; }
 .poster-action { background: rgba(5,10,15,.78) !important; color: #fff !important; border-radius: 5px !important; }
 .version-chip { position: absolute; right: 10px; bottom: 10px; }
-.card-body { display: grid; gap: 9px; padding: 14px 16px 16px; }
-.card-body h3 { display: -webkit-box; min-height: 2.7em; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.35; }
-.chip-row { display: flex; min-height: 24px; flex-wrap: wrap; gap: 6px; }
+.card-body { display: grid; gap: 7px; padding: 12px 14px 14px; }
+.card-body h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.3; }
+.chip-row { display: flex; min-height: 24px; flex-wrap: wrap; gap: 5px; margin-top: -2px; }
+.info-chip { color: #fff !important; font-weight: 650; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
 .source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.45; }
-.size-label { width: fit-content; padding: 3px 8px; border-radius: 5px; background: rgba(var(--v-theme-on-surface), .14); font-size: .75rem; }
+.size-label { width: fit-content; padding: 4px 9px; border: 1px solid rgba(var(--v-theme-on-surface), .2); border-radius: 5px; background: rgba(var(--v-theme-on-surface), .2); color: rgb(var(--v-theme-on-surface)); font-size: .75rem; font-weight: 600; }
 .target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; }
 .inventory-line { font-size: .78rem; font-weight: 600; }
 .inventory-ok { color: rgb(var(--v-theme-success)); }

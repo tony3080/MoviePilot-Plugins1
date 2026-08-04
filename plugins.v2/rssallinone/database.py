@@ -837,6 +837,25 @@ class SQLiteStore:
                 found.update(str(row["content_key"]) for row in rows)
         return found
 
+    def latest_rss_history_for_content(
+        self, content_key: object
+    ) -> Optional[Dict[str, Any]]:
+        normalized_key = str(content_key or "").strip()
+        if not normalized_key:
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM rss_history
+                   WHERE content_key = ?
+                     AND status IN (
+                       'queued', 'queued_warning', 'content_duplicate',
+                       'existing', 'processed'
+                     )
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (normalized_key,),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
     def upsert_rss_history(self, record: Dict[str, Any]) -> None:
         now = str(record.get("updated_at") or utc_now())
         values = (

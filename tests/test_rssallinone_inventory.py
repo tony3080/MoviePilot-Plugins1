@@ -679,6 +679,14 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             store = database.SQLiteStore(directory / "state.db")
             store.initialize()
             self.add_rss_task(store)
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-abc123",
+                "content_key": "qb-main:abc123",
+                "title": "Example.Movie.2026.1080p",
+                "status": "queued",
+                "detail_url_masked": "https://pt.example/details.php?id=42",
+            })
             library_root = directory / "library"
             expected = (
                 library_root
@@ -709,6 +717,11 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             first = store.get_torrent_snapshot("qb-main", "abc123")
             self.assertEqual(first["inventory_state"], "exists")
             self.assertEqual(first["recognition_state"], "identified")
+            self.assertEqual(
+                first["source_url_masked"],
+                "https://pt.example/details.php?id=42",
+            )
+            self.assertEqual(first["details"]["rss_source"]["task_id"], "rss-task")
             self.assertEqual(first["details"]["inventory"]["scope"], "mp_library_path")
             self.assertEqual(
                 first["details"]["path_plan"]["inventory_base"],

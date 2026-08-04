@@ -843,6 +843,14 @@ class QbSyncService:
         ).hexdigest()
         existing = self.store.get_torrent_snapshot(downloader.name, info_hash) or {}
         existing_details = existing.get("details") or {}
+        rss_history = self.store.latest_rss_history_for_content(
+            f"{downloader.name}:{info_hash}"
+        ) or {}
+        source_url_masked = str(
+            rss_history.get("detail_url_masked")
+            or existing.get("source_url_masked")
+            or ""
+        ).strip()
         stored_override = existing_details.get("manual_override") or {}
         override = _normalize_manual_override(
             stored_override if manual_override is None else manual_override
@@ -1029,6 +1037,10 @@ class QbSyncService:
             "file_mappings": file_mappings,
             "manual_override": override,
             "automatic_category": automatic_category,
+            "rss_source": {
+                "task_id": str(rss_history.get("task_id") or ""),
+                "source_key": str(rss_history.get("source_key") or ""),
+            } if rss_history else {},
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -1075,7 +1087,7 @@ class QbSyncService:
             "progress": float(raw.get("progress") or 0),
             "size": int(raw.get("size") or 0),
             "media_id": media_id,
-            "source_url_masked": "",
+            "source_url_masked": source_url_masked,
             "present": 1,
             "recognition_state": recognition_state,
             "inventory_state": inventory_state,

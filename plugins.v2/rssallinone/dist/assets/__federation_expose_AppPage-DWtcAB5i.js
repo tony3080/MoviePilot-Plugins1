@@ -609,7 +609,7 @@ const title = computed$2(() => props.item.media_title || props.item.title || pro
 const sourceName = computed$2(() => props.item.source_name || props.item.name || '');
 const poster = computed$2(() => props.item.poster || media.value.poster_path || media.value.poster || '');
 const sourceUrl = computed$2(() => {
-  const value = props.item.comment_url || details.value.comment_url || details.value.source_url || '';
+  const value = props.item.comment_url || props.item.source_url_masked || details.value.comment_url || details.value.source_url || '';
   return /^https?:\/\//i.test(value) && !value.includes('***') ? value : ''
 });
 const mediaType = computed$2(() => props.item.media_type || override.value.media_type || '');
@@ -630,7 +630,6 @@ const resourceTokens = computed$2(() => {
 });
 const resolution = computed$2(() => resourceTokens.value.find(value => /^\d{3,4}p$/i.test(value)) || '');
 const mediaCategory = computed$2(() => props.item.media_category || details.value.path_plan?.category || props.item.category || '');
-const qbCategory = computed$2(() => props.item.qb_category || (props.mode === 'qb' ? props.item.category : ''));
 const plannedName = computed$2(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '');
 const sizeText = computed$2(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)));
 const isImported = computed$2(() => props.mode === 'imported');
@@ -850,7 +849,8 @@ return (_ctx, _cache) => {
             _createVNode$2(_component_VChip, {
               size: "x-small",
               color: status.value.color,
-              variant: "tonal"
+              variant: "flat",
+              class: "info-chip status-chip"
             }, {
               default: _withCtx$2(() => [
                 _createTextVNode$2(_toDisplayString$2(status.value.text), 1)
@@ -862,7 +862,8 @@ return (_ctx, _cache) => {
                   key: 0,
                   size: "x-small",
                   color: "purple",
-                  variant: "tonal"
+                  variant: "flat",
+                  class: "info-chip season-chip"
                 }, {
                   default: _withCtx$2(() => [
                     _createTextVNode$2(_toDisplayString$2(Number(__props.item.season) === 0 ? '特别篇(S00)' : `第${Number(__props.item.season)}季`), 1)
@@ -874,8 +875,9 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 1,
                   size: "x-small",
-                  color: "cyan",
-                  variant: "tonal"
+                  color: "cyan-darken-2",
+                  variant: "flat",
+                  class: "info-chip resolution-chip"
                 }, {
                   default: _withCtx$2(() => [
                     _createTextVNode$2(_toDisplayString$2(resolution.value), 1)
@@ -887,8 +889,9 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 2,
                   size: "x-small",
-                  color: "deep-purple",
-                  variant: "tonal"
+                  color: "indigo",
+                  variant: "flat",
+                  class: "info-chip category-chip"
                 }, {
                   default: _withCtx$2(() => [
                     _createTextVNode$2(_toDisplayString$2(mediaCategory.value), 1)
@@ -900,35 +903,12 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 3,
                   size: "x-small",
-                  color: "teal",
-                  variant: "tonal"
+                  color: "teal-darken-1",
+                  variant: "flat",
+                  class: "info-chip customization-chip"
                 }, {
                   default: _withCtx$2(() => [
                     _createTextVNode$2(_toDisplayString$2(customization.value), 1)
-                  ]),
-                  _: 1
-                }))
-              : _createCommentVNode$2("", true),
-            (__props.mode === 'qb' && qbCategory.value)
-              ? (_openBlock$2(), _createBlock$2(_component_VChip, {
-                  key: 4,
-                  size: "x-small",
-                  variant: "tonal"
-                }, {
-                  default: _withCtx$2(() => [
-                    _createTextVNode$2("QB: " + _toDisplayString$2(qbCategory.value), 1)
-                  ]),
-                  _: 1
-                }))
-              : _createCommentVNode$2("", true),
-            (__props.mode === 'qb' && __props.item.downloader_id)
-              ? (_openBlock$2(), _createBlock$2(_component_VChip, {
-                  key: 5,
-                  size: "x-small",
-                  variant: "tonal"
-                }, {
-                  default: _withCtx$2(() => [
-                    _createTextVNode$2("节点: " + _toDisplayString$2(__props.item.downloader_id), 1)
                   ]),
                   _: 1
                 }))
@@ -959,7 +939,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-e7af35fc"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-f3188261"]]);
 
 const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,createElementVNode:_createElementVNode$1,withCtx:_withCtx$1,toDisplayString:_toDisplayString$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1} = await importShared('vue');
 
