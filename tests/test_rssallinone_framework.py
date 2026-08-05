@@ -492,6 +492,20 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(ignored["success"])
                 self.assertTrue(ignored["ignored"])
 
+                class OutsideScopeService:
+                    @staticmethod
+                    def refresh_item(_downloader_id, _info_hash):
+                        raise LookupError("该任务不属于任何已保存的 VT+ RSS 分类")
+
+                plugin._qb_sync_service = lambda: OutsideScopeService()
+                ignored_with_downloader = plugin.api_qb_completed({
+                    "downloader_id": "qb-main",
+                    "info_hash": "outside",
+                })
+                plugin._qb_sync_service = original_service
+                self.assertTrue(ignored_with_downloader["success"])
+                self.assertTrue(ignored_with_downloader["ignored"])
+
                 plugin._store.schedule_qb_delete(
                     task_id="movies",
                     task_name="彩虹岛",

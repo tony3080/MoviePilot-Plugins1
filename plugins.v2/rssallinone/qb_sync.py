@@ -773,7 +773,7 @@ class QbSyncService:
             raise RuntimeError("qBittorrent 中没有找到该任务")
         scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
         if not scope.matches(downloader_name, raw.get("category") or ""):
-            raise ValueError("该任务不属于任何已保存的 VT+ RSS 分类")
+            raise LookupError("该任务不属于任何已保存的 VT+ RSS 分类")
 
         self._sync_one(
             downloader=downloader,

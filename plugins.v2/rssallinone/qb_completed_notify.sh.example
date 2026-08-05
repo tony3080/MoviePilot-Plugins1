@@ -2,14 +2,14 @@
 # Universal qBittorrent "Run external program on torrent finished" command:
 # /bin/sh /config/qb_completed_notify.sh "<node>" "<node_url>" "%I" "%L" "%N" "%G"
 # Arguments: 1=node 2=node_url 3=hash 4=category 5=name 6=tags
-# Legacy 4-argument mode remains compatible and defaults to QBSSD/8081.
+# Legacy 4-argument mode remains compatible and defaults to QB/8081.
 
 set -u
 
 LOG_FILE="/config/qb_notify.log"
 V1_CALLBACK_URL="http://192.168.110.31:18501/api/qb/callback/completed"
 V1_SECRET="CHANGE_ME"
-DEFAULT_NODE="QBSSD"
+DEFAULT_NODE="QB"
 DEFAULT_NODE_URL="http://192.168.110.31:8081"
 
 MP_BASE_URL="http://192.168.110.31:3033"

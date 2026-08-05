@@ -4,7 +4,7 @@ RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统�
 
 ## 当前版本
 
-`v0.9.1` 将 RSS 到 QB 管理改为完整的事件闭环：种子加入 qB 后，先完成普通重命名和中文标题，再按 UBits、CHD/PTCHDBits、HDSKY 的固定规则识别国语与特效并归位，最终名称稳定后才调用 MoviePilot 识别和生成 QB 卡片。下载完成只依赖 qB 回调推进到入库管理，不再注册周期性 QB 全量刷新；完成后延时删除按下载器和 info-hash 调用 qB 删除，`delete_files` 只作用于 qB 保存路径。
+`v0.9.2` 将 RSS 到 QB 管理改为完整的事件闭环：种子加入 qB 后，先完成普通重命名和中文标题，再按 UBits、CHD/PTCHDBits、HDSKY 的固定规则识别国语与特效并归位，最终名称稳定后才调用 MoviePilot 识别和生成 QB 卡片。下载完成只依赖 qB 回调推进到入库管理，不再注册周期性 QB 全量刷新；完成后延时删除按下载器和 info-hash 调用 qB 删除，`delete_files` 只作用于 qB 保存路径。多 qB 完成回调会携带准确的 MoviePilot 下载器名称，非 VT+ RSS 分类统一返回正常忽略，不会产生假失败。
 
 - 每张 RSS 任务卡片可直接执行只读测试，也可对已保存配置立即入队执行。
 - RSS CRON 按任务启用状态注册；VT+ 工具栏提供独立的 RSS 调度总开关，测试时可暂停全部 RSS，恢复时无需重新配置任务。
@@ -56,7 +56,7 @@ RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统�
 /bin/sh /config/qb_completed_notify.sh "<MoviePilot下载器名称>" "<qB WebUI地址>" "%I" "%L" "%N" "%G"
 ```
 
-脚本仍兼容原来的四参数命令；未传节点信息时默认使用 `QBSSD` 和 `http://192.168.110.31:8081`。多 qB 部署建议始终使用六参数命令，避免相同 info-hash 出现在多个下载器时发生歧义。
+脚本仍兼容原来的四参数命令；未传节点信息时默认使用 `QB` 和 `http://192.168.110.31:8081`。多 qB 部署建议始终使用六参数命令，避免相同 info-hash 出现在多个下载器时发生歧义。
 
 脚本会通知现有 V1，并独立通知 RSS一条龙：
 
