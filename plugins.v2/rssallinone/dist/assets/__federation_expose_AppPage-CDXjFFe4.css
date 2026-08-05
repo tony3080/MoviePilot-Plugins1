@@ -153,28 +153,30 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
 .dialog-actions[data-v-3e83c70b] { justify-content: flex-end; padding: 12px 18px;
 }
 
-.file-manager-browser[data-v-87bb5d1e] { min-height: 420px;
+.file-manager-browser[data-v-9b7125d8] { min-height: 420px;
 }
-.browser-toolbar[data-v-87bb5d1e] {
+.browser-toolbar[data-v-9b7125d8] {
   display: flex;
   align-items: center;
   min-height: 52px;
   border-bottom: 1px solid rgba(var(--v-border-color), .45);
 }
-.path-breadcrumbs[data-v-87bb5d1e] { min-width: 0; padding-inline: 4px;
+.path-breadcrumbs[data-v-9b7125d8] { min-width: 0; padding-inline: 4px;
 }
-.breadcrumb-link[data-v-87bb5d1e] {
+.breadcrumb-link[data-v-9b7125d8] {
   color: rgb(var(--v-theme-primary));
   background: none;
   border: 0;
   cursor: pointer;
   font: inherit;
 }
-.browser-alert[data-v-87bb5d1e] { margin: 12px 0;
+.browser-alert[data-v-9b7125d8] { margin: 12px 0;
 }
-.entry-list[data-v-87bb5d1e] { display: grid;
+.batch-progress-line[data-v-9b7125d8] { display: flex; justify-content: space-between; gap: 12px;
 }
-.entry-row[data-v-87bb5d1e] {
+.entry-list[data-v-9b7125d8] { display: grid;
+}
+.entry-row[data-v-9b7125d8] {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -182,9 +184,9 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
   padding: 7px 10px;
   border-bottom: 1px solid rgba(var(--v-border-color), .35);
 }
-.entry-row[data-v-87bb5d1e]:hover { background: rgba(var(--v-theme-on-surface), .035);
+.entry-row[data-v-9b7125d8]:hover { background: rgba(var(--v-theme-on-surface), .035);
 }
-.entry-name[data-v-87bb5d1e] {
+.entry-name[data-v-9b7125d8] {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -193,12 +195,12 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
   color: inherit;
   text-align: left;
 }
-.entry-link[data-v-87bb5d1e] {
+.entry-link[data-v-9b7125d8] {
   cursor: pointer;
   background: none;
   border: 0;
 }
-.entry-name span[data-v-87bb5d1e] { overflow-wrap: anywhere;
+.entry-name span[data-v-9b7125d8] { overflow-wrap: anywhere;
 }
 
 .app-page[data-v-544a39d0] {

@@ -14,7 +14,7 @@ from app.plugins import _PluginBase
 
 from .capabilities import runtime_capabilities
 from .database import SQLiteStore, utc_now
-from .file_manager import FileManagerError, LocalFileManagerService
+from .file_manager import FILE_BATCH_TASK_TYPE, FileManagerError, LocalFileManagerService
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
 from .media_actions import (
@@ -44,7 +44,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.11.2"
+    plugin_version = "0.12.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -215,7 +215,9 @@ class RssAllInOne(_PluginBase):
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
             self._api("/files/browse", self.api_files_browse, "GET", "浏览本地文件夹"),
-            self._api("/files/recognize", self.api_files_recognize, "POST", "批量识别本地文件夹"),
+            self._api("/files/recognize", self.api_files_recognize, "POST", "识别单个本地文件或文件夹"),
+            self._api("/files/recognize-batch", self.api_files_recognize_batch, "POST", "批量识别当前目录"),
+            self._api("/files/task", self.api_files_task, "GET", "查询文件批量识别任务"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
@@ -373,8 +375,8 @@ class RssAllInOne(_PluginBase):
                 .get("source_identity", {})
                 .get("kind") or ""
             )
-            if media_item and source_kind == "local_folder":
-                result = self._file_manager_service().recognize_folder(
+            if media_item and source_kind in {"local_folder", "local_file"}:
+                result = self._file_manager_service().recognize_entry(
                     media_item.get("source_path"),
                     manual_override={
                         "media_type": media_type,
@@ -545,8 +547,8 @@ class RssAllInOne(_PluginBase):
                 .get("source_identity", {})
                 .get("kind") or ""
             )
-            if source_kind == "local_folder":
-                result = self._file_manager_service().recognize_folder(
+            if source_kind in {"local_folder", "local_file"}:
+                result = self._file_manager_service().recognize_entry(
                     item.get("source_path"),
                     manual_override=(item.get("details") or {}).get("manual_override"),
                     refresh_media_id=media_id,
@@ -580,19 +582,57 @@ class RssAllInOne(_PluginBase):
         self, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         if not self._file_scan_lock.acquire(blocking=False):
-            return {"success": False, "message": "已有文件夹正在识别，请稍后再试"}
+            return {"success": False, "message": "已有文件识别任务正在运行，请稍后再试"}
         try:
-            result = self._file_manager_service().recognize_folder(
+            result = self._file_manager_service().recognize_entry(
                 (payload or {}).get("path")
             )
             return result
         except FileManagerError as error:
             return {"success": False, "message": str(error)}
         except Exception as error:
-            logger.error(f"RSS一条龙：文件夹批量识别失败：{error}", exc_info=True)
+            logger.error(f"RSS一条龙：单个文件识别失败：{error}", exc_info=True)
             return {"success": False, "message": str(error)}
         finally:
             self._file_scan_lock.release()
+
+    def api_files_recognize_batch(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        store = self._require_store()
+        if not self._file_scan_lock.acquire(blocking=False):
+            running = store.latest_running_task(FILE_BATCH_TASK_TYPE)
+            return {
+                "success": False,
+                "message": "已有文件识别任务正在运行",
+                "task_id": running.get("id") if running else None,
+            }
+        task_id = uuid.uuid4().hex
+        source_path = str((payload or {}).get("path") or "").strip()
+        try:
+            store.create_background_task(task_id, FILE_BATCH_TASK_TYPE)
+            thread = threading.Thread(
+                target=self._run_file_batch_recognition,
+                kwargs={"task_id": task_id, "source_path": source_path},
+                name=f"rssallinone-files-{task_id[:8]}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as error:
+            store.finish_background_task(task_id, "failed", error_message=str(error))
+            self._file_scan_lock.release()
+            return {"success": False, "message": str(error)}
+        return {
+            "success": True,
+            "message": "当前目录批量识别已启动",
+            "task_id": task_id,
+        }
+
+    def api_files_task(self, task_id: str = "") -> Dict[str, Any]:
+        task = self._require_store().get_background_task(str(task_id or "").strip())
+        if not task or task.get("task_type") != FILE_BATCH_TASK_TYPE:
+            return {"success": False, "message": "文件批量识别任务不存在"}
+        return {"success": True, "task": task}
 
     def api_categories(self) -> Dict[str, Any]:
         categories = set(self._library_layout.category_options())
@@ -1050,6 +1090,43 @@ class RssAllInOne(_PluginBase):
             library_layout=self._library_layout,
             logger=logger,
         )
+
+    def _run_file_batch_recognition(self, *, task_id: str, source_path: str) -> None:
+        store = self._store
+        if not store:
+            self._file_scan_lock.release()
+            return
+        try:
+            def update_progress(
+                current_item: str,
+                processed: int,
+                succeeded: int,
+                failed: int,
+                total: int,
+            ) -> None:
+                store.update_background_task(
+                    task_id,
+                    current_item=current_item,
+                    processed=processed,
+                    succeeded=succeeded,
+                    failed=failed,
+                    total=total,
+                )
+
+            result = self._file_manager_service().recognize_current_directory(
+                source_path,
+                progress=update_progress,
+            )
+            store.finish_background_task(
+                task_id,
+                "succeeded" if not result.get("failed") else "partial",
+                result=result,
+            )
+        except Exception as error:
+            logger.error(f"RSS一条龙：当前目录批量识别失败：{error}", exc_info=True)
+            store.finish_background_task(task_id, "failed", error_message=str(error))
+        finally:
+            self._file_scan_lock.release()
 
     def _database_path(self) -> Path:
         getter = getattr(self, "get_data_path", None)

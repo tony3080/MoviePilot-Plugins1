@@ -134,6 +134,55 @@ class LocalFileManagerTest(unittest.TestCase):
             self.assertEqual(result["media_id"], "mapped-card")
             self.assertEqual(store.list_media()["total"], 1)
 
+    def test_single_file_uses_the_same_duplicate_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Single.Movie.2026.mkv"
+            source.write_bytes(b"video")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            store.upsert_media_item({
+                "id": "single-card",
+                "state": "identified",
+                "source_name": source.name,
+                "source_path": str(source.resolve()),
+                "details": {},
+            })
+
+            result = file_manager.LocalFileManagerService(store).recognize_entry(source)
+
+            self.assertTrue(result["duplicate"])
+            self.assertEqual(result["media_id"], "single-card")
+
+    def test_batch_recognition_processes_direct_children_individually(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / "Series Folder"
+            child.mkdir()
+            (child / "Series.S01E01.mkv").write_bytes(b"episode")
+            movie = root / "Movie.2026.mkv"
+            movie.write_bytes(b"movie")
+            (root / "poster.jpg").write_bytes(b"image")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+
+            class RecordingService(file_manager.LocalFileManagerService):
+                def __init__(self):
+                    super().__init__(store)
+                    self.paths = []
+
+                def recognize_entry(self, path, **_kwargs):
+                    self.paths.append(Path(path).name)
+                    return {"success": True, "duplicate": False}
+
+            service = RecordingService()
+            result = service.recognize_current_directory(root)
+
+            self.assertEqual(service.paths, ["Series Folder", "Movie.2026.mkv"])
+            self.assertEqual(result["total"], 2)
+            self.assertEqual(result["succeeded"], 2)
+            self.assertEqual(result["failed"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

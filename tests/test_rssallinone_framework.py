@@ -359,7 +359,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("{ title: '文件管理', value: 'files'", app_page)
         self.assertIn("files/browse", browser)
         self.assertIn("files/recognize", browser)
+        self.assertIn("files/recognize-batch", browser)
+        self.assertIn("files/task", browser)
         self.assertIn("批量识别", browser)
+        self.assertIn(">\n          识别\n", browser)
         self.assertNotIn("修改时间", browser)
         self.assertNotIn("文件大小", browser)
 

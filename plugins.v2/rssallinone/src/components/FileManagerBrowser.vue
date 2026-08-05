@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const props = defineProps({
   api: { type: Object, default: () => ({}) },
@@ -10,8 +10,15 @@ const parentPath = ref('')
 const entries = ref([])
 const loading = ref(false)
 const recognizingPath = ref('')
+const batchTask = ref(null)
 const errorMessage = ref('')
 const successMessage = ref('')
+let batchPollTimer = null
+const batchRunning = computed(() => batchTask.value?.state === 'running')
+const batchProgress = computed(() => {
+  const total = Number(batchTask.value?.total || 0)
+  return total ? Math.round((Number(batchTask.value?.processed || 0) / total) * 100) : 0
+})
 
 const breadcrumbs = computed(() => {
   const path = String(currentPath.value || '/').replaceAll('\\', '/')
@@ -48,26 +55,72 @@ async function browse(path = '/') {
   }
 }
 
-async function recognize(folder) {
-  if (!window.confirm(`确认递归识别文件夹“${folder.name}”中的媒体文件？`)) return
-  recognizingPath.value = folder.path
+async function recognize(entry) {
+  const label = entry.type === 'dir' ? '文件夹' : '文件'
+  const detail = entry.type === 'dir' ? '，并递归读取其中的媒体文件' : ''
+  if (!window.confirm(`确认识别${label}“${entry.name}”${detail}？`)) return
+  recognizingPath.value = entry.path
   errorMessage.value = ''
   successMessage.value = ''
   try {
     const response = unwrap(await props.api.post(
       'plugin/RssAllInOne/files/recognize',
-      { path: folder.path },
+      { path: entry.path },
     ))
-    if (!response?.success) throw new Error(response?.message || '批量识别失败')
+    if (!response?.success) throw new Error(response?.message || '识别失败')
     successMessage.value = response.message || '识别完成'
   } catch (error) {
-    errorMessage.value = error?.message || '批量识别失败'
+    errorMessage.value = error?.message || '识别失败'
   } finally {
     recognizingPath.value = ''
   }
 }
 
+async function recognizeCurrentDirectory() {
+  if (currentPath.value === '/') return
+  if (!window.confirm('确认逐项识别当前目录下的所有子文件夹和媒体文件？')) return
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/files/recognize-batch',
+      { path: currentPath.value },
+    ))
+    if (!response?.success) throw new Error(response?.message || '批量识别启动失败')
+    batchTask.value = { id: response.task_id, state: 'running', processed: 0, total: 0 }
+    pollBatchTask()
+  } catch (error) {
+    errorMessage.value = error?.message || '批量识别启动失败'
+  }
+}
+
+async function pollBatchTask() {
+  window.clearTimeout(batchPollTimer)
+  const taskId = batchTask.value?.id
+  if (!taskId) return
+  try {
+    const response = unwrap(await props.api.get('plugin/RssAllInOne/files/task', {
+      params: { task_id: taskId },
+    }))
+    if (!response?.success) throw new Error(response?.message || '读取批量识别进度失败')
+    batchTask.value = response.task
+    if (response.task?.state === 'running') {
+      batchPollTimer = window.setTimeout(pollBatchTask, 1200)
+      return
+    }
+    const result = response.task?.result || {}
+    if (response.task?.state === 'failed') {
+      errorMessage.value = response.task?.error_message || '批量识别失败'
+    } else {
+      successMessage.value = result.message || '批量识别完成'
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '读取批量识别进度失败'
+  }
+}
+
 onMounted(() => browse('/'))
+onBeforeUnmount(() => window.clearTimeout(batchPollTimer))
 </script>
 
 <template>
@@ -89,6 +142,17 @@ onMounted(() => browse('/'))
       </VBreadcrumbs>
       <VSpacer />
       <VBtn
+        color="primary"
+        variant="tonal"
+        size="small"
+        prepend-icon="mdi-text-box-search-outline"
+        :loading="batchRunning"
+        :disabled="currentPath === '/' || Boolean(recognizingPath) || batchRunning"
+        @click="recognizeCurrentDirectory"
+      >
+        批量识别
+      </VBtn>
+      <VBtn
         icon="mdi-refresh"
         variant="text"
         :loading="loading"
@@ -102,6 +166,13 @@ onMounted(() => browse('/'))
     </VAlert>
     <VAlert v-if="successMessage" type="success" variant="tonal" density="compact" class="browser-alert">
       {{ successMessage }}
+    </VAlert>
+    <VAlert v-if="batchRunning" type="info" variant="tonal" density="compact" class="browser-alert">
+      <div class="batch-progress-line">
+        <span>正在识别：{{ batchTask.current_item || '读取当前目录' }}</span>
+        <span>{{ batchTask.processed || 0 }}/{{ batchTask.total || 0 }}</span>
+      </div>
+      <VProgressLinear :model-value="batchProgress" height="4" class="mt-2" />
     </VAlert>
 
     <div class="entry-list">
@@ -120,16 +191,15 @@ onMounted(() => browse('/'))
           <span>{{ entry.name }}</span>
         </div>
         <VBtn
-          v-if="entry.type === 'dir'"
           color="primary"
           variant="tonal"
           size="small"
           prepend-icon="mdi-text-recognition"
           :loading="recognizingPath === entry.path"
-          :disabled="Boolean(recognizingPath)"
+          :disabled="Boolean(recognizingPath) || batchRunning"
           @click="recognize(entry)"
         >
-          批量识别
+          识别
         </VBtn>
       </div>
     </div>
@@ -160,6 +230,7 @@ onMounted(() => browse('/'))
   font: inherit;
 }
 .browser-alert { margin: 12px 0; }
+.batch-progress-line { display: flex; justify-content: space-between; gap: 12px; }
 .entry-list { display: grid; }
 .entry-row {
   display: flex;

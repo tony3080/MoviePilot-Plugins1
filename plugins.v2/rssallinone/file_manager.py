@@ -16,6 +16,7 @@ from .qb_sync import MoviePilotQbGateway, build_source_target_mappings
 FALLBACK_MEDIA_EXTENSIONS = {
     ".avi", ".iso", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".rmvb", ".ts",
 }
+FILE_BATCH_TASK_TYPE = "file_batch_recognition"
 
 
 class FileManagerError(RuntimeError):
@@ -99,22 +100,125 @@ class LocalFileManagerService:
         manual_override: Optional[Dict[str, Any]] = None,
         refresh_media_id: object = "",
     ) -> Dict[str, Any]:
+        source = _local_entry(path)
+        if not source.is_dir():
+            raise FileManagerError("所选项目不是文件夹")
+        return self.recognize_entry(
+            source,
+            manual_override=manual_override,
+            refresh_media_id=refresh_media_id,
+        )
+
+    def recognize_entry(
+        self,
+        path: object,
+        *,
+        manual_override: Optional[Dict[str, Any]] = None,
+        refresh_media_id: object = "",
+    ) -> Dict[str, Any]:
+        source = _local_entry(path)
+        roots = self._source_roots()
+        if roots and not _inside_any(source, roots):
+            raise FileManagerError("只能识别已配置的源路径路由中的项目")
+        if source.is_dir():
+            files = self._media_files(source)
+            recursive = True
+            source_kind = "local_folder"
+        else:
+            if not _is_media_file(source):
+                raise FileManagerError("所选文件不是 MoviePilot 支持的媒体文件")
+            files = [source.resolve(strict=True)]
+            recursive = False
+            source_kind = "local_file"
+        if not files:
+            raise FileManagerError("所选项目中没有可识别的媒体文件")
+        return self._recognize_source(
+            source=source,
+            files=files,
+            recursive=recursive,
+            source_kind=source_kind,
+            manual_override=manual_override,
+            refresh_media_id=refresh_media_id,
+        )
+
+    def recognize_current_directory(
+        self,
+        path: object,
+        *,
+        progress: Any = None,
+    ) -> Dict[str, Any]:
         directory = _local_directory(path)
         roots = self._source_roots()
         if roots and not _inside_any(directory, roots):
-            raise FileManagerError("只能识别已配置的源路径路由中的文件夹")
-        media_id, source_hash = _source_identity(directory)
+            raise FileManagerError("只能批量识别已配置的源路径路由")
+        try:
+            candidates = sorted(
+                (
+                    item.resolve(strict=True)
+                    for item in directory.iterdir()
+                    if item.is_dir() or _is_media_file(item)
+                ),
+                key=lambda item: (not item.is_dir(), item.name.casefold()),
+            )
+        except OSError as error:
+            raise FileManagerError(f"目录读取失败：{error}") from error
+        if not candidates:
+            raise FileManagerError("当前目录没有可批量识别的文件夹或媒体文件")
+
+        results = []
+        succeeded = duplicate = failed = 0
+        for index, candidate in enumerate(candidates, start=1):
+            if callable(progress):
+                progress(candidate.name, index - 1, succeeded + duplicate, failed, len(candidates))
+            try:
+                result = self.recognize_entry(candidate)
+                results.append({"path": str(candidate), **result})
+                if result.get("duplicate"):
+                    duplicate += 1
+                else:
+                    succeeded += 1
+            except Exception as error:
+                failed += 1
+                results.append({
+                    "path": str(candidate),
+                    "success": False,
+                    "message": str(error),
+                })
+            if callable(progress):
+                progress(candidate.name, index, succeeded + duplicate, failed, len(candidates))
+        return {
+            "success": failed == 0,
+            "partial": bool(failed and (succeeded or duplicate)),
+            "path": str(directory),
+            "total": len(candidates),
+            "succeeded": succeeded,
+            "duplicate": duplicate,
+            "failed": failed,
+            "results": results,
+            "message": (
+                f"批量识别完成：新增或更新 {succeeded} 项，"
+                f"已存在 {duplicate} 项，失败 {failed} 项"
+            ),
+        }
+
+    def _recognize_source(
+        self,
+        *,
+        source: Path,
+        files: Sequence[Path],
+        recursive: bool,
+        source_kind: str,
+        manual_override: Optional[Dict[str, Any]],
+        refresh_media_id: object,
+    ) -> Dict[str, Any]:
+        media_id, source_hash = _source_identity(source)
         requested_media_id = str(refresh_media_id or "").strip()
         if requested_media_id and requested_media_id != media_id:
-            raise FileManagerError("刷新记录与当前文件夹身份不一致")
+            raise FileManagerError("刷新记录与当前源项目身份不一致")
 
-        files = self._media_files(directory)
-        if not files:
-            raise FileManagerError("所选文件夹中没有可识别的媒体文件")
-
-        existing = self.store.find_media_by_source_path(str(directory))
+        existing = self.store.find_media_by_source_path(str(source))
         if existing and not requested_media_id:
-            return self._duplicate_result(existing, "文件夹已经在入库管理中")
+            return self._duplicate_result(existing, "源项目已经在入库管理中")
 
         source_paths = [str(item.resolve(strict=True)) for item in files]
         owners = self.store.find_media_owners_by_source_paths(
@@ -123,10 +227,10 @@ class LocalFileManagerService:
         )
         if owners and not requested_media_id:
             owner = self.store.get_media_item(owners[0]) or {"id": owners[0]}
-            return self._duplicate_result(owner, "文件夹中的源文件已经属于入库管理卡片")
+            return self._duplicate_result(owner, "源文件已经属于入库管理卡片")
 
         override = _normalize_override(manual_override)
-        title = directory.name
+        title = source.name
         if override.get("media_type") and override.get("tmdb_id"):
             meta, media = self.gateway.recognize_manual(
                 title,
@@ -142,7 +246,11 @@ class LocalFileManagerService:
         torrent_files = [
             {
                 "index": index,
-                "name": item.relative_to(directory).as_posix(),
+                "name": (
+                    item.relative_to(source).as_posix()
+                    if source.is_dir()
+                    else item.name
+                ),
                 "size": item.stat().st_size,
                 "priority": 1,
             }
@@ -151,18 +259,18 @@ class LocalFileManagerService:
         details: Dict[str, Any] = {
             "torrent": {
                 "name": title,
-                "content_path": str(directory),
+                "content_path": str(source),
                 "size": total_size,
             },
             "file_browser": {
-                "path": str(directory),
+                "path": str(source),
                 "scanned_at": now,
-                "recursive": True,
+                "recursive": recursive,
             },
             "manual_override": override,
             "source_identity": {
-                "kind": "local_folder",
-                "source_path": str(directory),
+                "kind": source_kind,
+                "source_path": str(source),
                 "deletion_scope": "persisted_file_mappings_only",
             },
             "import_control": {
@@ -203,7 +311,7 @@ class LocalFileManagerService:
                     torrent_meta=meta,
                 )
                 path_plan = self.library_layout.plan(
-                    source_path=str(directory),
+                    source_path=str(source),
                     category=category,
                     expected_files=inventory_plan.get("expected_files") or [],
                     media_type=media_type,
@@ -226,7 +334,7 @@ class LocalFileManagerService:
                         torrent_meta=meta,
                     )
                     path_plan = self.library_layout.plan(
-                        source_path=str(directory),
+                        source_path=str(source),
                         category=category,
                         expected_files=inventory_plan.get("expected_files") or [],
                         media_type=media_type,
@@ -248,7 +356,7 @@ class LocalFileManagerService:
                     downloader_id=self.SOURCE_DOWNLOADER,
                     info_hash=source_hash,
                     media_id=media_id,
-                    torrent={"content_path": str(directory)},
+                    torrent={"content_path": str(source)},
                     expected_files=inventory_plan.get("expected_files") or [],
                     path_plan=path_plan,
                     inventory_details=inventory,
@@ -281,7 +389,7 @@ class LocalFileManagerService:
             "media_type": media_type,
             "title": media_title or title,
             "source_name": title,
-            "source_path": str(directory),
+            "source_path": str(source),
             "downloader_id": self.SOURCE_DOWNLOADER,
             "info_hash": source_hash,
             "tmdb_id": tmdb_id,
@@ -358,6 +466,28 @@ def _local_directory(value: object) -> Path:
     if not resolved.is_dir():
         raise FileManagerError(f"路径不是文件夹：{resolved}")
     return resolved
+
+
+def _local_entry(value: object) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise FileManagerError("缺少要识别的文件或文件夹")
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise FileManagerError("路径必须是绝对路径")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise FileManagerError(f"路径不存在或不可访问：{raw}") from error
+    if not resolved.is_dir() and not resolved.is_file():
+        raise FileManagerError(f"路径不是普通文件或文件夹：{resolved}")
+    return resolved
+
+
+def _is_media_file(path: Path) -> bool:
+    if not path.is_file() or path.suffix.casefold() not in _moviepilot_media_extensions():
+        return False
+    return "sample" not in path.stem.casefold()
 
 
 def _accessible_source_roots(values: Iterable[object]) -> List[Path]:

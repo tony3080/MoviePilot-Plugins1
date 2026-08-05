@@ -597,7 +597,7 @@ const _hoisted_6$2 = {
   key: 1,
   class: "size-label"
 };
-const _hoisted_7$1 = {
+const _hoisted_7$2 = {
   key: 2,
   class: "target-name"
 };
@@ -960,7 +960,7 @@ return (_ctx, _cache) => {
             ? (_openBlock$3(), _createElementBlock$2("span", _hoisted_6$2, "大小: " + _toDisplayString$3(sizeText.value), 1))
             : _createCommentVNode$3("", true),
           (plannedName.value && __props.item.recognition_state !== 'unidentified')
-            ? (_openBlock$3(), _createElementBlock$2("p", _hoisted_7$1, _toDisplayString$3(plannedName.value), 1))
+            ? (_openBlock$3(), _createElementBlock$2("p", _hoisted_7$2, _toDisplayString$3(plannedName.value), 1))
             : _createCommentVNode$3("", true),
           (plannedName.value)
             ? (_openBlock$3(), _createElementBlock$2("p", {
@@ -1197,14 +1197,15 @@ const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,toDisplay
 const _hoisted_1$1 = { class: "file-manager-browser" };
 const _hoisted_2$1 = { class: "browser-toolbar" };
 const _hoisted_3$1 = ["onClick"];
-const _hoisted_4$1 = { class: "entry-list" };
-const _hoisted_5$1 = ["onClick"];
-const _hoisted_6$1 = {
+const _hoisted_4$1 = { class: "batch-progress-line" };
+const _hoisted_5$1 = { class: "entry-list" };
+const _hoisted_6$1 = ["onClick"];
+const _hoisted_7$1 = {
   key: 1,
   class: "entry-name"
 };
 
-const {computed: computed$1,onMounted: onMounted$1,ref: ref$1} = await importShared('vue');
+const {computed: computed$1,onBeforeUnmount: onBeforeUnmount$1,onMounted: onMounted$1,ref: ref$1} = await importShared('vue');
 
 
 
@@ -1222,8 +1223,15 @@ const parentPath = ref$1('');
 const entries = ref$1([]);
 const loading = ref$1(false);
 const recognizingPath = ref$1('');
+const batchTask = ref$1(null);
 const errorMessage = ref$1('');
 const successMessage = ref$1('');
+let batchPollTimer = null;
+const batchRunning = computed$1(() => batchTask.value?.state === 'running');
+const batchProgress = computed$1(() => {
+  const total = Number(batchTask.value?.total || 0);
+  return total ? Math.round((Number(batchTask.value?.processed || 0) / total) * 100) : 0
+});
 
 const breadcrumbs = computed$1(() => {
   const path = String(currentPath.value || '/').replaceAll('\\', '/');
@@ -1260,34 +1268,80 @@ async function browse(path = '/') {
   }
 }
 
-async function recognize(folder) {
-  if (!window.confirm(`确认递归识别文件夹“${folder.name}”中的媒体文件？`)) return
-  recognizingPath.value = folder.path;
+async function recognize(entry) {
+  const label = entry.type === 'dir' ? '文件夹' : '文件';
+  const detail = entry.type === 'dir' ? '，并递归读取其中的媒体文件' : '';
+  if (!window.confirm(`确认识别${label}“${entry.name}”${detail}？`)) return
+  recognizingPath.value = entry.path;
   errorMessage.value = '';
   successMessage.value = '';
   try {
     const response = unwrap(await props.api.post(
       'plugin/RssAllInOne/files/recognize',
-      { path: folder.path },
+      { path: entry.path },
     ));
-    if (!response?.success) throw new Error(response?.message || '批量识别失败')
+    if (!response?.success) throw new Error(response?.message || '识别失败')
     successMessage.value = response.message || '识别完成';
   } catch (error) {
-    errorMessage.value = error?.message || '批量识别失败';
+    errorMessage.value = error?.message || '识别失败';
   } finally {
     recognizingPath.value = '';
   }
 }
 
+async function recognizeCurrentDirectory() {
+  if (currentPath.value === '/') return
+  if (!window.confirm('确认逐项识别当前目录下的所有子文件夹和媒体文件？')) return
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/files/recognize-batch',
+      { path: currentPath.value },
+    ));
+    if (!response?.success) throw new Error(response?.message || '批量识别启动失败')
+    batchTask.value = { id: response.task_id, state: 'running', processed: 0, total: 0 };
+    pollBatchTask();
+  } catch (error) {
+    errorMessage.value = error?.message || '批量识别启动失败';
+  }
+}
+
+async function pollBatchTask() {
+  window.clearTimeout(batchPollTimer);
+  const taskId = batchTask.value?.id;
+  if (!taskId) return
+  try {
+    const response = unwrap(await props.api.get('plugin/RssAllInOne/files/task', {
+      params: { task_id: taskId },
+    }));
+    if (!response?.success) throw new Error(response?.message || '读取批量识别进度失败')
+    batchTask.value = response.task;
+    if (response.task?.state === 'running') {
+      batchPollTimer = window.setTimeout(pollBatchTask, 1200);
+      return
+    }
+    const result = response.task?.result || {};
+    if (response.task?.state === 'failed') {
+      errorMessage.value = response.task?.error_message || '批量识别失败';
+    } else {
+      successMessage.value = result.message || '批量识别完成';
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '读取批量识别进度失败';
+  }
+}
+
 onMounted$1(() => browse('/'));
+onBeforeUnmount$1(() => window.clearTimeout(batchPollTimer));
 
 return (_ctx, _cache) => {
   const _component_VBtn = _resolveComponent$1("VBtn");
   const _component_VBreadcrumbs = _resolveComponent$1("VBreadcrumbs");
   const _component_VSpacer = _resolveComponent$1("VSpacer");
   const _component_VAlert = _resolveComponent$1("VAlert");
-  const _component_VIcon = _resolveComponent$1("VIcon");
   const _component_VProgressLinear = _resolveComponent$1("VProgressLinear");
+  const _component_VIcon = _resolveComponent$1("VIcon");
   const _component_VEmptyState = _resolveComponent$1("VEmptyState");
 
   return (_openBlock$1(), _createElementBlock$1("div", _hoisted_1$1, [
@@ -1314,6 +1368,20 @@ return (_ctx, _cache) => {
         _: 1
       }, 8, ["items"]),
       _createVNode$1(_component_VSpacer),
+      _createVNode$1(_component_VBtn, {
+        color: "primary",
+        variant: "tonal",
+        size: "small",
+        "prepend-icon": "mdi-text-box-search-outline",
+        loading: batchRunning.value,
+        disabled: currentPath.value === '/' || Boolean(recognizingPath.value) || batchRunning.value,
+        onClick: recognizeCurrentDirectory
+      }, {
+        default: _withCtx$1(() => [...(_cache[2] || (_cache[2] = [
+          _createTextVNode$1(" 批量识别 ", -1)
+        ]))]),
+        _: 1
+      }, 8, ["loading", "disabled"]),
       _createVNode$1(_component_VBtn, {
         icon: "mdi-refresh",
         variant: "text",
@@ -1350,7 +1418,29 @@ return (_ctx, _cache) => {
           _: 1
         }))
       : _createCommentVNode$1("", true),
-    _createElementVNode$1("div", _hoisted_4$1, [
+    (batchRunning.value)
+      ? (_openBlock$1(), _createBlock$1(_component_VAlert, {
+          key: 2,
+          type: "info",
+          variant: "tonal",
+          density: "compact",
+          class: "browser-alert"
+        }, {
+          default: _withCtx$1(() => [
+            _createElementVNode$1("div", _hoisted_4$1, [
+              _createElementVNode$1("span", null, "正在识别：" + _toDisplayString$1(batchTask.value.current_item || '读取当前目录'), 1),
+              _createElementVNode$1("span", null, _toDisplayString$1(batchTask.value.processed || 0) + "/" + _toDisplayString$1(batchTask.value.total || 0), 1)
+            ]),
+            _createVNode$1(_component_VProgressLinear, {
+              "model-value": batchProgress.value,
+              height: "4",
+              class: "mt-2"
+            }, null, 8, ["model-value"])
+          ]),
+          _: 1
+        }))
+      : _createCommentVNode$1("", true),
+    _createElementVNode$1("div", _hoisted_5$1, [
       (_openBlock$1(true), _createElementBlock$1(_Fragment$1, null, _renderList$1(entries.value, (entry) => {
         return (_openBlock$1(), _createElementBlock$1("div", {
           key: entry.path,
@@ -1369,8 +1459,8 @@ return (_ctx, _cache) => {
                   size: "22"
                 }),
                 _createElementVNode$1("span", null, _toDisplayString$1(entry.name), 1)
-              ], 8, _hoisted_5$1))
-            : (_openBlock$1(), _createElementBlock$1("div", _hoisted_6$1, [
+              ], 8, _hoisted_6$1))
+            : (_openBlock$1(), _createElementBlock$1("div", _hoisted_7$1, [
                 _createVNode$1(_component_VIcon, {
                   icon: "mdi-file-outline",
                   color: "blue-grey-lighten-1",
@@ -1378,35 +1468,32 @@ return (_ctx, _cache) => {
                 }),
                 _createElementVNode$1("span", null, _toDisplayString$1(entry.name), 1)
               ])),
-          (entry.type === 'dir')
-            ? (_openBlock$1(), _createBlock$1(_component_VBtn, {
-                key: 2,
-                color: "primary",
-                variant: "tonal",
-                size: "small",
-                "prepend-icon": "mdi-text-recognition",
-                loading: recognizingPath.value === entry.path,
-                disabled: Boolean(recognizingPath.value),
-                onClick: $event => (recognize(entry))
-              }, {
-                default: _withCtx$1(() => [...(_cache[2] || (_cache[2] = [
-                  _createTextVNode$1(" 批量识别 ", -1)
-                ]))]),
-                _: 1
-              }, 8, ["loading", "disabled", "onClick"]))
-            : _createCommentVNode$1("", true)
+          _createVNode$1(_component_VBtn, {
+            color: "primary",
+            variant: "tonal",
+            size: "small",
+            "prepend-icon": "mdi-text-recognition",
+            loading: recognizingPath.value === entry.path,
+            disabled: Boolean(recognizingPath.value) || batchRunning.value,
+            onClick: $event => (recognize(entry))
+          }, {
+            default: _withCtx$1(() => [...(_cache[3] || (_cache[3] = [
+              _createTextVNode$1(" 识别 ", -1)
+            ]))]),
+            _: 1
+          }, 8, ["loading", "disabled", "onClick"])
         ]))
       }), 128))
     ]),
     (loading.value)
       ? (_openBlock$1(), _createBlock$1(_component_VProgressLinear, {
-          key: 2,
+          key: 3,
           indeterminate: "",
           color: "primary"
         }))
       : (!entries.value.length)
         ? (_openBlock$1(), _createBlock$1(_component_VEmptyState, {
-            key: 3,
+            key: 4,
             icon: "mdi-folder-open-outline",
             title: "当前目录为空"
           }))
@@ -1416,7 +1503,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-87bb5d1e"]]);
+const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-9b7125d8"]]);
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 
