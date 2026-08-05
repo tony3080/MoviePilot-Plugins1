@@ -43,6 +43,7 @@ const booleanOptions = [
   { key: 'recognize_fx', label: '识别特效' },
   { key: 'add_chinese_title', label: '添加中文标题' },
   { key: 'import_enabled', label: '入库' },
+  { key: 'realtime_hardlink_enabled', label: '完成后创建实时硬链接' },
   { key: 'rename_enabled', label: '重命名' },
   { key: 'download_enabled', label: '下载' },
   { key: 'delete_files', label: '删除文件' },
@@ -93,6 +94,9 @@ function defaultConfig() {
     recognize_fx: false,
     add_chinese_title: false,
     import_enabled: true,
+    realtime_hardlink_enabled: false,
+    realtime_source_root: '',
+    realtime_link_root: '',
     rename_enabled: false,
     download_enabled: true,
     delete_files: false,
@@ -524,6 +528,36 @@ return (_ctx, _cache) => {
                               }, null, 8, ["modelValue", "onUpdate:modelValue"])
                             ]),
                             _: 2
+                          }, 1024),
+                          _createVNode$3(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$3(() => [
+                              _createVNode$3(_component_VTextField, {
+                                modelValue: task.config.realtime_source_root,
+                                "onUpdate:modelValue": $event => ((task.config.realtime_source_root) = $event),
+                                label: "实时硬链接源根目录",
+                                placeholder: "/SSD/QB目录/REMUX/CHD",
+                                disabled: !task.config.realtime_hardlink_enabled
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$3(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$3(() => [
+                              _createVNode$3(_component_VTextField, {
+                                modelValue: task.config.realtime_link_root,
+                                "onUpdate:modelValue": $event => ((task.config.realtime_link_root) = $event),
+                                label: "实时硬链接目标根目录",
+                                placeholder: "/SSD/QB目录/REMUX/CHDlink",
+                                disabled: !task.config.realtime_hardlink_enabled
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
+                            ]),
+                            _: 2
                           }, 1024)
                         ]),
                         _: 2
@@ -557,7 +591,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-68802841"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-14f2eb45"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2,createElementBlock:_createElementBlock$1,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,normalizeClass:_normalizeClass} = await importShared('vue');
 
@@ -1254,6 +1288,7 @@ const identifyDialog = ref(false);
 const identifyItem = ref(null);
 const mediaState = ref('');
 const mediaType = ref('');
+const mediaRssTaskIds = ref([]);
 const qbDownloaders = ref([]);
 const qbDownloader = ref('');
 const qbView = ref('');
@@ -1320,6 +1355,10 @@ const capabilityRows = computed(() => Object.entries(
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state));
 const rssEnabled = computed(() => overview.value.plugin?.rss_enabled !== false);
+const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => ({
+  title: task.name || task.id,
+  value: String(task.id || ''),
+})).filter(item => item.value));
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0);
   const taskTotal = Number(qbTask.value?.total || 0);
@@ -1432,6 +1471,14 @@ async function loadSites(strict = false) {
   siteIdentities.value = response.items || [];
 }
 
+async function loadRssTasks() {
+  const response = unwrap(await props.api.get('plugin/RssAllInOne/rss/tasks', {
+    params: { offset: 0, limit: 100 },
+  }));
+  rssTasks.value = response?.items || [];
+  return response
+}
+
 async function loadActive() {
   loading.value = true;
   errorMessage.value = '';
@@ -1441,6 +1488,9 @@ async function loadActive() {
     if (['library', 'qb'].includes(activeTab.value)) {
       await loadCategories();
     }
+    if (activeTab.value === 'library') {
+      await loadRssTasks();
+    }
     if (activeTab.value === 'overview') {
       rows.value = [];
       total.value = 0;
@@ -1449,9 +1499,7 @@ async function loadActive() {
 
     if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
       const [response] = await Promise.all([
-        props.api.get('plugin/RssAllInOne/rss/tasks', {
-          params: { offset: 0, limit: 100 },
-        }).then(unwrap),
+        loadRssTasks(),
         loadQbDownloaders(),
         loadSites(false),
       ]);
@@ -1476,6 +1524,7 @@ async function loadActive() {
         ...params,
         state: mediaState.value,
         media_type: mediaType.value,
+        rss_task_ids: mediaRssTaskIds.value.join(','),
       };
     } else if (activeTab.value === 'qb') {
       path = 'torrents';
@@ -1809,7 +1858,7 @@ watch(vtTab, () => {
   clearSelection();
   if (activeTab.value === 'vt') loadActive();
 });
-watch([mediaState, mediaType], () => {
+watch([mediaState, mediaType, mediaRssTaskIds], () => {
   clearSelection();
   if (activeTab.value === 'library') loadActive();
 });
@@ -1860,7 +1909,7 @@ return (_ctx, _cache) => {
           class: "ms-3 me-3"
         }),
         _createElementVNode("div", _hoisted_2, [
-          _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
+          _cache[13] || (_cache[13] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
           _createElementVNode("div", _hoisted_3, _toDisplayString(overview.value.plugin?.enabled ? '运行已启用' : '运行未启用'), 1)
         ]),
         _createVNode(_component_VSpacer),
@@ -1953,7 +2002,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[13] || (_cache[13] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
+                  _cache[14] || (_cache[14] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.media || 0), 1)
                 ]),
                 _: 1
@@ -1963,7 +2012,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[14] || (_cache[14] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
+                  _cache[15] || (_cache[15] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.torrents || 0), 1)
                 ]),
                 _: 1
@@ -1973,7 +2022,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[15] || (_cache[15] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
+                  _cache[16] || (_cache[16] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.rss_history || 0), 1)
                 ]),
                 _: 1
@@ -1983,7 +2032,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[16] || (_cache[16] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
+                  _cache[17] || (_cache[17] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.background_tasks || 0), 1)
                 ]),
                 _: 1
@@ -1994,7 +2043,7 @@ return (_ctx, _cache) => {
               class: "capability-table"
             }, {
               default: _withCtx(() => [
-                _cache[17] || (_cache[17] = _createElementVNode("thead", null, [
+                _cache[18] || (_cache[18] = _createElementVNode("thead", null, [
                   _createElementVNode("tr", null, [
                     _createElementVNode("th", null, "能力"),
                     _createElementVNode("th", null, "状态"),
@@ -2061,6 +2110,19 @@ return (_ctx, _cache) => {
                   "hide-details": "",
                   class: "filter-control"
                 }, null, 8, ["modelValue"]),
+                _createVNode(_component_VSelect, {
+                  modelValue: mediaRssTaskIds.value,
+                  "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((mediaRssTaskIds).value = $event)),
+                  items: rssTaskFilterOptions.value,
+                  label: "RSS任务",
+                  multiple: "",
+                  chips: "",
+                  "closable-chips": "",
+                  clearable: "",
+                  density: "compact",
+                  "hide-details": "",
+                  class: "rss-task-filter"
+                }, null, 8, ["modelValue", "items"]),
                 _createElementVNode("span", _hoisted_9, _toDisplayString(total.value) + " 项", 1)
               ]),
               (rows.value.length)
@@ -2071,7 +2133,7 @@ return (_ctx, _cache) => {
                       variant: "text",
                       onClick: selectAllVisible
                     }, {
-                      default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
+                      default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
                         _createTextVNode("全选当前", -1)
                       ]))]),
                       _: 1
@@ -2080,9 +2142,9 @@ return (_ctx, _cache) => {
                       size: "small",
                       variant: "text",
                       disabled: !selectedKeys.value.length,
-                      onClick: _cache[3] || (_cache[3] = $event => (selectedKeys.value = []))
+                      onClick: _cache[4] || (_cache[4] = $event => (selectedKeys.value = []))
                     }, {
-                      default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
+                      default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
                         _createTextVNode("取消选择", -1)
                       ]))]),
                       _: 1
@@ -2125,7 +2187,7 @@ return (_ctx, _cache) => {
                 _createElementVNode("div", _hoisted_13, [
                   _createVNode(_component_VSelect, {
                     modelValue: qbDownloader.value,
-                    "onUpdate:modelValue": _cache[4] || (_cache[4] = $event => ((qbDownloader).value = $event)),
+                    "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((qbDownloader).value = $event)),
                     items: [{ title: '全部节点', value: '' }, ...qbDownloaders.value],
                     label: "QB 节点",
                     density: "compact",
@@ -2134,7 +2196,7 @@ return (_ctx, _cache) => {
                   }, null, 8, ["modelValue", "items"]),
                   _createVNode(_component_VBtnToggle, {
                     modelValue: qbView.value,
-                    "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((qbView).value = $event)),
+                    "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((qbView).value = $event)),
                     mandatory: "",
                     divided: "",
                     density: "compact",
@@ -2143,19 +2205,19 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VBtn, { value: "" }, {
-                        default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
+                        default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
                           _createTextVNode("全部", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "existing" }, {
-                        default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
+                        default: _withCtx(() => [...(_cache[22] || (_cache[22] = [
                           _createTextVNode("已存在", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "pending" }, {
-                        default: _withCtx(() => [...(_cache[22] || (_cache[22] = [
+                        default: _withCtx(() => [...(_cache[23] || (_cache[23] = [
                           _createTextVNode("待下载", -1)
                         ]))]),
                         _: 1
@@ -2165,7 +2227,7 @@ return (_ctx, _cache) => {
                   }, 8, ["modelValue"]),
                   _createVNode(_component_VTextField, {
                     modelValue: qbKeyword.value,
-                    "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((qbKeyword).value = $event)),
+                    "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((qbKeyword).value = $event)),
                     label: "搜索名称或 Hash",
                     "prepend-inner-icon": "mdi-magnify",
                     density: "compact",
@@ -2185,7 +2247,7 @@ return (_ctx, _cache) => {
                     disabled: qbRefreshing.value || !overview.value.plugin?.enabled,
                     onClick: refreshQb
                   }, {
-                    default: _withCtx(() => [...(_cache[23] || (_cache[23] = [
+                    default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
                       _createTextVNode(" 刷新识别 ", -1)
                     ]))]),
                     _: 1
@@ -2227,7 +2289,7 @@ return (_ctx, _cache) => {
                         variant: "text",
                         onClick: selectAllVisible
                       }, {
-                        default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
+                        default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
                           _createTextVNode("全选当前", -1)
                         ]))]),
                         _: 1
@@ -2236,9 +2298,9 @@ return (_ctx, _cache) => {
                         size: "small",
                         variant: "text",
                         disabled: !selectedKeys.value.length,
-                        onClick: _cache[7] || (_cache[7] = $event => (selectedKeys.value = []))
+                        onClick: _cache[8] || (_cache[8] = $event => (selectedKeys.value = []))
                       }, {
-                        default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
+                        default: _withCtx(() => [...(_cache[26] || (_cache[26] = [
                           _createTextVNode("取消选择", -1)
                         ]))]),
                         _: 1
@@ -2279,26 +2341,26 @@ return (_ctx, _cache) => {
               ? (_openBlock(), _createElementBlock("section", _hoisted_19, [
                   _createVNode(_component_VTabs, {
                     modelValue: vtTab.value,
-                    "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((vtTab).value = $event)),
+                    "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((vtTab).value = $event)),
                     density: "compact",
                     color: "primary",
                     class: "sub-tabs"
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                        default: _withCtx(() => [...(_cache[26] || (_cache[26] = [
+                        default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
                           _createTextVNode("RSS任务", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "rss_history" }, {
-                        default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
+                        default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
                           _createTextVNode("RSS历史", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
-                        default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
+                        default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
                           _createTextVNode("站点访问身份", -1)
                         ]))]),
                         _: 1
@@ -2394,7 +2456,7 @@ return (_ctx, _cache) => {
     ]),
     _createVNode(ManualIdentifyDialog, {
       modelValue: identifyDialog.value,
-      "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((identifyDialog).value = $event)),
+      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((identifyDialog).value = $event)),
       item: identifyItem.value,
       categories: categoryOptions.value,
       loading: Boolean(itemBusyKey.value),
@@ -2402,7 +2464,7 @@ return (_ctx, _cache) => {
     }, null, 8, ["modelValue", "item", "categories", "loading"]),
     _createVNode(_component_VDialog, {
       modelValue: rssTestDialog.value,
-      "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((rssTestDialog).value = $event)),
+      "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((rssTestDialog).value = $event)),
       "max-width": "1280"
     }, {
       default: _withCtx(() => [
@@ -2420,7 +2482,7 @@ return (_ctx, _cache) => {
                   icon: "mdi-close",
                   variant: "text",
                   "aria-label": "关闭",
-                  onClick: _cache[10] || (_cache[10] = $event => (rssTestDialog.value = false))
+                  onClick: _cache[11] || (_cache[11] = $event => (rssTestDialog.value = false))
                 })
               ]),
               _: 1
@@ -2553,6 +2615,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-0be4604a"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f101bcd7"]]);
 
 export { AppPage as default };

@@ -44,6 +44,9 @@ class RssTaskContractTest(unittest.TestCase):
                 "qb_downloader": " qb-main ",
                 "qb_category": " movie ",
                 "delete_after_minutes": -1,
+                "realtime_hardlink_enabled": "true",
+                "realtime_source_root": " /SSD/QB目录/REMUX/CHD ",
+                "realtime_link_root": " /SSD/QB目录/REMUX/CHDlink ",
                 "extension_value": {"keep": True},
             },
         }])
@@ -54,6 +57,15 @@ class RssTaskContractTest(unittest.TestCase):
         self.assertEqual(task["config"]["qb_category"], "movie")
         self.assertEqual(task["config"]["delete_after_minutes"], 0)
         self.assertTrue(task["config"]["pause_on_add"])
+        self.assertTrue(task["config"]["realtime_hardlink_enabled"])
+        self.assertEqual(
+            task["config"]["realtime_source_root"],
+            "/SSD/QB目录/REMUX/CHD",
+        )
+        self.assertEqual(
+            task["config"]["realtime_link_root"],
+            "/SSD/QB目录/REMUX/CHDlink",
+        )
         self.assertEqual(task["config"]["extension_value"], {"keep": True})
 
     def test_duplicate_ids_are_rejected(self) -> None:

@@ -29,6 +29,7 @@ const identifyDialog = ref(false)
 const identifyItem = ref(null)
 const mediaState = ref('')
 const mediaType = ref('')
+const mediaRssTaskIds = ref([])
 const qbDownloaders = ref([])
 const qbDownloader = ref('')
 const qbView = ref('')
@@ -121,6 +122,10 @@ const capabilityRows = computed(() => Object.entries(
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state))
 const rssEnabled = computed(() => overview.value.plugin?.rss_enabled !== false)
+const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => ({
+  title: task.name || task.id,
+  value: String(task.id || ''),
+})).filter(item => item.value))
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0)
   const taskTotal = Number(qbTask.value?.total || 0)
@@ -251,6 +256,14 @@ async function loadSites(strict = false) {
   siteIdentities.value = response.items || []
 }
 
+async function loadRssTasks() {
+  const response = unwrap(await props.api.get('plugin/RssAllInOne/rss/tasks', {
+    params: { offset: 0, limit: 100 },
+  }))
+  rssTasks.value = response?.items || []
+  return response
+}
+
 async function loadActive() {
   loading.value = true
   errorMessage.value = ''
@@ -260,6 +273,9 @@ async function loadActive() {
     if (['library', 'qb'].includes(activeTab.value)) {
       await loadCategories()
     }
+    if (activeTab.value === 'library') {
+      await loadRssTasks()
+    }
     if (activeTab.value === 'overview') {
       rows.value = []
       total.value = 0
@@ -268,9 +284,7 @@ async function loadActive() {
 
     if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
       const [response] = await Promise.all([
-        props.api.get('plugin/RssAllInOne/rss/tasks', {
-          params: { offset: 0, limit: 100 },
-        }).then(unwrap),
+        loadRssTasks(),
         loadQbDownloaders(),
         loadSites(false),
       ])
@@ -295,6 +309,7 @@ async function loadActive() {
         ...params,
         state: mediaState.value,
         media_type: mediaType.value,
+        rss_task_ids: mediaRssTaskIds.value.join(','),
       }
     } else if (activeTab.value === 'qb') {
       path = 'torrents'
@@ -662,7 +677,7 @@ watch(vtTab, () => {
   clearSelection()
   if (activeTab.value === 'vt') loadActive()
 })
-watch([mediaState, mediaType], () => {
+watch([mediaState, mediaType, mediaRssTaskIds], () => {
   clearSelection()
   if (activeTab.value === 'library') loadActive()
 })
@@ -796,6 +811,18 @@ onBeforeUnmount(() => {
             density="compact"
             hide-details
             class="filter-control"
+          />
+          <VSelect
+            v-model="mediaRssTaskIds"
+            :items="rssTaskFilterOptions"
+            label="RSS任务"
+            multiple
+            chips
+            closable-chips
+            clearable
+            density="compact"
+            hide-details
+            class="rss-task-filter"
           />
           <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
         </div>
@@ -1274,6 +1301,11 @@ onBeforeUnmount(() => {
   flex: 0 1 190px;
   min-width: 150px;
 }
+.rss-task-filter {
+  flex: 1 1 320px;
+  min-width: 240px;
+  max-width: 520px;
+}
 
 .section-count {
   margin-bottom: 10px;
@@ -1318,6 +1350,10 @@ onBeforeUnmount(() => {
 
   .filter-control {
     flex: 1 1 160px;
+  }
+  .rss-task-filter {
+    flex: 1 1 100%;
+    max-width: none;
   }
 
   .poster-grid {

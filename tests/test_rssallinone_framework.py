@@ -95,6 +95,80 @@ class SQLiteFrameworkTest(unittest.TestCase):
             item = store.list_media()["items"][0]
             self.assertEqual(item["season"], 0)
 
+    def test_media_can_be_filtered_by_multiple_rss_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            for task_id in ("task-a", "task-b", "task-c"):
+                store.upsert_media_item({
+                    "id": f"media-{task_id}",
+                    "state": "identified",
+                    "title": task_id,
+                    "details": {"import_control": {"task_id": task_id}},
+                })
+
+            result = store.list_media(rss_task_ids=["task-a", "task-c"])
+
+            self.assertEqual(result["total"], 2)
+            self.assertEqual(
+                {item["title"] for item in result["items"]},
+                {"task-a", "task-c"},
+            )
+
+    def test_clear_card_data_keeps_rss_configuration_and_resets_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            now = database.utc_now()
+            store.replace_rss_tasks([{
+                "id": "task-a",
+                "name": "彩虹岛",
+                "enabled": True,
+                "position": 0,
+                "config": {"qb_downloader": "qb-main", "qb_category": "chd"},
+            }])
+            store.upsert_media_item({
+                "id": "media-a",
+                "state": "identified",
+                "title": "Movie",
+                "details": {"import_control": {"task_id": "task-a"}},
+            })
+            with store.connection() as connection:
+                connection.execute(
+                    """INSERT INTO torrent_snapshots(
+                        downloader_id, info_hash, name, state, category,
+                        content_path, progress, size, present, details_json,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        "qb-main", "abc123", "Movie", "downloading", "chd",
+                        "/downloads/Movie.mkv", 0.5, 4, 1, "{}", now,
+                    ),
+                )
+            store.upsert_rss_history({
+                "task_id": "task-a",
+                "source_key": "source-a",
+                "content_key": "qb-main:abc123",
+                "title": "Movie",
+                "status": "processed",
+                "payload": {
+                    "info_hash": "abc123",
+                    "completion_processed": True,
+                    "imported_to_library": True,
+                },
+            })
+
+            counts = store.clear_card_data()
+
+            self.assertEqual(counts["media"], 1)
+            self.assertEqual(counts["torrents"], 1)
+            self.assertEqual(store.list_media()["total"], 0)
+            self.assertEqual(store.list_torrents()["total"], 0)
+            self.assertEqual(store.list_rss_tasks()["total"], 1)
+            history = store.latest_rss_history_for_torrent("qb-main", "abc123")
+            self.assertEqual(history["status"], "queued")
+            self.assertNotIn("completion_processed", history["payload"])
+
     def test_v1_torrent_snapshots_migrate_without_losing_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rssallinone.db"
@@ -244,6 +318,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("添加任务", editor)
         self.assertIn("QB下载器", editor)
         self.assertIn("QB分类", editor)
+        self.assertIn("完成后创建实时硬链接", editor)
+        self.assertIn("实时硬链接源根目录", editor)
+        self.assertIn("mediaRssTaskIds", app_page)
+        self.assertIn("label=\"RSS任务\"", app_page)
         self.assertIn("saveRssTasks", app_page)
         self.assertNotIn("电影目录组分类", config)
         self.assertNotIn("剧集目录组分类", config)
@@ -362,6 +440,9 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(sites["success"])
                 self.assertEqual(sites["items"][0]["auth_mode"], "Cookie")
                 self.assertNotIn("secret-cookie", repr(sites))
+                api_paths = {item["path"] for item in plugin.get_api()}
+                self.assertIn("/qb/completed", api_paths)
+                self.assertIn("/data/clear-cards", api_paths)
 
                 from rssallinone.generated import clouddrive_pb2_grpc
 

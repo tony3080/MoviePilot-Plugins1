@@ -521,8 +521,12 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
         task_id="rss-task",
         downloader="qb-main",
         category="movie",
+        task_name="rss-task",
         enabled=True,
         import_enabled=True,
+        realtime_hardlink_enabled=False,
+        realtime_source_root="",
+        realtime_link_root="",
     ):
         now = database.utc_now()
         connection = sqlite3.connect(store.path)
@@ -533,13 +537,16 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id,
-                    task_id,
+                    task_name,
                     int(enabled),
                     0,
                     json.dumps({
                         "qb_downloader": downloader,
                         "qb_category": category,
                         "import_enabled": import_enabled,
+                        "realtime_hardlink_enabled": realtime_hardlink_enabled,
+                        "realtime_source_root": realtime_source_root,
+                        "realtime_link_root": realtime_link_root,
                     }, ensure_ascii=False),
                     now,
                     now,
@@ -604,10 +611,10 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 return [{
                     "hash": "ABC123",
                     "title": "Example.Movie.2026.1080p",
-                    "state": "seeding",
+                    "state": "downloading",
                     "category": "movie",
                     "content_path": "/downloads/Example.Movie.2026.mkv",
-                    "progress": 100,
+                    "progress": 0.5,
                     "size": 4,
                 }]
 
@@ -748,6 +755,197 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             "https://pt.example/details.php?id=42&authkey=***",
         )
 
+    def test_realtime_hardlink_preserves_qb_source_and_moves_card_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "CHD"
+            link_root = root / "CHDlink"
+            source = source_root / "Movie" / "Movie.2026.mkv"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"movie-data")
+            mappings = [{
+                "file_index": 0,
+                "current_source_path": str(source),
+                "source_relative_path": "Movie/Movie.2026.mkv",
+                "details": {"recognition": {"customization": "REMUX@C版"}},
+            }]
+
+            updated, content_path, details = qb_sync.create_realtime_hardlinks(
+                content_path=str(source.parent),
+                file_mappings=mappings,
+                source_root=str(source_root),
+                link_root=str(link_root),
+            )
+
+            target = link_root / "Movie" / "Movie.2026.mkv"
+            self.assertTrue(target.is_file())
+            self.assertTrue(target.samefile(source))
+            self.assertEqual(
+                Path(content_path).resolve(),
+                (link_root / "Movie").resolve(),
+            )
+            self.assertEqual(
+                Path(updated[0]["current_source_path"]).resolve(),
+                target.resolve(),
+            )
+            self.assertEqual(
+                Path(updated[0]["details"]["qb_source_path"]).resolve(),
+                source.resolve(),
+            )
+            self.assertEqual(details["created_count"], 1)
+            self.assertEqual(details["reused_count"], 0)
+
+            _updated, _content_path, repeated = qb_sync.create_realtime_hardlinks(
+                content_path=str(source.parent),
+                file_mappings=mappings,
+                source_root=str(source_root),
+                link_root=str(link_root),
+            )
+            self.assertEqual(repeated["created_count"], 0)
+            self.assertEqual(repeated["reused_count"], 1)
+
+    def test_completed_realtime_task_moves_library_card_to_link_tree(self) -> None:
+        class Meta:
+            begin_season = None
+
+        class Media:
+            title = "CHD Movie"
+            year = "2026"
+            tmdb_id = 42
+            season = None
+            category = "外语电影"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "CHD"
+            link_root = root / "CHDlink"
+            source = source_root / "Movie" / "Movie.2026.mkv"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"movie-data")
+
+            class Gateway:
+                @staticmethod
+                def list_downloaders():
+                    return [qb_sync.DownloaderView(
+                        name="qb-main",
+                        type="qbittorrent",
+                        enabled=True,
+                        default=True,
+                        ready=True,
+                    )]
+
+                @staticmethod
+                def list_torrents(_downloader):
+                    return [{
+                        "hash": "CHDMOVIE",
+                        "title": "Movie.2026.REMUX-CHD",
+                        "state": "uploading",
+                        "category": "chd",
+                        "content_path": str(source.parent),
+                        "progress": 1.0,
+                        "size": source.stat().st_size,
+                    }]
+
+                @staticmethod
+                def torrent_dict(item):
+                    return dict(item)
+
+                @staticmethod
+                def recognize(_title):
+                    return Meta(), Media()
+
+                @staticmethod
+                def list_torrent_files(_downloader, _info_hash):
+                    return [{
+                        "name": "Movie/Movie.2026.mkv",
+                        "size": source.stat().st_size,
+                        "index": 0,
+                    }]
+
+                @staticmethod
+                def plan_inventory_files(_media, _files, **_kwargs):
+                    return {
+                        "expected_files": [{
+                            "file_index": 0,
+                            "source_name": "Movie/Movie.2026.mkv",
+                            "new_rel": "CHD Movie (2026) {tmdbid=42}/CHD Movie.mkv",
+                            "relative_path": "CHD Movie (2026) {tmdbid=42}/CHD Movie.mkv",
+                            "inventory_relative_path": "CHD Movie (2026) {tmdbid=42}/CHD Movie.strm",
+                            "size": source.stat().st_size,
+                        }],
+                        "expected_directory": "CHD Movie (2026) {tmdbid=42}",
+                        "total_files": 1,
+                        "plan_errors": [],
+                    }
+
+                @staticmethod
+                def media_payload(_media):
+                    return {"title": "CHD Movie", "tmdb_id": 42}
+
+                @staticmethod
+                def meta_payload(_meta):
+                    return {}
+
+                @staticmethod
+                def poster(_media):
+                    return "https://image.example/poster.jpg"
+
+                @staticmethod
+                def media_type(_media):
+                    return "movie"
+
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_id="chd-task",
+                task_name="彩虹岛",
+                category="chd",
+                realtime_hardlink_enabled=True,
+                realtime_source_root=str(source_root),
+                realtime_link_root=str(link_root),
+            )
+            store.upsert_rss_history({
+                "task_id": "chd-task",
+                "source_key": "source-chd",
+                "content_key": "qb-main:chdmovie",
+                "title": "Movie.2026.REMUX-CHD",
+                "status": "queued",
+                "detail_url_masked": "https://pt.example/details.php?id=42",
+                "payload": {"info_hash": "chdmovie"},
+            })
+            store.create_background_task("chd-complete", qb_sync.QB_TASK_TYPE)
+
+            qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "chd-complete"
+            )
+
+            self.assertEqual(store.list_torrents()["total"], 0)
+            media = store.list_media()["items"][0]
+            self.assertEqual(
+                media["details"]["import_control"]["task_id"],
+                "chd-task",
+            )
+            linked_file = link_root / "Movie" / "Movie.2026.mkv"
+            self.assertTrue(linked_file.samefile(source))
+            self.assertEqual(
+                Path(media["source_path"]).resolve(),
+                (link_root / "Movie").resolve(),
+            )
+            self.assertEqual(
+                media["details"]["rss_source"]["detail_url_masked"],
+                "https://pt.example/details.php?id=42",
+            )
+            mapping = store.list_file_mappings("qb-main", "chdmovie")[0]
+            self.assertEqual(
+                Path(mapping["current_source_path"]).resolve(),
+                linked_file.resolve(),
+            )
+            self.assertEqual(
+                Path(mapping["details"]["qb_source_path"]).resolve(),
+                source.resolve(),
+            )
+
     def test_completed_torrent_with_import_disabled_stays_out_of_library(self) -> None:
         class Gateway:
             @staticmethod
@@ -795,11 +993,72 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             )
 
             snapshot = store.get_torrent_snapshot("qb-main", "noimport")
-            self.assertIsNotNone(snapshot)
-            self.assertIsNone(snapshot["media_id"])
-            self.assertFalse(snapshot["details"]["import_control"]["import_enabled"])
-            self.assertTrue(snapshot["details"]["import_control"]["torrent_completed"])
+            self.assertIsNone(snapshot)
+            self.assertEqual(store.list_torrents()["total"], 0)
             self.assertEqual(store.list_media()["total"], 0)
+
+    def test_completed_torrent_with_import_enabled_moves_to_library_only(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "IMPORTME",
+                    "title": "Import.Me.2026",
+                    "state": "pausedUP",
+                    "category": "movie",
+                    "content_path": "/downloads/import-me.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, import_enabled=True)
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-importme",
+                "content_key": "qb-main:importme",
+                "title": "Import.Me.2026",
+                "status": "queued",
+                "payload": {"info_hash": "importme"},
+            })
+            store.create_background_task("import-me", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "import-me"
+            )
+
+            self.assertEqual(result["completed"], 1)
+            self.assertEqual(store.list_torrents()["total"], 0)
+            media = store.list_media()["items"]
+            self.assertEqual(len(media), 1)
+            self.assertEqual(media[0]["details"]["import_control"]["task_id"], "rss-task")
+            history = store.latest_rss_history_for_torrent("qb-main", "importme")
+            self.assertEqual(history["status"], "processed")
+            self.assertTrue(history["payload"]["completion_processed"])
 
     def test_sync_only_recognizes_rss_task_downloader_category_pairs(self) -> None:
         class Gateway:

@@ -37,7 +37,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.8.2"
+    plugin_version = "0.9.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -160,7 +160,7 @@ class RssAllInOne(_PluginBase):
                 trigger = CronTrigger.from_crontab(self._qb_refresh_cron)
                 services.append({
                     "id": "RssAllInOne.QbRefresh",
-                    "name": "RSS一条龙 QB 只读同步",
+                    "name": "RSS一条龙 QB 同步与完成转移",
                     "trigger": trigger,
                     "func": self._scheduled_qb_refresh,
                     "func_kwargs": {},
@@ -206,7 +206,9 @@ class RssAllInOne(_PluginBase):
         return [
             self._api("/qb/item/refresh", self.api_qb_item_refresh, "POST", "刷新单个 QB 任务"),
             self._api("/qb/item/identify", self.api_qb_item_identify, "POST", "手动识别单个 QB 任务"),
+            self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
+            self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
             self._api("/health", self.api_health, "GET", "依赖与数据库状态"),
@@ -263,12 +265,19 @@ class RssAllInOne(_PluginBase):
         self,
         state: str = "",
         media_type: str = "",
+        rss_task_ids: str = "",
         offset: int = 0,
         limit: int = 50,
     ) -> Dict[str, Any]:
+        task_ids = [
+            item.strip()
+            for item in str(rss_task_ids or "").split(",")
+            if item.strip()
+        ]
         result = self._require_store().list_media(
             state=str(state or "").strip(),
             media_type=str(media_type or "").strip(),
+            rss_task_ids=task_ids,
             offset=offset,
             limit=limit,
         )
@@ -367,6 +376,62 @@ class RssAllInOne(_PluginBase):
         except Exception as error:
             logger.error(f"RSS一条龙：手动识别失败：{error}", exc_info=True)
             return {"success": False, "message": str(error), "item": None}
+
+    def api_qb_completed(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        info_hash = str(
+            data.get("info_hash")
+            or data.get("hash")
+            or data.get("torrent_hash")
+            or ""
+        ).strip().lower()
+        downloader_id = str(
+            data.get("downloader_id") or data.get("downloader") or ""
+        ).strip()
+        if not info_hash:
+            return {"success": False, "message": "完成回调缺少 info-hash"}
+        try:
+            service = self._qb_sync_service()
+            if not downloader_id:
+                downloader_id = service.find_torrent_downloader(info_hash)
+            item = service.refresh_item(downloader_id, info_hash)
+            completed = bool(item.get("completed"))
+            moved = bool(item.get("transitioned_to_library"))
+            return {
+                "success": True,
+                "message": (
+                    "下载完成，已转入入库管理"
+                    if moved
+                    else "下载完成，已从 QB 管理移除"
+                    if completed
+                    else "完成回调已接收，但 qB 当前仍显示未完成"
+                ),
+                "downloader_id": downloader_id,
+                "info_hash": info_hash,
+                "completed": completed,
+                "transitioned_to_library": moved,
+                "media_id": item.get("media_id"),
+            }
+        except Exception as error:
+            logger.error(f"RSS一条龙：处理 qB 完成回调失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
+
+    def api_clear_cards(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if str((payload or {}).get("confirm") or "").strip() != "CLEAR":
+            return {"success": False, "message": "清空卡片需要 confirm=CLEAR"}
+        counts = self._require_store().clear_card_data()
+        return {
+            "success": True,
+            "message": (
+                f"已清空 QB 卡片 {counts['torrents']} 条、"
+                f"入库卡片 {counts['media']} 条"
+            ),
+            "counts": counts,
+        }
 
     def api_media_delete(
         self, payload: Optional[Dict[str, Any]] = None
@@ -690,7 +755,7 @@ class RssAllInOne(_PluginBase):
             return
         try:
             logger.info(
-                f"RSS一条龙：开始 QB 只读同步，来源={source}，"
+                f"RSS一条龙：开始 QB 同步与完成转移，来源={source}，"
                 f"强制识别={force_recognition}"
             )
             QbSyncService(
@@ -742,7 +807,7 @@ class RssAllInOne(_PluginBase):
                 "managed": len(managed),
                 "available": sum(1 for item in managed if item.ready),
                 "managed_scope": scope.to_dict(),
-                "phase": "readonly_sync",
+                "phase": "completion_lifecycle",
             }
         except Exception as error:
             capabilities["qbittorrent"] = {

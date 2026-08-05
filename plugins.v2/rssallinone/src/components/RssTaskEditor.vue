@@ -24,6 +24,7 @@ const booleanOptions = [
   { key: 'recognize_fx', label: '识别特效' },
   { key: 'add_chinese_title', label: '添加中文标题' },
   { key: 'import_enabled', label: '入库' },
+  { key: 'realtime_hardlink_enabled', label: '完成后创建实时硬链接' },
   { key: 'rename_enabled', label: '重命名' },
   { key: 'download_enabled', label: '下载' },
   { key: 'delete_files', label: '删除文件' },
@@ -74,6 +75,9 @@ function defaultConfig() {
     recognize_fx: false,
     add_chinese_title: false,
     import_enabled: true,
+    realtime_hardlink_enabled: false,
+    realtime_source_root: '',
+    realtime_link_root: '',
     rename_enabled: false,
     download_enabled: true,
     delete_files: false,
@@ -309,6 +313,22 @@ watch(
             </VCol>
             <VCol cols="12" md="6">
               <VTextField v-model="task.config.cn_keywords" label="国语关键词" />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextField
+                v-model="task.config.realtime_source_root"
+                label="实时硬链接源根目录"
+                placeholder="/SSD/QB目录/REMUX/CHD"
+                :disabled="!task.config.realtime_hardlink_enabled"
+              />
+            </VCol>
+            <VCol cols="12" md="6">
+              <VTextField
+                v-model="task.config.realtime_link_root"
+                label="实时硬链接目标根目录"
+                placeholder="/SSD/QB目录/REMUX/CHDlink"
+                :disabled="!task.config.realtime_hardlink_enabled"
+              />
             </VCol>
           </VRow>
 

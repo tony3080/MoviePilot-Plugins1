@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -66,6 +67,9 @@ class RssTaskQbRule:
     category: str
     enabled: bool
     import_enabled: bool
+    realtime_hardlink_enabled: bool
+    realtime_source_root: str
+    realtime_link_root: str
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -75,6 +79,9 @@ class RssTaskQbRule:
             "category": self.category,
             "enabled": self.enabled,
             "import_enabled": self.import_enabled,
+            "realtime_hardlink_enabled": self.realtime_hardlink_enabled,
+            "realtime_source_root": self.realtime_source_root,
+            "realtime_link_root": self.realtime_link_root,
         }
 
 
@@ -125,6 +132,15 @@ class RssTaskQbScope:
                 category=category,
                 enabled=bool(task.get("enabled")),
                 import_enabled=_as_bool(config.get("import_enabled", True)),
+                realtime_hardlink_enabled=_as_bool(
+                    config.get("realtime_hardlink_enabled", False)
+                ),
+                realtime_source_root=str(
+                    config.get("realtime_source_root") or ""
+                ).strip(),
+                realtime_link_root=str(
+                    config.get("realtime_link_root") or ""
+                ).strip(),
             ))
         return cls(rules, ignored)
 
@@ -164,7 +180,15 @@ class RssTaskQbScope:
         ]
         if len(matches) == 1:
             return matches[0]
-        if matches and len({rule.import_enabled for rule in matches}) == 1:
+        if matches and len({
+            (
+                rule.import_enabled,
+                rule.realtime_hardlink_enabled,
+                rule.realtime_source_root,
+                rule.realtime_link_root,
+            )
+            for rule in matches
+        }) == 1:
             return matches[0]
         return None
 
@@ -680,6 +704,22 @@ class QbSyncService:
         self.library_layout = library_layout or LibraryLayout("", [])
         self.logger = logger
 
+    def find_torrent_downloader(self, info_hash: object) -> str:
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not normalized_hash:
+            raise ValueError("缺少 info-hash")
+        scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
+        for downloader in self.gateway.list_downloaders():
+            if not downloader.ready or not scope.categories_for(downloader.name):
+                continue
+            for torrent in self.gateway.list_torrents(downloader.name):
+                raw = self.gateway.torrent_dict(torrent)
+                if str(raw.get("hash") or "").strip().lower() != normalized_hash:
+                    continue
+                if scope.matches(downloader.name, raw.get("category") or ""):
+                    return downloader.name
+        raise RuntimeError("已配置的 RSS qB 任务中没有找到该 info-hash")
+
     def refresh_item(
         self,
         downloader_id: object,
@@ -719,9 +759,21 @@ class QbSyncService:
             manual_override=manual_override,
             scope=scope,
         )
-        return self.store.get_torrent_snapshot(
+        snapshot = self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
-        ) or {}
+        )
+        if snapshot:
+            return snapshot
+        media = self.store.get_media_item(
+            f"qb:{downloader_name}:{normalized_hash}"
+        )
+        return {
+            "downloader_id": downloader_name,
+            "info_hash": normalized_hash,
+            "completed": True,
+            "transitioned_to_library": bool(media),
+            "media_id": media.get("id") if media else None,
+        }
 
     def run(
         self,
@@ -737,6 +789,8 @@ class QbSyncService:
             "recognized": 0,
             "unrecognized": 0,
             "existing": 0,
+            "completed": 0,
+            "completed_skipped": 0,
             "errors": [],
         }
         scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
@@ -824,6 +878,28 @@ class QbSyncService:
                     )
                     continue
                 try:
+                    if _torrent_completed(raw):
+                        history = self.store.latest_rss_history_for_torrent(
+                            downloader.name, info_hash
+                        ) or {}
+                        if bool((history.get("payload") or {}).get(
+                            "completion_processed"
+                        )):
+                            self.store.delete_torrent_snapshot(
+                                downloader.name, info_hash
+                            )
+                            succeeded += 1
+                            result["completed_skipped"] += 1
+                            self._update_progress(
+                                task_id,
+                                title,
+                                processed,
+                                succeeded,
+                                failed,
+                                total,
+                                result,
+                            )
+                            continue
                     outcome = self._sync_one(
                         downloader=downloader,
                         raw=raw,
@@ -833,6 +909,8 @@ class QbSyncService:
                     succeeded += 1
                     result["scanned"] += 1
                     result[outcome] += 1
+                    if _torrent_completed(raw):
+                        result["completed"] += 1
                 except Exception as error:
                     failed += 1
                     result["errors"].append({
@@ -878,6 +956,7 @@ class QbSyncService:
         rss_history = self.store.latest_rss_history_for_torrent(
             downloader.name, info_hash
         ) or {}
+        media_id = f"qb:{downloader.name}:{info_hash}"
         task_scope = scope or RssTaskQbScope.from_tasks(
             self.store.list_all_rss_tasks()
         )
@@ -893,6 +972,20 @@ class QbSyncService:
             raw,
             existing.get("source_url_masked") or "",
         )
+        if torrent_completed and not import_enabled:
+            existing_media = self.store.get_media_item(media_id) or {}
+            if str(existing_media.get("state") or "") not in {
+                "importing", "imported"
+            }:
+                self.store.delete_media_item(media_id)
+            self.store.delete_torrent_snapshot(downloader.name, info_hash)
+            self.store.mark_rss_torrent_completed(
+                rss_history,
+                downloader_id=downloader.name,
+                info_hash=info_hash,
+                imported=False,
+            )
+            return "recognized"
         stored_override = existing_details.get("manual_override") or {}
         override = _normalize_manual_override(
             stored_override if manual_override is None else manual_override
@@ -934,7 +1027,6 @@ class QbSyncService:
                 else:
                     meta, media = self.gateway.recognize(title)
 
-        media_id = f"qb:{downloader.name}:{info_hash}"
         recognition_error = ""
         inventory_state = "unknown"
         inventory_details: Dict[str, Any] = {}
@@ -1089,6 +1181,9 @@ class QbSyncService:
                 "task_name": task_rule.task_name if task_rule else "",
                 "import_enabled": import_enabled,
                 "torrent_completed": torrent_completed,
+                "realtime_hardlink_enabled": bool(
+                    task_rule and task_rule.realtime_hardlink_enabled
+                ),
             },
         }
         target_name = ""
@@ -1101,6 +1196,35 @@ class QbSyncService:
             "importing", "imported"
         }
         create_candidate = import_enabled and torrent_completed
+        media_source_path = content_path
+        realtime_hardlink: Dict[str, Any] = {}
+        realtime_error = ""
+        if (
+            create_candidate
+            and task_rule
+            and task_rule.realtime_hardlink_enabled
+            and not imported_record
+        ):
+            try:
+                file_mappings, media_source_path, realtime_hardlink = (
+                    create_realtime_hardlinks(
+                        content_path=content_path,
+                        file_mappings=file_mappings,
+                        source_root=task_rule.realtime_source_root,
+                        link_root=task_rule.realtime_link_root,
+                    )
+                )
+                details["file_mappings"] = file_mappings
+                details["realtime_hardlink"] = realtime_hardlink
+            except Exception as error:
+                realtime_error = str(error)
+                details["realtime_hardlink"] = {
+                    "enabled": True,
+                    "source_root": task_rule.realtime_source_root,
+                    "link_root": task_rule.realtime_link_root,
+                    "state": "failed",
+                    "error": realtime_error,
+                }
         if create_candidate and not imported_record:
             self.store.upsert_media_item({
                 "id": media_id,
@@ -1108,7 +1232,7 @@ class QbSyncService:
                 "media_type": media_type,
                 "title": media_title or title,
                 "source_name": title,
-                "source_path": content_path,
+                "source_path": media_source_path,
                 "downloader_id": downloader.name,
                 "info_hash": info_hash,
                 "tmdb_id": tmdb_id,
@@ -1116,13 +1240,15 @@ class QbSyncService:
                 "category": category,
                 "target_name": target_name,
                 "failure_code": (
-                    "recognition_failed"
+                    "realtime_hardlink_failed"
+                    if realtime_error
+                    else "recognition_failed"
                     if not media
                     else "missing_tmdb_id"
                     if not _valid_tmdb_id(tmdb_id)
                     else ""
                 ),
-                "failure_message": recognition_error,
+                "failure_message": realtime_error or recognition_error,
                 "details": details,
                 "updated_at": now,
             })
@@ -1140,34 +1266,43 @@ class QbSyncService:
                 info_hash,
                 file_mappings,
             )
-        snapshot_media_id = media_id if create_candidate or imported_record else None
-        self.store.upsert_torrent_snapshot({
-            "downloader_id": downloader.name,
-            "info_hash": info_hash,
-            "name": title,
-            "state": str(raw.get("state") or ""),
-            "category": str(raw.get("category") or ""),
-            "content_path": content_path,
-            "progress": float(raw.get("progress") or 0),
-            "size": int(raw.get("size") or 0),
-            "media_id": snapshot_media_id,
-            "source_url_masked": source_url_masked,
-            "present": 1,
-            "recognition_state": recognition_state,
-            "inventory_state": inventory_state,
-            "media_title": media_title,
-            "media_type": media_type,
-            "media_year": media_year,
-            "tmdb_id": tmdb_id,
-            "season": season,
-            "poster": poster,
-            "recognition_error": recognition_error,
-            "recognized_at": now,
-            "last_seen_at": now,
-            "missing_since": None,
-            "details": details,
-            "updated_at": now,
-        })
+        if torrent_completed:
+            self.store.delete_torrent_snapshot(downloader.name, info_hash)
+            self.store.mark_rss_torrent_completed(
+                rss_history,
+                downloader_id=downloader.name,
+                info_hash=info_hash,
+                imported=create_candidate,
+                realtime_hardlink=realtime_hardlink,
+            )
+        else:
+            self.store.upsert_torrent_snapshot({
+                "downloader_id": downloader.name,
+                "info_hash": info_hash,
+                "name": title,
+                "state": str(raw.get("state") or ""),
+                "category": str(raw.get("category") or ""),
+                "content_path": content_path,
+                "progress": float(raw.get("progress") or 0),
+                "size": int(raw.get("size") or 0),
+                "media_id": None,
+                "source_url_masked": source_url_masked,
+                "present": 1,
+                "recognition_state": recognition_state,
+                "inventory_state": inventory_state,
+                "media_title": media_title,
+                "media_type": media_type,
+                "media_year": media_year,
+                "tmdb_id": tmdb_id,
+                "season": season,
+                "poster": poster,
+                "recognition_error": recognition_error,
+                "recognized_at": now,
+                "last_seen_at": now,
+                "missing_since": None,
+                "details": details,
+                "updated_at": now,
+            })
         return outcome
 
     def _save_item_error(
@@ -1376,6 +1511,135 @@ def build_source_target_mappings(
             },
         })
     return mappings
+
+
+def create_realtime_hardlinks(
+    *,
+    content_path: object,
+    file_mappings: Sequence[Dict[str, Any]],
+    source_root: object,
+    link_root: object,
+) -> Tuple[List[Dict[str, Any]], str, Dict[str, Any]]:
+    """Mirror completed qB media files as hardlinks while preserving identity."""
+
+    source_root_text = str(source_root or "").strip()
+    link_root_text = str(link_root or "").strip()
+    if not source_root_text or not link_root_text:
+        raise ValueError("实时硬链接必须同时配置源根目录和目标根目录")
+    source_base_input = Path(source_root_text).expanduser()
+    if not source_base_input.is_absolute():
+        raise ValueError("实时硬链接源根目录必须是绝对路径")
+    source_base = source_base_input.resolve(strict=True)
+    if not source_base.is_dir():
+        raise ValueError(f"实时硬链接源根目录不存在：{source_root_text}")
+    link_base = Path(link_root_text).expanduser()
+    if not link_base.is_absolute():
+        raise ValueError("实时硬链接目标根目录必须是绝对路径")
+    link_base.mkdir(parents=True, exist_ok=True)
+    link_base = link_base.resolve(strict=True)
+    if source_base == link_base:
+        raise ValueError("实时硬链接源根目录和目标根目录不能相同")
+    if not file_mappings:
+        raise ValueError("没有可用于实时硬链接的媒体文件映射")
+
+    created: List[Path] = []
+    linked_files: List[Dict[str, Any]] = []
+    updated_mappings: List[Dict[str, Any]] = []
+    try:
+        for mapping in file_mappings:
+            original_source = str(mapping.get("current_source_path") or "").strip()
+            if not original_source:
+                raise ValueError("实时硬链接文件缺少 qB 源路径")
+            source = Path(original_source).expanduser().resolve(strict=True)
+            if not source.is_file():
+                raise ValueError(f"实时硬链接源文件不存在：{original_source}")
+            try:
+                relative = source.relative_to(source_base)
+            except ValueError as error:
+                raise ValueError(
+                    f"qB 源文件不在实时硬链接源根目录内：{original_source}"
+                ) from error
+            target = link_base.joinpath(relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target_parent = target.parent.resolve(strict=True)
+            target = target_parent.joinpath(target.name)
+            try:
+                target.relative_to(link_base)
+            except ValueError as error:
+                raise ValueError(f"实时硬链接目标越界：{target}") from error
+
+            reused = False
+            if target.exists():
+                if not target.is_file() or not os.path.samefile(source, target):
+                    raise FileExistsError(f"实时硬链接目标已存在且不是同一文件：{target}")
+                reused = True
+            else:
+                os.link(source, target)
+                created.append(target)
+
+            updated = copy.deepcopy(mapping)
+            updated["current_source_path"] = str(target)
+            updated["state"] = "realtime_linked"
+            updated_details = dict(updated.get("details") or {})
+            updated_details.update({
+                "qb_source_path": str(source),
+                "realtime_hardlink_path": str(target),
+                "realtime_hardlink_reused": reused,
+            })
+            updated["details"] = updated_details
+            updated_mappings.append(updated)
+            linked_files.append({
+                "file_index": updated.get("file_index"),
+                "source": str(source),
+                "target": str(target),
+                "reused": reused,
+            })
+    except Exception:
+        for target in reversed(created):
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+    mapped_content_path = _map_realtime_content_path(
+        content_path,
+        source_base,
+        link_base,
+        linked_files,
+    )
+    return updated_mappings, mapped_content_path, {
+        "enabled": True,
+        "state": "linked",
+        "source_root": str(source_base),
+        "link_root": str(link_base),
+        "content_path": mapped_content_path,
+        "files": linked_files,
+        "created_count": sum(1 for item in linked_files if not item["reused"]),
+        "reused_count": sum(1 for item in linked_files if item["reused"]),
+        "completed_at": utc_now(),
+    }
+
+
+def _map_realtime_content_path(
+    content_path: object,
+    source_root: Path,
+    link_root: Path,
+    linked_files: Sequence[Dict[str, Any]],
+) -> str:
+    raw_content = str(content_path or "").strip()
+    if raw_content:
+        try:
+            content = Path(raw_content).expanduser().resolve(strict=False)
+            return str(link_root.joinpath(content.relative_to(source_root)))
+        except ValueError:
+            pass
+    targets = [Path(str(item.get("target") or "")) for item in linked_files]
+    if len(targets) == 1:
+        return str(targets[0])
+    if targets:
+        return os.path.commonpath([str(item.parent) for item in targets])
+    return str(link_root)
 
 
 def resolve_current_source_path(

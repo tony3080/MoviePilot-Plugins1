@@ -1,41 +1,41 @@
 
-.rss-editor[data-v-68802841] {
+.rss-editor[data-v-14f2eb45] {
   min-width: 0;
 }
-.rss-toolbar[data-v-68802841],
-.task-title[data-v-68802841] {
+.rss-toolbar[data-v-14f2eb45],
+.task-title[data-v-14f2eb45] {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 10px;
 }
-.rss-toolbar[data-v-68802841] {
+.rss-toolbar[data-v-14f2eb45] {
   margin-bottom: 12px;
 }
-.task-title[data-v-68802841] {
+.task-title[data-v-14f2eb45] {
   width: 100%;
 }
-.task-title strong[data-v-68802841] {
+.task-title strong[data-v-14f2eb45] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.switch-grid[data-v-68802841] {
+.switch-grid[data-v-14f2eb45] {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px 16px;
 }
 @media (max-width: 900px) {
-.rss-toolbar[data-v-68802841] {
+.rss-toolbar[data-v-14f2eb45] {
     flex-wrap: wrap;
 }
-.switch-grid[data-v-68802841] {
+.switch-grid[data-v-14f2eb45] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 }
 @media (max-width: 600px) {
-.switch-grid[data-v-68802841] {
+.switch-grid[data-v-14f2eb45] {
     grid-template-columns: 1fr;
 }
 }
@@ -153,40 +153,40 @@ button.corner-badge[data-v-0f96f48f] { cursor: pointer;
 .dialog-actions[data-v-3e83c70b] { justify-content: flex-end; padding: 12px 18px;
 }
 
-.app-page[data-v-0be4604a] {
+.app-page[data-v-f101bcd7] {
   min-height: 100%;
   min-width: 0;
   background: rgb(var(--v-theme-background));
 }
-.topbar[data-v-0be4604a] {
+.topbar[data-v-f101bcd7] {
   position: sticky;
   top: 0;
   z-index: 12;
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
-.title-block[data-v-0be4604a] {
+.title-block[data-v-f101bcd7] {
   min-width: 0;
   line-height: 1.2;
 }
-.main-tabs[data-v-0be4604a],
-.sub-tabs[data-v-0be4604a] {
+.main-tabs[data-v-f101bcd7],
+.sub-tabs[data-v-f101bcd7] {
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background: rgb(var(--v-theme-surface));
 }
-.status-alert[data-v-0be4604a] {
+.status-alert[data-v-f101bcd7] {
   margin: 12px 16px 0;
 }
-.workspace[data-v-0be4604a] {
+.workspace[data-v-f101bcd7] {
   width: 100%;
   padding: 16px;
 }
-.metric-grid[data-v-0be4604a] {
+.metric-grid[data-v-f101bcd7] {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
-.metric-item[data-v-0be4604a] {
+.metric-item[data-v-f101bcd7] {
   display: flex;
   min-height: 78px;
   flex-direction: column;
@@ -195,141 +195,146 @@ button.corner-badge[data-v-0f96f48f] { cursor: pointer;
   padding: 12px 14px;
   border-radius: 6px;
 }
-.metric-item strong[data-v-0be4604a] {
+.metric-item strong[data-v-f101bcd7] {
   font-size: 1.45rem;
   font-weight: 600;
 }
-.capability-table[data-v-0be4604a],
-.data-table[data-v-0be4604a] {
+.capability-table[data-v-f101bcd7],
+.data-table[data-v-f101bcd7] {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   overflow: hidden;
 }
-.filter-bar[data-v-0be4604a] {
+.filter-bar[data-v-f101bcd7] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
-.qb-toolbar[data-v-0be4604a] {
+.qb-toolbar[data-v-f101bcd7] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
-.qb-search[data-v-0be4604a] {
+.qb-search[data-v-f101bcd7] {
   flex: 1 1 240px;
   min-width: 200px;
   max-width: 380px;
 }
-.qb-task-status[data-v-0be4604a] {
+.qb-task-status[data-v-f101bcd7] {
   margin-bottom: 12px;
 }
-.rss-test-title[data-v-0be4604a],
-.rss-test-summary[data-v-0be4604a] {
+.rss-test-title[data-v-f101bcd7],
+.rss-test-summary[data-v-f101bcd7] {
   display: flex;
   align-items: center;
 }
-.rss-test-title[data-v-0be4604a] {
+.rss-test-title[data-v-f101bcd7] {
   min-height: 56px;
   gap: 10px;
 }
-.rss-test-title span[data-v-0be4604a] {
+.rss-test-title span[data-v-f101bcd7] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rss-test-content[data-v-0be4604a] {
+.rss-test-content[data-v-f101bcd7] {
   display: grid;
   gap: 10px;
 }
-.rss-test-summary[data-v-0be4604a] {
+.rss-test-summary[data-v-f101bcd7] {
   flex-wrap: wrap;
   gap: 8px;
 }
-.rss-feed-title[data-v-0be4604a] {
+.rss-feed-title[data-v-f101bcd7] {
   font-weight: 600;
 }
-.rss-feed-url[data-v-0be4604a],
-.url-cell[data-v-0be4604a] {
+.rss-feed-url[data-v-f101bcd7],
+.url-cell[data-v-f101bcd7] {
   overflow-wrap: anywhere;
   white-space: normal;
 }
-.rss-test-table[data-v-0be4604a] {
+.rss-test-table[data-v-f101bcd7] {
   max-height: min(65vh, 720px);
   overflow: auto;
 }
-.qb-task-line[data-v-0be4604a],
-.progress-cell[data-v-0be4604a],
-.media-cell[data-v-0be4604a],
-.resource-cell[data-v-0be4604a] {
+.qb-task-line[data-v-f101bcd7],
+.progress-cell[data-v-f101bcd7],
+.media-cell[data-v-f101bcd7],
+.resource-cell[data-v-f101bcd7] {
   display: flex;
   min-width: 0;
 }
-.qb-task-line[data-v-0be4604a] {
+.qb-task-line[data-v-f101bcd7] {
   justify-content: space-between;
   gap: 12px;
 }
-.progress-cell[data-v-0be4604a] {
+.progress-cell[data-v-f101bcd7] {
   min-width: 80px;
   align-items: center;
   gap: 8px;
 }
-.media-cell[data-v-0be4604a] {
+.media-cell[data-v-f101bcd7] {
   flex-direction: column;
   line-height: 1.35;
 }
-.media-cell strong[data-v-0be4604a] {
+.media-cell strong[data-v-f101bcd7] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.resource-cell[data-v-0be4604a] {
+.resource-cell[data-v-f101bcd7] {
   flex-direction: column;
   gap: 5px;
   line-height: 1.35;
 }
-.resource-token-line[data-v-0be4604a] {
+.resource-token-line[data-v-f101bcd7] {
   overflow-wrap: anywhere;
 }
-.customization-line[data-v-0be4604a] {
+.customization-line[data-v-f101bcd7] {
   overflow-wrap: anywhere;
   color: rgb(var(--v-theme-primary));
 }
-.customization-line strong[data-v-0be4604a] {
+.customization-line strong[data-v-f101bcd7] {
   margin-right: 5px;
   font-weight: 600;
 }
-.resource-meta-line[data-v-0be4604a] {
+.resource-meta-line[data-v-f101bcd7] {
   display: flex;
   min-height: 20px;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
-.recognition-tooltip[data-v-0be4604a] {
+.recognition-tooltip[data-v-f101bcd7] {
   display: flex;
   flex-direction: column;
   gap: 5px;
   padding-block: 4px;
 }
-.recognition-tooltip code[data-v-0be4604a] {
+.recognition-tooltip code[data-v-f101bcd7] {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.filter-control[data-v-0be4604a] {
+.filter-control[data-v-f101bcd7] {
   flex: 0 1 190px;
   min-width: 150px;
 }
-.section-count[data-v-0be4604a] {
+.rss-task-filter[data-v-f101bcd7] {
+  flex: 1 1 320px;
+  min-width: 240px;
+  max-width: 520px;
+}
+.section-count[data-v-f101bcd7] {
   margin-bottom: 10px;
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.8rem;
 }
-.selection-bar[data-v-0be4604a] {
+.selection-bar[data-v-f101bcd7] {
   display: flex;
   min-height: 38px;
   align-items: center;
@@ -338,30 +343,34 @@ button.corner-badge[data-v-0f96f48f] { cursor: pointer;
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.8rem;
 }
-.poster-grid[data-v-0be4604a] {
+.poster-grid[data-v-f101bcd7] {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 20px;
   align-items: start;
 }
-.sub-tabs[data-v-0be4604a] {
+.sub-tabs[data-v-f101bcd7] {
   margin: -16px -16px 14px;
   padding-inline: 8px;
 }
 @media (max-width: 760px) {
-.workspace[data-v-0be4604a] {
+.workspace[data-v-f101bcd7] {
     padding: 10px;
 }
-.metric-grid[data-v-0be4604a] {
+.metric-grid[data-v-f101bcd7] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-.sub-tabs[data-v-0be4604a] {
+.sub-tabs[data-v-f101bcd7] {
     margin: -10px -10px 10px;
 }
-.filter-control[data-v-0be4604a] {
+.filter-control[data-v-f101bcd7] {
     flex: 1 1 160px;
 }
-.poster-grid[data-v-0be4604a] {
+.rss-task-filter[data-v-f101bcd7] {
+    flex: 1 1 100%;
+    max-width: none;
+}
+.poster-grid[data-v-f101bcd7] {
     grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
     gap: 12px;
 }

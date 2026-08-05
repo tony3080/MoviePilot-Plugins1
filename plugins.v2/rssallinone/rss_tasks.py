@@ -28,6 +28,9 @@ DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
     "recognize_fx": False,
     "add_chinese_title": False,
     "import_enabled": True,
+    "realtime_hardlink_enabled": False,
+    "realtime_source_root": "",
+    "realtime_link_root": "",
     "rename_enabled": False,
     "download_enabled": True,
     "delete_files": False,
@@ -46,6 +49,8 @@ TEXT_FIELDS = (
     "rename_rules",
     "site_id",
     "cn_keywords",
+    "realtime_source_root",
+    "realtime_link_root",
 )
 BOOLEAN_FIELDS = (
     "pause_on_add",
@@ -54,6 +59,7 @@ BOOLEAN_FIELDS = (
     "recognize_fx",
     "add_chinese_title",
     "import_enabled",
+    "realtime_hardlink_enabled",
     "rename_enabled",
     "download_enabled",
     "delete_files",

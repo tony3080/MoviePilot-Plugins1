@@ -315,6 +315,7 @@ class SQLiteStore:
         self,
         state: str = "",
         media_type: str = "",
+        rss_task_ids: Iterable[object] = (),
         offset: object = 0,
         limit: object = 50,
     ) -> Dict[str, Any]:
@@ -327,6 +328,18 @@ class SQLiteStore:
         if media_type:
             clauses.append("media_type = ?")
             params.append(media_type)
+        normalized_task_ids = sorted({
+            str(item or "").strip()
+            for item in rss_task_ids or []
+            if str(item or "").strip()
+        })
+        if normalized_task_ids:
+            placeholders = ",".join("?" for _ in normalized_task_ids)
+            clauses.append(
+                "json_extract(details_json, '$.import_control.task_id') "
+                f"IN ({placeholders})"
+            )
+            params.extend(normalized_task_ids)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connection() as connection:
             total = connection.execute(
@@ -422,22 +435,18 @@ class SQLiteStore:
     ) -> None:
         normalized = sorted({value for value in seen_hashes if value})
         with self.connection() as connection:
-            connection.execute(
-                """UPDATE torrent_snapshots
-                   SET present = 0,
-                       missing_since = COALESCE(missing_since, ?),
-                       updated_at = ?
-                   WHERE downloader_id = ?""",
-                (seen_at, seen_at, downloader_id),
-            )
-            for start in range(0, len(normalized), 500):
-                batch = normalized[start:start + 500]
-                placeholders = ",".join("?" for _ in batch)
+            if normalized:
+                placeholders = ",".join("?" for _ in normalized)
                 connection.execute(
-                    f"""UPDATE torrent_snapshots
-                        SET present = 1, missing_since = NULL, last_seen_at = ?
-                        WHERE downloader_id = ? AND info_hash IN ({placeholders})""",
-                    [seen_at, downloader_id, *batch],
+                    f"""DELETE FROM torrent_snapshots
+                        WHERE downloader_id = ?
+                          AND info_hash NOT IN ({placeholders})""",
+                    [downloader_id, *normalized],
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM torrent_snapshots WHERE downloader_id = ?",
+                    (downloader_id,),
                 )
 
     def mark_torrents_outside_scope(
@@ -470,15 +479,16 @@ class SQLiteStore:
                 not in normalized.get(str(row["downloader_id"]), set())
             ]
             connection.executemany(
-                """UPDATE torrent_snapshots
-                   SET present = 0,
-                       missing_since = COALESCE(missing_since, ?),
-                       updated_at = ?
+                """DELETE FROM torrent_snapshots
                    WHERE downloader_id = ? AND info_hash = ?""",
                 [
-                    (changed_at, changed_at, downloader, info_hash)
+                    (downloader, info_hash)
                     for downloader, info_hash, _media_id in outside
                 ],
+            )
+            connection.executemany(
+                "DELETE FROM file_mappings WHERE media_id = ?",
+                [(media_id,) for _downloader, _info_hash, media_id in outside if media_id],
             )
             connection.executemany(
                 """DELETE FROM media_items
@@ -488,6 +498,74 @@ class SQLiteStore:
                 [(media_id,) for _downloader, _info_hash, media_id in outside if media_id],
             )
         return len(outside)
+
+    def delete_torrent_snapshot(
+        self, downloader_id: object, info_hash: object
+    ) -> bool:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            return False
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """DELETE FROM torrent_snapshots
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                (downloader, normalized_hash),
+            )
+        return bool(cursor.rowcount)
+
+    def clear_card_data(self) -> Dict[str, int]:
+        with self.connection() as connection:
+            counts = {
+                "torrents": int(connection.execute(
+                    "SELECT COUNT(*) FROM torrent_snapshots"
+                ).fetchone()[0]),
+                "media": int(connection.execute(
+                    "SELECT COUNT(*) FROM media_items"
+                ).fetchone()[0]),
+                "file_mappings": int(connection.execute(
+                    "SELECT COUNT(*) FROM file_mappings"
+                ).fetchone()[0]),
+                "import_watches": int(connection.execute(
+                    "SELECT COUNT(*) FROM import_watches"
+                ).fetchone()[0]),
+                "completion_markers": 0,
+            }
+            connection.execute("DELETE FROM torrent_snapshots")
+            connection.execute("DELETE FROM file_mappings")
+            connection.execute("DELETE FROM import_watches")
+            connection.execute("DELETE FROM media_items")
+            history_rows = connection.execute(
+                "SELECT id, status, payload_json FROM rss_history"
+            ).fetchall()
+            for row in history_rows:
+                try:
+                    payload = json.loads(str(row["payload_json"] or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if not payload.get("completion_processed"):
+                    continue
+                for key in (
+                    "completion_processed",
+                    "completion_processed_at",
+                    "imported_to_library",
+                    "realtime_hardlink",
+                ):
+                    payload.pop(key, None)
+                connection.execute(
+                    """UPDATE rss_history
+                       SET status = ?, reason = '', payload_json = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        "queued" if str(row["status"] or "") == "processed"
+                        else str(row["status"] or ""),
+                        self._json_dump(payload),
+                        utc_now(),
+                        int(row["id"]),
+                    ),
+                )
+                counts["completion_markers"] += 1
+        return counts
 
     def upsert_torrent_snapshot(self, record: Dict[str, Any]) -> None:
         fields = (
@@ -874,6 +952,35 @@ class SQLiteStore:
             if payload_hash == normalized_hash:
                 return item
         return None
+
+    def mark_rss_torrent_completed(
+        self,
+        history: Dict[str, Any],
+        *,
+        downloader_id: object,
+        info_hash: object,
+        imported: bool,
+        realtime_hardlink: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not history:
+            return
+        payload = dict(history.get("payload") or {})
+        payload.update({
+            "downloader": str(downloader_id or "").strip(),
+            "info_hash": str(info_hash or "").strip().lower(),
+            "completion_processed": True,
+            "completion_processed_at": utc_now(),
+            "imported_to_library": bool(imported),
+        })
+        if realtime_hardlink:
+            payload["realtime_hardlink"] = realtime_hardlink
+        self.upsert_rss_history({
+            **history,
+            "status": "processed",
+            "reason": "下载完成，已转入入库管理" if imported else "下载完成，任务未启用入库",
+            "payload": payload,
+            "updated_at": utc_now(),
+        })
 
     def upsert_rss_history(self, record: Dict[str, Any]) -> None:
         now = str(record.get("updated_at") or utc_now())
