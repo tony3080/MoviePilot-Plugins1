@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import uuid
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -82,6 +83,107 @@ class MediaActionService:
             return self._delete_hardlinks(item, mappings)
         return self._delete_both(item, mappings)
 
+    def prepare_monitored_import(self, media_id: object) -> Dict[str, Any]:
+        item = self.store.get_media_item(media_id)
+        if not item:
+            raise MediaActionError("媒体记录不存在")
+        return self._import(item, finalize=False)
+
+    def finalize_monitored_import(self, media_id: object) -> Dict[str, Any]:
+        item = self.store.get_media_item(media_id)
+        if not item:
+            raise MediaActionError("媒体记录不存在")
+        if str(item.get("state") or "") == "imported":
+            return {"message": "项目已经入库", "state": "imported"}
+        if str(item.get("state") or "") != "importing":
+            raise MediaActionError("只有入库中的项目可以完成 CD2 入库")
+        completed = copy.deepcopy(item)
+        details = dict(completed.get("details") or {})
+        import_result = dict(details.get("import_result") or {})
+        import_result.update({"state": "imported", "completed_at": utc_now()})
+        details["import_result"] = import_result
+        completed.update({
+            "state": "imported",
+            "failure_code": "",
+            "failure_message": "",
+            "rolled_back": False,
+            "details": details,
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_media_item(completed)
+        return {"message": "CD2 秒传监控完成", "state": "imported"}
+
+    def rollback_monitored_import(
+        self,
+        media_id: object,
+        *,
+        failure_code: str,
+        failure_message: str,
+    ) -> Dict[str, Any]:
+        item = self.store.get_media_item(media_id)
+        if not item:
+            raise MediaActionError("媒体记录不存在")
+        mappings = self._mappings(item)
+        updated = copy.deepcopy(mappings)
+        operation_id = str(
+            ((item.get("details") or {}).get("import_result") or {}).get("operation_id")
+            or ""
+        )
+        deleted = 0
+        missing = 0
+        for mapping in updated:
+            details = dict(mapping.get("details") or {})
+            if (
+                not details.get("hardlink_created_in_operation")
+                or str(details.get("hardlink_operation_id") or "") != operation_id
+            ):
+                continue
+            target_text = str(mapping.get("local_hardlink_path") or "").strip()
+            target = Path(target_text).expanduser()
+            source_text = str(mapping.get("current_source_path") or "").strip()
+            source = Path(source_text).expanduser()
+            if target.exists():
+                if not target.is_file():
+                    raise MediaActionError(f"回滚目标不是普通文件：{target}")
+                if source.exists() and not os.path.samefile(source, target):
+                    raise MediaActionError(f"回滚目标已不再指向原始源文件：{target}")
+                target.unlink()
+                deleted += 1
+            else:
+                missing += 1
+            details.update({
+                "hardlink_owned": False,
+                "hardlink_created_in_operation": False,
+                "hardlink_deleted_at": utc_now(),
+            })
+            mapping.update({"state": "rolled_back", "details": details})
+        self.store.replace_file_mappings(
+            item.get("downloader_id"), item.get("info_hash"), updated
+        )
+        rolled_back = copy.deepcopy(item)
+        details = dict(rolled_back.get("details") or {})
+        details["rollback"] = {
+            "reason": failure_message,
+            "deleted_count": deleted,
+            "missing_count": missing,
+            "completed_at": utc_now(),
+        }
+        rolled_back.update({
+            "state": "identified",
+            "failure_code": str(failure_code or "cd2_import_failed"),
+            "failure_message": str(failure_message or "CD2 入库失败"),
+            "rolled_back": False,
+            "details": details,
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_media_item(rolled_back)
+        return {
+            "message": f"已回滚本次硬链接 {deleted} 个，缺失 {missing} 个",
+            "state": "identified",
+            "deleted": deleted,
+            "missing": missing,
+        }
+
     def _queue_import(self, item: Dict[str, Any]) -> Dict[str, Any]:
         state = str(item.get("state") or "")
         if state == "pending":
@@ -91,16 +193,21 @@ class MediaActionService:
         if not can_transition(state, "pending"):
             raise MediaActionError(f"不允许从 {state} 转为 pending")
         updated = copy.deepcopy(item)
+        details = dict(updated.get("details") or {})
+        details["pending_import"] = {
+            "queued_at": utc_now(),
+        }
         updated.update({
             "state": "pending",
             "failure_code": "",
             "failure_message": "",
+            "details": details,
             "updated_at": utc_now(),
         })
         self.store.upsert_media_item(updated)
         return {"message": "已转为待入库", "state": "pending"}
 
-    def _import(self, item: Dict[str, Any]) -> Dict[str, Any]:
+    def _import(self, item: Dict[str, Any], *, finalize: bool = True) -> Dict[str, Any]:
         original_state = str(item.get("state") or "")
         if original_state == "imported":
             return {"message": "项目已经入库", "state": "imported"}
@@ -117,7 +224,7 @@ class MediaActionService:
         missing = [mapping for mapping in mappings if not mapping.get("inventory_exists")]
         if not mappings:
             raise MediaActionError("没有持久化的文件映射，无法安全入库")
-        if not missing:
+        if not missing and finalize:
             raise MediaActionError("所有文件均已存在于库存，无需创建硬链接")
 
         working = copy.deepcopy(item)
@@ -130,6 +237,7 @@ class MediaActionService:
         self.store.upsert_media_item(working)
 
         created: List[Path] = []
+        operation_id = uuid.uuid4().hex
         updated_mappings = copy.deepcopy(mappings)
         created_count = 0
         reused_count = 0
@@ -151,6 +259,10 @@ class MediaActionService:
                     if not target.is_file() or not os.path.samefile(source, target):
                         raise FileExistsError(f"硬链接目标已存在且不是同一文件：{target}")
                     owned = bool(details.get("hardlink_owned"))
+                    if not finalize and not owned:
+                        raise FileExistsError(
+                            f"待入库目标已存在但不属于当前插件记录：{target}"
+                        )
                     reused_count += 1
                 else:
                     os.link(source, target)
@@ -160,6 +272,8 @@ class MediaActionService:
                 details.update({
                     "hardlink_owned": owned,
                     "hardlink_reused": target not in created,
+                    "hardlink_created_in_operation": target in created,
+                    "hardlink_operation_id": operation_id,
                     "hardlink_created_at": utc_now(),
                 })
                 mapping.update({
@@ -189,14 +303,15 @@ class MediaActionService:
         completed = copy.deepcopy(item)
         details = dict(completed.get("details") or {})
         details["import_result"] = {
-            "state": "imported",
+            "state": "imported" if finalize else "monitoring",
+            "operation_id": operation_id,
             "created_count": created_count,
             "reused_count": reused_count,
             "inventory_skipped_count": skipped_count,
             "completed_at": utc_now(),
         }
         completed.update({
-            "state": "imported",
+            "state": "imported" if finalize else "importing",
             "failure_code": "",
             "failure_message": "",
             "rolled_back": False,
@@ -206,14 +321,21 @@ class MediaActionService:
         self.store.upsert_media_item(completed)
         return {
             "message": (
-                f"入库完成：新建 {created_count}，复用 {reused_count}，"
+                f"{'入库完成' if finalize else '硬链接已创建，等待 CD2'}："
+                f"新建 {created_count}，复用 {reused_count}，"
                 f"库存跳过 {skipped_count}"
             ),
-            "state": "imported",
+            "state": "imported" if finalize else "importing",
             "created": created_count,
             "reused": reused_count,
             "skipped": skipped_count,
             "mappings": len(persisted),
+            "operation_id": operation_id,
+            "created_mappings": [
+                mapping for mapping in persisted
+                if (mapping.get("details") or {}).get("hardlink_operation_id") == operation_id
+                and (mapping.get("details") or {}).get("hardlink_created_in_operation")
+            ],
         }
 
     def _delete_source(

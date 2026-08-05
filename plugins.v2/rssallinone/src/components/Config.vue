@@ -40,6 +40,15 @@ const defaults = {
   source_routes: defaultRoutes,
   cd2_grpc_addr: '',
   cd2_token: '',
+  cd2_plugin_staging_root: '/SSD/云盘/l',
+  cd2_dest_root: '',
+  pending_import_cron: '0 1 * * *',
+  cd2_discovery_timeout: 180,
+  cd2_card_timeout: 7200,
+  cd2_poll_interval: 10,
+  cd2_transfer_grace: 20,
+  cd2_risk_cooldown: 1800,
+  cd2_risk_retry_limit: 3,
   catchup_base_url: '',
   catchup_page_id: '',
   catchup_token: '',
@@ -48,6 +57,11 @@ const defaults = {
   scan_password: '',
   scan_setting_name: '',
   scan_target_name: '',
+  scan_callback_secret: '',
+  scan_callback_server_id: '',
+  scan_callback_task_id: '',
+  scan_callback_task_name: '',
+  scan_callback_timeout: 7200,
 }
 
 const config = ref({ ...defaults })
@@ -237,6 +251,65 @@ onMounted(() => {
               autocomplete="new-password"
             />
           </VCol>
+          <VCol cols="12" md="6">
+            <VTextField
+              v-model="config.cd2_plugin_staging_root"
+              label="插件侧 CD2 staging 根目录"
+              placeholder="/SSD/云盘/l"
+            />
+          </VCol>
+          <VCol cols="12" md="6">
+            <VTextField
+              v-model="config.cd2_dest_root"
+              label="CD2 云端目标根目录"
+              placeholder="/云盘/影视库"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField v-model="config.pending_import_cron" label="待入库 CRON" />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_discovery_timeout"
+              label="上传任务发现超时（秒）"
+              type="number"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_card_timeout"
+              label="单卡最终超时（秒）"
+              type="number"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_poll_interval"
+              label="CD2 活跃轮询（秒）"
+              type="number"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_transfer_grace"
+              label="真实传输观察期（秒）"
+              type="number"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_risk_cooldown"
+              label="风控暂停时间（秒）"
+              type="number"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.cd2_risk_retry_limit"
+              label="连续风控停止阈值"
+              type="number"
+            />
+          </VCol>
         </VRow>
       </VWindowItem>
 
@@ -275,6 +348,30 @@ onMounted(() => {
           </VCol>
           <VCol cols="12" md="6">
             <VTextField v-model="config.scan_target_name" label="扫库节点名" />
+          </VCol>
+          <VCol cols="12" md="6">
+            <VTextField
+              v-model="config.scan_callback_secret"
+              label="Emby 扫库回调密钥"
+              type="password"
+              autocomplete="new-password"
+            />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField v-model="config.scan_callback_server_id" label="回调服务器 ID（可选）" />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField v-model="config.scan_callback_task_id" label="回调任务 ID（可选）" />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField v-model="config.scan_callback_task_name" label="回调任务名称（可选）" />
+          </VCol>
+          <VCol cols="12" md="4">
+            <VTextField
+              v-model.number="config.scan_callback_timeout"
+              label="扫库回调等待超时（秒）"
+              type="number"
+            />
           </VCol>
         </VRow>
       </VWindowItem>

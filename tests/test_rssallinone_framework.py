@@ -220,7 +220,7 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(migrated["name"], "旧快照")
             self.assertEqual(migrated["present"], 1)
             self.assertEqual(migrated["inventory_state"], "unknown")
-            self.assertEqual(store.health()["schema_version"], 4)
+            self.assertEqual(store.health()["schema_version"], 5)
 
 
 class RepositoryContractTest(unittest.TestCase):

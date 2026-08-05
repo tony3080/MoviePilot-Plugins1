@@ -43,8 +43,11 @@ const rssBackgroundTask = ref(null)
 const rssControlLoading = ref(false)
 const rssTestDialog = ref(false)
 const rssTestResult = ref(null)
+const pendingImport = ref({ running: false, batch: null, pending: 0, importing: 0, active_watches: 0 })
+const pendingImportStarting = ref(false)
 let qbPollTimer = null
 let rssPollTimer = null
+let pendingImportPollTimer = null
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -125,6 +128,15 @@ const capabilityRows = computed(() => Object.entries(
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state))
 const rssEnabled = computed(() => overview.value.plugin?.rss_enabled !== false)
+const pendingImportState = computed(() => pendingImport.value?.batch?.state || '')
+const pendingImportActive = computed(() => Boolean(pendingImport.value?.running))
+const pendingImportStateText = computed(() => ({
+  starting: '正在关闭外部开关',
+  running: '正在处理',
+  paused_risk: '风控暂停',
+  waiting_scan_callback: '等待 Emby 扫库完成',
+  restore_failed: '恢复开关失败',
+}[pendingImportState.value] || (pendingImportActive.value ? '队列运行中' : '队列空闲')))
 const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => ({
   title: task.name || task.id,
   value: String(task.id || ''),
@@ -245,6 +257,7 @@ async function loadCategories() {
 async function loadOverview() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/overview'))
   overview.value = response || overview.value
+  if (response?.pending_import) pendingImport.value = response.pending_import
   if (response?.qb_task?.id && !qbTask.value?.id) {
     qbTask.value = response.qb_task
     scheduleQbPoll(response.qb_task.id)
@@ -252,6 +265,46 @@ async function loadOverview() {
   if (response?.rss_task?.id && !rssBackgroundTask.value?.id) {
     rssBackgroundTask.value = response.rss_task
     scheduleRssPoll(response.rss_task.id)
+  }
+}
+
+async function loadPendingImportStatus({ reloadCards = false } = {}) {
+  try {
+    const response = unwrap(await props.api.get('plugin/RssAllInOne/import/status'))
+    if (response?.success) {
+      const wasRunning = pendingImportActive.value
+      pendingImport.value = response
+      if (reloadCards && activeTab.value === 'library' && (wasRunning || response.running)) {
+        await loadActive()
+      }
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '读取待入库队列状态失败'
+  }
+}
+
+function schedulePendingImportPoll() {
+  window.clearTimeout(pendingImportPollTimer)
+  pendingImportPollTimer = window.setTimeout(async () => {
+    await loadPendingImportStatus({ reloadCards: true })
+    schedulePendingImportPoll()
+  }, pendingImportActive.value ? 5000 : 15000)
+}
+
+async function runPendingImport() {
+  if (pendingImportStarting.value || pendingImportActive.value) return
+  pendingImportStarting.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post('plugin/RssAllInOne/import/run', {}))
+    if (!response?.success) throw new Error(response?.message || '待入库队列启动失败')
+    successMessage.value = response.message || '待入库队列已启动'
+    await loadPendingImportStatus({ reloadCards: true })
+  } catch (error) {
+    errorMessage.value = error?.message || '待入库队列启动失败'
+  } finally {
+    pendingImportStarting.value = false
   }
 }
 
@@ -775,10 +828,14 @@ watch([qbDownloader, qbView], () => {
   clearSelection()
   if (activeTab.value === 'qb') loadActive()
 })
-onMounted(loadActive)
+onMounted(async () => {
+  await loadActive()
+  schedulePendingImportPoll()
+})
 onBeforeUnmount(() => {
   window.clearTimeout(qbPollTimer)
   window.clearTimeout(rssPollTimer)
+  window.clearTimeout(pendingImportPollTimer)
 })
 </script>
 
@@ -872,6 +929,40 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'library'">
+        <div class="queue-status-bar">
+          <VChip
+            size="small"
+            :color="pendingImportState === 'paused_risk' || pendingImportState === 'restore_failed' ? 'error' : pendingImportActive ? 'primary' : 'default'"
+            variant="tonal"
+          >
+            {{ pendingImportStateText }}
+          </VChip>
+          <span class="text-caption text-medium-emphasis">
+            待入库 {{ pendingImport.pending || 0 }} · 入库中 {{ pendingImport.importing || 0 }} · CD2监控 {{ pendingImport.active_watches || 0 }}
+          </span>
+          <VSpacer />
+          <VBtn
+            size="small"
+            color="primary"
+            variant="tonal"
+            prepend-icon="mdi-play"
+            :loading="pendingImportStarting"
+            :disabled="pendingImportActive || pendingImportStarting || Number(pendingImport.pending || 0) <= 0"
+            @click="runPendingImport"
+          >立即处理</VBtn>
+          <VTooltip text="刷新队列状态">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                icon="mdi-refresh"
+                size="small"
+                variant="text"
+                aria-label="刷新队列状态"
+                @click="loadPendingImportStatus({ reloadCards: true })"
+              />
+            </template>
+          </VTooltip>
+        </div>
         <div class="filter-bar">
           <VSelect
             v-model="mediaState"
@@ -1303,6 +1394,18 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.queue-status-bar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
 }
 
 .qb-toolbar {

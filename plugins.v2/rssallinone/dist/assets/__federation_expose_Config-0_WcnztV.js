@@ -56,6 +56,15 @@ const defaults = {
   source_routes: defaultRoutes,
   cd2_grpc_addr: '',
   cd2_token: '',
+  cd2_plugin_staging_root: '/SSD/云盘/l',
+  cd2_dest_root: '',
+  pending_import_cron: '0 1 * * *',
+  cd2_discovery_timeout: 180,
+  cd2_card_timeout: 7200,
+  cd2_poll_interval: 10,
+  cd2_transfer_grace: 20,
+  cd2_risk_cooldown: 1800,
+  cd2_risk_retry_limit: 3,
   catchup_base_url: '',
   catchup_page_id: '',
   catchup_token: '',
@@ -64,6 +73,11 @@ const defaults = {
   scan_password: '',
   scan_setting_name: '',
   scan_target_name: '',
+  scan_callback_secret: '',
+  scan_callback_server_id: '',
+  scan_callback_task_id: '',
+  scan_callback_task_name: '',
+  scan_callback_timeout: 7200,
 };
 
 const config = ref({ ...defaults });
@@ -145,7 +159,7 @@ return (_ctx, _cache) => {
       color: "transparent"
     }, {
       default: _withCtx(() => [
-        _cache[16] || (_cache[16] = _createElementVNode("div", { class: "text-h6 ms-3" }, "RSS一条龙配置", -1)),
+        _cache[30] || (_cache[30] = _createElementVNode("div", { class: "text-h6 ms-3" }, "RSS一条龙配置", -1)),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "保存" }, {
           activator: _withCtx(({ props: tooltipProps }) => [
@@ -183,19 +197,19 @@ return (_ctx, _cache) => {
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VTab, { value: "general" }, {
-          default: _withCtx(() => [...(_cache[17] || (_cache[17] = [
+          default: _withCtx(() => [...(_cache[31] || (_cache[31] = [
             _createTextVNode("常规", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "cd2" }, {
-          default: _withCtx(() => [...(_cache[18] || (_cache[18] = [
+          default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
             _createTextVNode("CloudDrive2", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "external" }, {
-          default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
+          default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
             _createTextVNode("外部联动", -1)
           ]))]),
           _: 1
@@ -205,7 +219,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VWindow, {
       modelValue: section.value,
-      "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((section).value = $event)),
+      "onUpdate:modelValue": _cache[29] || (_cache[29] = $event => ((section).value = $event)),
       class: "config-window"
     }, {
       default: _withCtx(() => [
@@ -256,14 +270,14 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VCol, { cols: "12" }, {
                   default: _withCtx(() => [
                     _createElementVNode("div", _hoisted_2, [
-                      _cache[21] || (_cache[21] = _createElementVNode("div", { class: "text-subtitle-2" }, "源路径路由", -1)),
+                      _cache[35] || (_cache[35] = _createElementVNode("div", { class: "text-subtitle-2" }, "源路径路由", -1)),
                       _createVNode(_component_VBtn, {
                         size: "small",
                         variant: "text",
                         "prepend-icon": "mdi-plus",
                         onClick: addRoute
                       }, {
-                        default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
+                        default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
                           _createTextVNode(" 添加路由 ", -1)
                         ]))]),
                         _: 1
@@ -274,7 +288,7 @@ return (_ctx, _cache) => {
                       class: "route-table"
                     }, {
                       default: _withCtx(() => [
-                        _cache[22] || (_cache[22] = _createElementVNode("thead", null, [
+                        _cache[36] || (_cache[36] = _createElementVNode("thead", null, [
                           _createElementVNode("tr", null, [
                             _createElementVNode("th", null, "启用"),
                             _createElementVNode("th", null, "名称"),
@@ -400,6 +414,137 @@ return (_ctx, _cache) => {
                     }, null, 8, ["modelValue"])
                   ]),
                   _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_plugin_staging_root,
+                      "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.cd2_plugin_staging_root) = $event)),
+                      label: "插件侧 CD2 staging 根目录",
+                      placeholder: "/SSD/云盘/l"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_dest_root,
+                      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.value.cd2_dest_root) = $event)),
+                      label: "CD2 云端目标根目录",
+                      placeholder: "/云盘/影视库"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.pending_import_cron,
+                      "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.value.pending_import_cron) = $event)),
+                      label: "待入库 CRON"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_discovery_timeout,
+                      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((config.value.cd2_discovery_timeout) = $event)),
+                      modelModifiers: { number: true },
+                      label: "上传任务发现超时（秒）",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_card_timeout,
+                      "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((config.value.cd2_card_timeout) = $event)),
+                      modelModifiers: { number: true },
+                      label: "单卡最终超时（秒）",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_poll_interval,
+                      "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((config.value.cd2_poll_interval) = $event)),
+                      modelModifiers: { number: true },
+                      label: "CD2 活跃轮询（秒）",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_transfer_grace,
+                      "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((config.value.cd2_transfer_grace) = $event)),
+                      modelModifiers: { number: true },
+                      label: "真实传输观察期（秒）",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_risk_cooldown,
+                      "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((config.value.cd2_risk_cooldown) = $event)),
+                      modelModifiers: { number: true },
+                      label: "风控暂停时间（秒）",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.cd2_risk_retry_limit,
+                      "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((config.value.cd2_risk_retry_limit) = $event)),
+                      modelModifiers: { number: true },
+                      label: "连续风控停止阈值",
+                      type: "number"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
                 })
               ]),
               _: 1
@@ -418,7 +563,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.catchup_base_url,
-                      "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.catchup_base_url) = $event)),
+                      "onUpdate:modelValue": _cache[16] || (_cache[16] = $event => ((config.value.catchup_base_url) = $event)),
                       label: "追更 Emby 地址"
                     }, null, 8, ["modelValue"])
                   ]),
@@ -431,7 +576,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.catchup_page_id,
-                      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((config.value.catchup_page_id) = $event)),
+                      "onUpdate:modelValue": _cache[17] || (_cache[17] = $event => ((config.value.catchup_page_id) = $event)),
                       label: "追更 PageId"
                     }, null, 8, ["modelValue"])
                   ]),
@@ -444,7 +589,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.catchup_token,
-                      "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((config.value.catchup_token) = $event)),
+                      "onUpdate:modelValue": _cache[18] || (_cache[18] = $event => ((config.value.catchup_token) = $event)),
                       label: "追更 Token",
                       type: "password",
                       autocomplete: "new-password"
@@ -459,7 +604,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_base_url,
-                      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((config.value.scan_base_url) = $event)),
+                      "onUpdate:modelValue": _cache[19] || (_cache[19] = $event => ((config.value.scan_base_url) = $event)),
                       label: "扫库系统地址"
                     }, null, 8, ["modelValue"])
                   ]),
@@ -472,7 +617,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_username,
-                      "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((config.value.scan_username) = $event)),
+                      "onUpdate:modelValue": _cache[20] || (_cache[20] = $event => ((config.value.scan_username) = $event)),
                       label: "扫库账号"
                     }, null, 8, ["modelValue"])
                   ]),
@@ -485,7 +630,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_password,
-                      "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((config.value.scan_password) = $event)),
+                      "onUpdate:modelValue": _cache[21] || (_cache[21] = $event => ((config.value.scan_password) = $event)),
                       label: "扫库密码",
                       type: "password",
                       autocomplete: "new-password"
@@ -500,7 +645,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_setting_name,
-                      "onUpdate:modelValue": _cache[13] || (_cache[13] = $event => ((config.value.scan_setting_name) = $event)),
+                      "onUpdate:modelValue": _cache[22] || (_cache[22] = $event => ((config.value.scan_setting_name) = $event)),
                       label: "扫库配置名"
                     }, null, 8, ["modelValue"])
                   ]),
@@ -513,8 +658,77 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_target_name,
-                      "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((config.value.scan_target_name) = $event)),
+                      "onUpdate:modelValue": _cache[23] || (_cache[23] = $event => ((config.value.scan_target_name) = $event)),
                       label: "扫库节点名"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_secret,
+                      "onUpdate:modelValue": _cache[24] || (_cache[24] = $event => ((config.value.scan_callback_secret) = $event)),
+                      label: "Emby 扫库回调密钥",
+                      type: "password",
+                      autocomplete: "new-password"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_server_id,
+                      "onUpdate:modelValue": _cache[25] || (_cache[25] = $event => ((config.value.scan_callback_server_id) = $event)),
+                      label: "回调服务器 ID（可选）"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_task_id,
+                      "onUpdate:modelValue": _cache[26] || (_cache[26] = $event => ((config.value.scan_callback_task_id) = $event)),
+                      label: "回调任务 ID（可选）"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_task_name,
+                      "onUpdate:modelValue": _cache[27] || (_cache[27] = $event => ((config.value.scan_callback_task_name) = $event)),
+                      label: "回调任务名称（可选）"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "4"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_timeout,
+                      "onUpdate:modelValue": _cache[28] || (_cache[28] = $event => ((config.value.scan_callback_timeout) = $event)),
+                      modelModifiers: { number: true },
+                      label: "扫库回调等待超时（秒）",
+                      type: "number"
                     }, null, 8, ["modelValue"])
                   ]),
                   _: 1
@@ -533,6 +747,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-6b54c755"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d710dfe0"]]);
 
 export { Config as default };

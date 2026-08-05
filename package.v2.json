@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.12.1",
+    "version": "0.13.0",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.13.0": "新增待入库/CD2受控队列：批次关闭追更与外部扫库，串行创建硬链接并按完整目标路径绑定CD2任务，真实传输或风控自动回滚，完成后等待Emby扫库回调再恢复外部开关",
       "v0.12.1": "移除文件管理单项识别和批量识别的浏览器确认弹窗，操作点击后直接执行并通过加载状态与任务进度反馈",
       "v0.12.0": "重构文件识别交互：工具栏批量识别逐项处理当前目录内容，文件夹和文件行均提供单个识别；批量任务转入后台并展示实时进度",
       "v0.11.2": "文件管理目录列表同时显示子文件夹和普通文件，文件夹保留批量识别操作，文件行仅显示文件名",

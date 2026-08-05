@@ -13,7 +13,9 @@ from app.log import logger
 from app.plugins import _PluginBase
 
 from .capabilities import runtime_capabilities
+from .clouddrive_client import CloudDriveClient
 from .database import SQLiteStore, utc_now
+from .external_controls import CatchupSwitchClient, ExternalControlBundle, ScanSystemClient
 from .file_manager import FILE_BATCH_TASK_TYPE, FileManagerError, LocalFileManagerService
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
@@ -22,6 +24,7 @@ from .media_actions import (
     MediaActionService,
     MediaInventoryRefreshService,
 )
+from .pending_import import PendingImportConfig, PendingImportCoordinator
 from .qb_sync import (
     MoviePilotQbGateway,
     QB_TASK_TYPE,
@@ -44,7 +47,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.12.1"
+    plugin_version = "0.13.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -57,6 +60,9 @@ class RssAllInOne(_PluginBase):
     _inventory_root = ""
     _cd2_grpc_addr = ""
     _cd2_token = ""
+    _cd2_plugin_staging_root = ""
+    _cd2_dest_root = ""
+    _pending_import_cron = "0 1 * * *"
     _catchup_base_url = ""
     _catchup_page_id = ""
     _catchup_token = ""
@@ -65,6 +71,10 @@ class RssAllInOne(_PluginBase):
     _scan_password = ""
     _scan_setting_name = ""
     _scan_target_name = ""
+    _scan_callback_secret = ""
+    _scan_callback_server_id = ""
+    _scan_callback_task_id = ""
+    _scan_callback_task_name = ""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -75,6 +85,7 @@ class RssAllInOne(_PluginBase):
         self._rss_run_lock = threading.Lock()
         self._media_action_lock = threading.Lock()
         self._file_scan_lock = threading.Lock()
+        self._pending_import_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
@@ -102,6 +113,14 @@ class RssAllInOne(_PluginBase):
         )
         self._cd2_grpc_addr = str(config.get("cd2_grpc_addr") or "").strip()
         self._cd2_token = str(config.get("cd2_token") or "").strip()
+        self._cd2_plugin_staging_root = str(
+            config.get("cd2_plugin_staging_root")
+            or defaults["cd2_plugin_staging_root"]
+        ).strip()
+        self._cd2_dest_root = str(config.get("cd2_dest_root") or "").strip()
+        self._pending_import_cron = str(
+            config.get("pending_import_cron") or defaults["pending_import_cron"]
+        ).strip()
         self._catchup_base_url = str(config.get("catchup_base_url") or "").strip()
         self._catchup_page_id = str(config.get("catchup_page_id") or "").strip()
         self._catchup_token = str(config.get("catchup_token") or "").strip()
@@ -110,6 +129,16 @@ class RssAllInOne(_PluginBase):
         self._scan_password = str(config.get("scan_password") or "").strip()
         self._scan_setting_name = str(config.get("scan_setting_name") or "").strip()
         self._scan_target_name = str(config.get("scan_target_name") or "").strip()
+        self._scan_callback_secret = str(config.get("scan_callback_secret") or "").strip()
+        self._scan_callback_server_id = str(
+            config.get("scan_callback_server_id") or ""
+        ).strip()
+        self._scan_callback_task_id = str(
+            config.get("scan_callback_task_id") or ""
+        ).strip()
+        self._scan_callback_task_name = str(
+            config.get("scan_callback_task_name") or ""
+        ).strip()
 
         self._startup_error = ""
         self._stop_event.clear()
@@ -199,6 +228,26 @@ class RssAllInOne(_PluginBase):
             })
         except ImportError:
             logger.error("RSS一条龙：缺少 APScheduler，无法执行 qB 到期删除任务")
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            if self._pending_import_cron:
+                services.append({
+                    "id": "RssAllInOne.PendingImportCron",
+                    "name": "RSS一条龙 待入库队列",
+                    "trigger": CronTrigger.from_crontab(self._pending_import_cron),
+                    "func": self._scheduled_pending_import,
+                    "func_kwargs": {},
+                })
+            services.append({
+                "id": "RssAllInOne.PendingImportSupervisor",
+                "name": "RSS一条龙 待入库恢复检查",
+                "trigger": CronTrigger.from_crontab("* * * * *"),
+                "func": self._supervise_pending_import,
+                "func_kwargs": {},
+            })
+        except (ImportError, TypeError, ValueError) as error:
+            logger.error(f"RSS一条龙：待入库 CRON 无法注册：{error}")
         return services
 
     def stop_service(self) -> None:
@@ -213,6 +262,15 @@ class RssAllInOne(_PluginBase):
             self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
+            self._api("/import/run", self.api_pending_import_run, "POST", "立即处理待入库队列"),
+            self._api("/import/status", self.api_pending_import_status, "GET", "读取待入库队列状态"),
+            self._api(
+                "/emby/scheduledtasks/completed",
+                self.api_emby_scheduled_completed,
+                "POST",
+                "接收 Emby 扫库完成回调",
+                auth="none",
+            ),
             self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
             self._api("/files/browse", self.api_files_browse, "GET", "浏览本地文件夹"),
             self._api("/files/recognize", self.api_files_recognize, "POST", "识别单个本地文件或文件夹"),
@@ -254,6 +312,7 @@ class RssAllInOne(_PluginBase):
             "capabilities": self._capabilities(),
             "qb_task": store.latest_running_task(QB_TASK_TYPE),
             "rss_task": store.latest_running_task(RSS_RUN_TASK_TYPE),
+            "pending_import": self._pending_coordinator().status(),
         }
 
     def api_health(self) -> Dict[str, Any]:
@@ -370,6 +429,8 @@ class RssAllInOne(_PluginBase):
         try:
             media_id = str(data.get("media_id") or "").strip()
             media_item = self._require_store().get_media_item(media_id) if media_id else None
+            if media_item and str(media_item.get("state") or "") == "importing":
+                return {"success": False, "message": "入库中的卡片不能人工修改识别结果"}
             source_kind = str(
                 ((media_item or {}).get("details") or {})
                 .get("source_identity", {})
@@ -461,6 +522,8 @@ class RssAllInOne(_PluginBase):
     def api_clear_cards(
         self, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        if self._pending_coordinator().status().get("running"):
+            return {"success": False, "message": "待入库批次运行期间不能清空卡片"}
         if str((payload or {}).get("confirm") or "").strip() != "CLEAR":
             return {"success": False, "message": "清空卡片需要 confirm=CLEAR"}
         counts = self._require_store().clear_card_data()
@@ -477,7 +540,15 @@ class RssAllInOne(_PluginBase):
         self, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         media_id = str((payload or {}).get("media_id") or "").strip()
-        deleted = self._require_store().delete_media_item(media_id)
+        store = self._require_store()
+        item = store.get_media_item(media_id)
+        if item and str(item.get("state") or "") == "importing":
+            return {"success": False, "message": "入库中的卡片不能删除"}
+        if store.list_import_watches(media_id=media_id, states={
+            "waiting_task", "watching", "waiting_library", "rolling_back"
+        }):
+            return {"success": False, "message": "卡片仍有 CD2 监控任务，不能删除"}
+        deleted = store.delete_media_item(media_id)
         return {
             "success": deleted,
             "message": "媒体记录已删除" if deleted else "媒体记录不存在",
@@ -491,6 +562,8 @@ class RssAllInOne(_PluginBase):
         media_ids = data.get("media_ids") or []
         if isinstance(media_ids, str):
             media_ids = [media_ids]
+        if action != "queue_import" and self._pending_coordinator().status().get("running"):
+            return {"success": False, "message": "待入库批次运行期间不能执行其他入库或删除操作"}
         if action in MediaActionService.DESTRUCTIVE_ACTIONS:
             expected = f"CONFIRM_{action.upper()}"
             if str(data.get("confirm") or "").strip() != expected:
@@ -521,6 +594,29 @@ class RssAllInOne(_PluginBase):
         finally:
             self._media_action_lock.release()
 
+    def api_pending_import_run(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        return self._start_pending_import("manual")
+
+    def api_pending_import_status(self) -> Dict[str, Any]:
+        return {"success": True, **self._pending_coordinator().status()}
+
+    def api_emby_scheduled_completed(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+        secret: str = "",
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        if not self._scan_callback_secret:
+            return {"success": False, "message": "尚未配置扫库回调密钥"}
+        supplied_secret = str(secret or data.get("secret") or "").strip()
+        if self._scan_callback_secret and supplied_secret != self._scan_callback_secret:
+            return {"success": False, "message": "扫库回调密钥不正确"}
+        event = self._normalize_emby_callback(data)
+        result = self._pending_coordinator().handle_scan_callback(event)
+        return {"success": bool(result.get("accepted")), **result}
+
     def api_media_refresh(
         self, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -528,6 +624,8 @@ class RssAllInOne(_PluginBase):
         item = self._require_store().get_media_item(media_id)
         if not item:
             return {"success": False, "message": "媒体记录不存在"}
+        if str(item.get("state") or "") == "importing":
+            return {"success": False, "message": "入库中的卡片不能刷新或重新识别"}
         try:
             if str(item.get("state") or "") == "imported":
                 result = MediaInventoryRefreshService(
@@ -859,6 +957,19 @@ class RssAllInOne(_PluginBase):
         finally:
             self._qb_delete_lock.release()
 
+    def _scheduled_pending_import(self) -> None:
+        self._start_pending_import("cron")
+
+    def _supervise_pending_import(self) -> None:
+        try:
+            status = self._pending_coordinator().status()
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取待入库恢复状态失败：{error}")
+            return
+        batch = status.get("batch") or {}
+        if batch or status.get("importing"):
+            self._start_pending_import("supervisor")
+
     @staticmethod
     def _torrent_is_completed(torrent: Dict[str, Any]) -> bool:
         try:
@@ -1045,12 +1156,40 @@ class RssAllInOne(_PluginBase):
             "qb_write": True,
         }
         capabilities["local_inventory"] = self._library_layout.capability()
+        cd2_configured = bool(
+            self._cd2_grpc_addr
+            and self._cd2_token
+            and self._cd2_plugin_staging_root
+            and self._cd2_dest_root
+        )
+        capabilities["clouddrive"].update({
+            "ready": bool(capabilities["clouddrive"].get("grpc") and cd2_configured),
+            "configured": cd2_configured,
+            "phase": "upload_monitoring" if cd2_configured else "connection_pending",
+        })
+        capabilities["catchup"] = {
+            "ready": bool(
+                self._catchup_base_url and self._catchup_page_id and self._catchup_token
+            ),
+            "phase": "batch_switch_guard",
+        }
+        capabilities["scanner"] = {
+            "ready": bool(
+                self._scan_base_url
+                and self._scan_username
+                and self._scan_password
+                and self._scan_setting_name
+                and self._scan_target_name
+                and self._scan_callback_secret
+            ),
+            "phase": "refresh_callback_restore",
+        }
         capabilities["hardlink_import"] = {
             "ready": True,
-            "phase": "library_actions",
+            "phase": "manual_and_cd2_monitored_queue",
             "mode": "local_os_link",
             "inventory_existing_files": "skip",
-            "clouddrive_api": False,
+            "clouddrive_api": cd2_configured,
         }
         try:
             downloaders = MoviePilotQbGateway.list_downloaders()
@@ -1090,6 +1229,157 @@ class RssAllInOne(_PluginBase):
             library_layout=self._library_layout,
             logger=logger,
         )
+
+    def _pending_coordinator(self) -> PendingImportCoordinator:
+        config = PendingImportConfig(
+            plugin_staging_root=self._cd2_plugin_staging_root,
+            cd2_dest_root=self._cd2_dest_root,
+            discovery_timeout=self._bounded_int(
+                self._runtime_config.get("cd2_discovery_timeout"), 180, 30, 1800
+            ),
+            card_timeout=self._bounded_int(
+                self._runtime_config.get("cd2_card_timeout"), 7200, 300, 43200
+            ),
+            poll_interval=self._bounded_int(
+                self._runtime_config.get("cd2_poll_interval"), 10, 2, 60
+            ),
+            transfer_grace=self._bounded_int(
+                self._runtime_config.get("cd2_transfer_grace"), 20, 5, 120
+            ),
+            risk_cooldown=self._bounded_int(
+                self._runtime_config.get("cd2_risk_cooldown"), 1800, 60, 86400
+            ),
+            risk_retry_limit=self._bounded_int(
+                self._runtime_config.get("cd2_risk_retry_limit"), 3, 1, 10
+            ),
+            scan_callback_timeout=self._bounded_int(
+                self._runtime_config.get("scan_callback_timeout"), 7200, 300, 43200
+            ),
+            callback_server_id=self._scan_callback_server_id,
+            callback_task_id=self._scan_callback_task_id,
+            callback_task_name=self._scan_callback_task_name,
+        )
+        catchup = CatchupSwitchClient(
+            self._catchup_base_url, self._catchup_page_id, self._catchup_token
+        )
+        scanner = ScanSystemClient(
+            self._scan_base_url,
+            self._scan_username,
+            self._scan_password,
+            self._scan_setting_name,
+            self._scan_target_name,
+        )
+        return PendingImportCoordinator(
+            store=self._require_store(),
+            config=config,
+            cd2=CloudDriveClient(self._cd2_grpc_addr, self._cd2_token),
+            controls=ExternalControlBundle(catchup, scanner),
+            scanner=scanner,
+            stop_event=self._stop_event,
+            logger=logger,
+            notify=self._notify_pending_import,
+        )
+
+    def _start_pending_import(self, trigger_source: str) -> Dict[str, Any]:
+        if not self._enabled:
+            return {"success": False, "message": "插件尚未启用"}
+        if not self._pending_import_lock.acquire(blocking=False):
+            return {
+                "success": True,
+                "message": "待入库队列已经在运行",
+                **self._pending_coordinator().status(),
+            }
+        status = self._pending_coordinator().status()
+        if not status.get("batch") and not status.get("pending") and not status.get("importing"):
+            self._pending_import_lock.release()
+            return {"success": True, "message": "当前没有待入库项目", **status}
+        if not status.get("batch"):
+            try:
+                if not self._scan_callback_secret:
+                    raise RuntimeError("未配置 Emby 扫库回调密钥")
+                self._pending_coordinator().preflight()
+            except Exception as error:
+                self._pending_import_lock.release()
+                return {"success": False, "message": str(error), **status}
+        worker = threading.Thread(
+            target=self._run_pending_import,
+            kwargs={"trigger_source": trigger_source},
+            name="RssAllInOnePendingImport",
+            daemon=True,
+        )
+        worker.start()
+        return {
+            "success": True,
+            "message": "待入库队列已启动",
+            **status,
+        }
+
+    def _run_pending_import(self, *, trigger_source: str) -> None:
+        try:
+            self._pending_coordinator().run(trigger_source)
+        except Exception as error:
+            logger.error(f"RSS一条龙：待入库队列执行失败：{error}", exc_info=True)
+            self._notify_pending_import("RSS一条龙待入库失败", str(error))
+        finally:
+            self._pending_import_lock.release()
+
+    def _notify_pending_import(self, title: str, text: str) -> None:
+        try:
+            sender = getattr(self, "post_message", None)
+            if callable(sender):
+                sender(title=title, text=text)
+                return
+        except Exception:
+            logger.warning("RSS一条龙：发送待入库通知失败", exc_info=True)
+        logger.warning(f"{title}：{text}")
+
+    @staticmethod
+    def _normalize_emby_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
+        nested = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        source = {**nested, **payload}
+        task = source.get("Task") or source.get("task") or source.get("Item") or {}
+        server = source.get("Server") or source.get("server") or {}
+        task = task if isinstance(task, dict) else {}
+        server = server if isinstance(server, dict) else {}
+        return {
+            "event_name": str(
+                source.get("Event")
+                or source.get("event")
+                or source.get("NotificationType")
+                or source.get("event_type")
+                or source.get("type")
+                or "scheduledtasks.completed"
+            ),
+            "event_time": str(
+                source.get("Timestamp")
+                or source.get("timestamp")
+                or source.get("event_time")
+                or utc_now()
+            ),
+            "server_id": str(
+                source.get("server_id")
+                or server.get("Id")
+                or server.get("id")
+                or ""
+            ),
+            "task_id": str(
+                source.get("task_id") or task.get("Id") or task.get("id") or ""
+            ),
+            "task_name": str(
+                source.get("task_name")
+                or task.get("Name")
+                or task.get("name")
+                or ""
+            ),
+        }
+
+    @staticmethod
+    def _bounded_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = fallback
+        return max(minimum, min(maximum, parsed))
 
     def _run_file_batch_recognition(self, *, task_id: str, source_path: str) -> None:
         store = self._store
@@ -1147,12 +1437,19 @@ class RssAllInOne(_PluginBase):
         return filename if filename.endswith(".db") else f"{filename}.db"
 
     @staticmethod
-    def _api(path: str, endpoint: Any, method: str, summary: str) -> Dict[str, Any]:
+    def _api(
+        path: str,
+        endpoint: Any,
+        method: str,
+        summary: str,
+        *,
+        auth: str = "bear",
+    ) -> Dict[str, Any]:
         return {
             "path": path,
             "endpoint": endpoint,
             "methods": [method],
-            "auth": "bear",
+            "auth": auth,
             "summary": summary,
         }
 
@@ -1166,6 +1463,15 @@ class RssAllInOne(_PluginBase):
             **layout,
             "cd2_grpc_addr": "",
             "cd2_token": "",
+            "cd2_plugin_staging_root": "/SSD/云盘/l",
+            "cd2_dest_root": "",
+            "pending_import_cron": "0 1 * * *",
+            "cd2_discovery_timeout": 180,
+            "cd2_card_timeout": 7200,
+            "cd2_poll_interval": 10,
+            "cd2_transfer_grace": 20,
+            "cd2_risk_cooldown": 1800,
+            "cd2_risk_retry_limit": 3,
             "catchup_base_url": "",
             "catchup_page_id": "",
             "catchup_token": "",
@@ -1174,4 +1480,9 @@ class RssAllInOne(_PluginBase):
             "scan_password": "",
             "scan_setting_name": "",
             "scan_target_name": "",
+            "scan_callback_secret": "",
+            "scan_callback_server_id": "",
+            "scan_callback_task_id": "",
+            "scan_callback_task_name": "",
+            "scan_callback_timeout": 7200,
         }

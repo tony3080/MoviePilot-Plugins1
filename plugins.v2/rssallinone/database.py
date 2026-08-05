@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -191,6 +191,28 @@ class SQLiteStore:
                         FOREIGN KEY (media_id) REFERENCES media_items(id) ON DELETE CASCADE
                     );
 
+                    CREATE TABLE IF NOT EXISTS import_batches (
+                        id TEXT PRIMARY KEY,
+                        state TEXT NOT NULL,
+                        trigger_source TEXT NOT NULL DEFAULT '',
+                        current_media_id TEXT NOT NULL DEFAULT '',
+                        original_catchup_enabled INTEGER,
+                        original_scan_enabled INTEGER,
+                        succeeded INTEGER NOT NULL DEFAULT 0,
+                        failed INTEGER NOT NULL DEFAULT 0,
+                        risk_count INTEGER NOT NULL DEFAULT 0,
+                        resume_at TEXT,
+                        refresh_requested_at TEXT,
+                        scan_callback_deadline TEXT,
+                        error_message TEXT NOT NULL DEFAULT '',
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        finished_at TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_import_batches_state
+                        ON import_batches(state, updated_at DESC);
+
                     CREATE TABLE IF NOT EXISTS file_mappings (
                         downloader_id TEXT NOT NULL,
                         info_hash TEXT NOT NULL,
@@ -227,6 +249,7 @@ class SQLiteStore:
                 self._migrate_v2(connection)
                 self._migrate_v3(connection)
                 self._migrate_v4(connection)
+                self._migrate_v5(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -320,6 +343,51 @@ class SQLiteStore:
             """
         )
 
+    @staticmethod
+    def _migrate_v5(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS import_batches (
+                id TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                trigger_source TEXT NOT NULL DEFAULT '',
+                current_media_id TEXT NOT NULL DEFAULT '',
+                original_catchup_enabled INTEGER,
+                original_scan_enabled INTEGER,
+                succeeded INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                risk_count INTEGER NOT NULL DEFAULT 0,
+                resume_at TEXT,
+                refresh_requested_at TEXT,
+                scan_callback_deadline TEXT,
+                error_message TEXT NOT NULL DEFAULT '',
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_import_batches_state
+                ON import_batches(state, updated_at DESC);
+            """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(import_watches)").fetchall()
+        }
+        additions = {
+            "batch_id": "TEXT NOT NULL DEFAULT ''",
+            "file_index": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE import_watches ADD COLUMN {name} {definition}"
+                )
+        connection.execute(
+            """CREATE INDEX IF NOT EXISTS idx_import_watches_batch_state
+               ON import_watches(batch_id, state, updated_at DESC)"""
+        )
+
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -341,6 +409,7 @@ class SQLiteStore:
             "background_tasks": "background_tasks",
             "qb_delete_jobs": "qb_delete_jobs",
             "import_watches": "import_watches",
+            "import_batches": "import_batches",
             "file_mappings": "file_mappings",
         }
         with self.connection() as connection:
@@ -625,6 +694,9 @@ class SQLiteStore:
                 "import_watches": int(connection.execute(
                     "SELECT COUNT(*) FROM import_watches"
                 ).fetchone()[0]),
+                "import_batches": int(connection.execute(
+                    "SELECT COUNT(*) FROM import_batches"
+                ).fetchone()[0]),
                 "qb_delete_jobs": int(connection.execute(
                     "SELECT COUNT(*) FROM qb_delete_jobs"
                 ).fetchone()[0]),
@@ -633,6 +705,7 @@ class SQLiteStore:
             connection.execute("DELETE FROM torrent_snapshots")
             connection.execute("DELETE FROM file_mappings")
             connection.execute("DELETE FROM import_watches")
+            connection.execute("DELETE FROM import_batches")
             connection.execute("DELETE FROM media_items")
             connection.execute("DELETE FROM qb_delete_jobs")
             history_rows = connection.execute(
@@ -805,6 +878,196 @@ class SQLiteStore:
                 (downloader, normalized_hash),
             ).fetchall()
         return [self._decode_row(row) for row in rows]
+
+    def next_media_in_state(self, state: object) -> Optional[Dict[str, Any]]:
+        normalized = str(state or "").strip()
+        if not normalized:
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM media_items
+                   WHERE state = ?
+                   ORDER BY created_at ASC, id ASC
+                   LIMIT 1""",
+                (normalized,),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def count_media_states(self, states: Iterable[object]) -> int:
+        values = [str(value or "").strip() for value in states or []]
+        values = [value for value in values if value]
+        if not values:
+            return 0
+        placeholders = ",".join("?" for _ in values)
+        with self.connection() as connection:
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM media_items WHERE state IN ({placeholders})",
+                values,
+            ).fetchone()
+        return int(row[0] or 0)
+
+    def upsert_import_batch(self, record: Dict[str, Any]) -> None:
+        now = str(record.get("updated_at") or utc_now())
+        values = (
+            str(record.get("id") or ""),
+            str(record.get("state") or ""),
+            str(record.get("trigger_source") or ""),
+            str(record.get("current_media_id") or ""),
+            None if record.get("original_catchup_enabled") is None
+            else int(bool(record.get("original_catchup_enabled"))),
+            None if record.get("original_scan_enabled") is None
+            else int(bool(record.get("original_scan_enabled"))),
+            max(0, int(record.get("succeeded") or 0)),
+            max(0, int(record.get("failed") or 0)),
+            max(0, int(record.get("risk_count") or 0)),
+            record.get("resume_at"),
+            record.get("refresh_requested_at"),
+            record.get("scan_callback_deadline"),
+            str(record.get("error_message") or ""),
+            self._json_dump(record.get("details") or {}),
+            str(record.get("created_at") or now),
+            now,
+            record.get("finished_at"),
+        )
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO import_batches(
+                    id, state, trigger_source, current_media_id,
+                    original_catchup_enabled, original_scan_enabled,
+                    succeeded, failed, risk_count, resume_at,
+                    refresh_requested_at, scan_callback_deadline,
+                    error_message, details_json, created_at, updated_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    state = excluded.state,
+                    trigger_source = excluded.trigger_source,
+                    current_media_id = excluded.current_media_id,
+                    original_catchup_enabled = excluded.original_catchup_enabled,
+                    original_scan_enabled = excluded.original_scan_enabled,
+                    succeeded = excluded.succeeded,
+                    failed = excluded.failed,
+                    risk_count = excluded.risk_count,
+                    resume_at = excluded.resume_at,
+                    refresh_requested_at = excluded.refresh_requested_at,
+                    scan_callback_deadline = excluded.scan_callback_deadline,
+                    error_message = excluded.error_message,
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at,
+                    finished_at = excluded.finished_at""",
+                values,
+            )
+
+    def get_import_batch(self, batch_id: object) -> Optional[Dict[str, Any]]:
+        identity = str(batch_id or "").strip()
+        if not identity:
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM import_batches WHERE id = ?", (identity,)
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def latest_active_import_batch(self) -> Optional[Dict[str, Any]]:
+        terminal = ("completed", "failed", "cancelled")
+        placeholders = ",".join("?" for _ in terminal)
+        with self.connection() as connection:
+            row = connection.execute(
+                f"""SELECT * FROM import_batches
+                    WHERE state NOT IN ({placeholders})
+                    ORDER BY created_at DESC LIMIT 1""",
+                terminal,
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def upsert_import_watch(self, record: Dict[str, Any]) -> None:
+        now = str(record.get("updated_at") or utc_now())
+        values = (
+            str(record.get("id") or ""),
+            str(record.get("media_id") or ""),
+            str(record.get("state") or "waiting_task"),
+            str(record.get("local_hardlink_path") or ""),
+            str(record.get("expected_cd2_dest_path") or ""),
+            str(record.get("expected_mp_library_path") or ""),
+            str(record.get("cd2_key") or ""),
+            max(0, int(record.get("file_size") or 0)),
+            max(0, int(record.get("transferred_bytes") or 0)),
+            self._json_dump(record.get("details") or {}),
+            str(record.get("created_at") or now),
+            now,
+            str(record.get("batch_id") or ""),
+            max(0, int(record.get("file_index") or 0)),
+        )
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO import_watches(
+                    id, media_id, state, local_hardlink_path,
+                    expected_cd2_dest_path, expected_mp_library_path,
+                    cd2_key, file_size, transferred_bytes, details_json,
+                    created_at, updated_at, batch_id, file_index
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    media_id = excluded.media_id,
+                    state = excluded.state,
+                    local_hardlink_path = excluded.local_hardlink_path,
+                    expected_cd2_dest_path = excluded.expected_cd2_dest_path,
+                    expected_mp_library_path = excluded.expected_mp_library_path,
+                    cd2_key = excluded.cd2_key,
+                    file_size = excluded.file_size,
+                    transferred_bytes = excluded.transferred_bytes,
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at,
+                    batch_id = excluded.batch_id,
+                    file_index = excluded.file_index""",
+                values,
+            )
+
+    def list_import_watches(
+        self,
+        *,
+        batch_id: object = "",
+        media_id: object = "",
+        states: Iterable[object] = (),
+    ) -> List[Dict[str, Any]]:
+        clauses = []
+        values: List[Any] = []
+        if str(batch_id or "").strip():
+            clauses.append("batch_id = ?")
+            values.append(str(batch_id).strip())
+        if str(media_id or "").strip():
+            clauses.append("media_id = ?")
+            values.append(str(media_id).strip())
+        normalized_states = [str(value or "").strip() for value in states or []]
+        normalized_states = [value for value in normalized_states if value]
+        if normalized_states:
+            clauses.append(
+                f"state IN ({','.join('?' for _ in normalized_states)})"
+            )
+            values.extend(normalized_states)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM import_watches {where}
+                    ORDER BY created_at ASC, file_index ASC""",
+                values,
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
+    def delete_import_watches(self, *, batch_id: object = "", media_id: object = "") -> int:
+        clauses = []
+        values = []
+        if str(batch_id or "").strip():
+            clauses.append("batch_id = ?")
+            values.append(str(batch_id).strip())
+        if str(media_id or "").strip():
+            clauses.append("media_id = ?")
+            values.append(str(media_id).strip())
+        if not clauses:
+            return 0
+        with self.connection() as connection:
+            cursor = connection.execute(
+                f"DELETE FROM import_watches WHERE {' AND '.join(clauses)}", values
+            )
+        return int(cursor.rowcount or 0)
 
     def schedule_qb_delete(
         self,
