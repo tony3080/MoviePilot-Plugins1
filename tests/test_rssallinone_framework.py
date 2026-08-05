@@ -341,6 +341,21 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("剧集目录组分类", config)
         self.assertNotIn("轮询兜底 CRON", editor)
 
+    def test_library_filters_hide_internal_transition_states(self) -> None:
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("{ title: '已发现', value: 'discovered' }", app_page)
+        self.assertNotIn("{ title: '入库中', value: 'importing' }", app_page)
+        self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
+
+    def test_qb_refresh_preserves_rollback_marker(self) -> None:
+        backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
+        self.assertIn(
+            '"rolled_back": bool(existing_media.get("rolled_back"))',
+            backend,
+        )
+
     def test_rss_scheduler_uses_function_kwargs_for_task_id(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('"func_kwargs": {"task_id": task_id}', backend)

@@ -2162,12 +2162,10 @@ return (_ctx, _cache) => {
                   "onUpdate:modelValue": _cache[1] || (_cache[1] = $event => ((mediaState).value = $event)),
                   items: [
               { title: '全部状态', value: '' },
-              { title: '已发现', value: 'discovered' },
               { title: '已识别', value: 'identified' },
               { title: '未识别', value: 'unidentified' },
               { title: '已存在', value: 'existing' },
               { title: '待入库', value: 'pending' },
-              { title: '入库中', value: 'importing' },
               { title: '已入库', value: 'imported' },
               { title: '已回退', value: 'rolled_back' },
             ],
@@ -2770,6 +2768,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-1c5fb4ed"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d0e4fc47"]]);
 
 export { AppPage as default };

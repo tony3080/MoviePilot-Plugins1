@@ -870,12 +870,10 @@ onBeforeUnmount(() => {
             v-model="mediaState"
             :items="[
               { title: '全部状态', value: '' },
-              { title: '已发现', value: 'discovered' },
               { title: '已识别', value: 'identified' },
               { title: '未识别', value: 'unidentified' },
               { title: '已存在', value: 'existing' },
               { title: '待入库', value: 'pending' },
-              { title: '入库中', value: 'importing' },
               { title: '已入库', value: 'imported' },
               { title: '已回退', value: 'rolled_back' },
             ]"

@@ -1326,6 +1326,7 @@ class QbSyncService:
                     else ""
                 ),
                 "failure_message": realtime_error or recognition_error,
+                "rolled_back": bool(existing_media.get("rolled_back")),
                 "details": details,
                 "updated_at": now,
             })
