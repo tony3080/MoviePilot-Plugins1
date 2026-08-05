@@ -1555,15 +1555,16 @@ const _hoisted_24 = {
 const _hoisted_25 = { key: 3 };
 const _hoisted_26 = { key: 4 };
 const _hoisted_27 = { key: 5 };
-const _hoisted_28 = { class: "section-count" };
-const _hoisted_29 = { class: "rss-test-summary" };
-const _hoisted_30 = {
+const _hoisted_28 = { class: "section-toolbar" };
+const _hoisted_29 = { class: "section-count" };
+const _hoisted_30 = { class: "rss-test-summary" };
+const _hoisted_31 = {
   key: 0,
   class: "rss-feed-title"
 };
-const _hoisted_31 = { class: "rss-feed-url" };
-const _hoisted_32 = { class: "url-cell" };
+const _hoisted_32 = { class: "rss-feed-url" };
 const _hoisted_33 = { class: "url-cell" };
+const _hoisted_34 = { class: "url-cell" };
 
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
@@ -1617,6 +1618,7 @@ const catchupState = ref(null);
 const scanState = ref(null);
 const catchupBusy = ref(false);
 const scanBusy = ref(false);
+const clearingTasks = ref(false);
 let qbPollTimer = null;
 let rssPollTimer = null;
 let pendingImportPollTimer = null;
@@ -1893,6 +1895,25 @@ async function refreshMainPage() {
 async function reloadForFilter() {
   clearSelection();
   await loadActive();
+}
+
+async function clearBackgroundTasks() {
+  if (clearingTasks.value) return
+  clearingTasks.value = true;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/tasks/clear'),
+    ) || {};
+    if (!response.success) throw new Error(response.message || '清除后台任务失败')
+    successMessage.value = response.message || '已清除后台任务';
+    await loadActive();
+  } catch (error) {
+    errorMessage.value = error?.message || '清除后台任务失败';
+  } finally {
+    clearingTasks.value = false;
+  }
 }
 
 async function loadCategories() {
@@ -3244,7 +3265,23 @@ return (_ctx, _cache) => {
                   ]))
                 : (activeTab.value === 'tasks')
                   ? (_openBlock(), _createElementBlock("section", _hoisted_27, [
-                      _createElementVNode("div", _hoisted_28, _toDisplayString(total.value) + " 个后台任务", 1),
+                      _createElementVNode("div", _hoisted_28, [
+                        _createElementVNode("div", _hoisted_29, _toDisplayString(total.value) + " 个后台任务", 1),
+                        _createVNode(_component_VBtn, {
+                          size: "small",
+                          variant: "tonal",
+                          color: "error",
+                          "prepend-icon": "mdi-delete-sweep-outline",
+                          loading: clearingTasks.value,
+                          disabled: loading.value || total.value === 0,
+                          onClick: clearBackgroundTasks
+                        }, {
+                          default: _withCtx(() => [...(_cache[45] || (_cache[45] = [
+                            _createTextVNode(" 清除已结束任务 ", -1)
+                          ]))]),
+                          _: 1
+                        }, 8, ["loading", "disabled"])
+                      ]),
                       _createVNode(_component_VDataTable, {
                         headers: taskHeaders,
                         items: rows.value,
@@ -3313,7 +3350,7 @@ return (_ctx, _cache) => {
                   class: "rss-test-content"
                 }, {
                   default: _withCtx(() => [
-                    _createElementVNode("div", _hoisted_29, [
+                    _createElementVNode("div", _hoisted_30, [
                       _createVNode(_component_VChip, {
                         size: "small",
                         variant: "tonal"
@@ -3386,9 +3423,9 @@ return (_ctx, _cache) => {
                         : _createCommentVNode("", true)
                     ]),
                     (rssTestResult.value.feed?.title)
-                      ? (_openBlock(), _createElementBlock("div", _hoisted_30, _toDisplayString(rssTestResult.value.feed.title), 1))
+                      ? (_openBlock(), _createElementBlock("div", _hoisted_31, _toDisplayString(rssTestResult.value.feed.title), 1))
                       : _createCommentVNode("", true),
-                    _createElementVNode("code", _hoisted_31, _toDisplayString(rssTestResult.value.feed?.final_url_masked), 1),
+                    _createElementVNode("code", _hoisted_32, _toDisplayString(rssTestResult.value.feed?.final_url_masked), 1),
                     _createVNode(_component_VDataTable, {
                       headers: rssTestHeaders,
                       items: rssTestResult.value.items || [],
@@ -3412,10 +3449,10 @@ return (_ctx, _cache) => {
                         }, 1032, ["color"])
                       ]),
                       "item.enclosure_url_masked": _withCtx(({ item }) => [
-                        _createElementVNode("code", _hoisted_32, _toDisplayString(item.enclosure_url_masked || '-'), 1)
+                        _createElementVNode("code", _hoisted_33, _toDisplayString(item.enclosure_url_masked || '-'), 1)
                       ]),
                       "item.detail_url_masked": _withCtx(({ item }) => [
-                        _createElementVNode("code", _hoisted_33, _toDisplayString(item.detail_url_masked || '-'), 1)
+                        _createElementVNode("code", _hoisted_34, _toDisplayString(item.detail_url_masked || '-'), 1)
                       ]),
                       _: 1
                     }, 8, ["items"])
@@ -3434,6 +3471,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9926d8bc"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a3597c4d"]]);
 
 export { AppPage as default };

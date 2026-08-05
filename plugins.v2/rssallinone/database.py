@@ -405,7 +405,6 @@ class SQLiteStore:
         tables = {
             "media": "media_items",
             "rss_tasks": "rss_tasks",
-            "rss_history": "rss_history",
             "background_tasks": "background_tasks",
             "qb_delete_jobs": "qb_delete_jobs",
             "import_watches": "import_watches",
@@ -417,6 +416,9 @@ class SQLiteStore:
                 key: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for key, table in tables.items()
             }
+            counts["rss_history"] = int(connection.execute(
+                "SELECT COUNT(*) FROM rss_history WHERE status != 'archived'"
+            ).fetchone()[0])
             counts["torrents"] = int(connection.execute(
                 "SELECT COUNT(*) FROM torrent_snapshots WHERE present = 1"
             ).fetchone()[0])
@@ -539,6 +541,53 @@ class SQLiteStore:
                 (identity,),
             )
         return bool(cursor.rowcount)
+
+    def delete_completed_media_workflow(self, media_id: object) -> Dict[str, int]:
+        """Remove finished operational data while retaining a compact RSS dedup key."""
+        identity = str(media_id or "").strip()
+        if not identity:
+            return {"media": 0, "history": 0, "torrents": 0, "jobs": 0}
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT downloader_id, info_hash FROM media_items WHERE id = ?",
+                (identity,),
+            ).fetchone()
+            if not row:
+                return {"media": 0, "history": 0, "torrents": 0, "jobs": 0}
+            downloader_id = str(row["downloader_id"] or "").strip()
+            info_hash = str(row["info_hash"] or "").strip().lower()
+            history = self._archive_rss_history_for_torrent(
+                connection, downloader_id, info_hash
+            )
+            torrents = 0
+            jobs = 0
+            if downloader_id and info_hash:
+                torrents = int(connection.execute(
+                    """DELETE FROM torrent_snapshots
+                       WHERE downloader_id = ? AND info_hash = ?""",
+                    (downloader_id, info_hash),
+                ).rowcount or 0)
+                jobs = int(connection.execute(
+                    """DELETE FROM qb_delete_jobs
+                       WHERE downloader_id = ? AND info_hash = ?
+                         AND state = 'succeeded'""",
+                    (downloader_id, info_hash),
+                ).rowcount or 0)
+            connection.execute(
+                "DELETE FROM import_watches WHERE media_id = ?", (identity,)
+            )
+            connection.execute(
+                "DELETE FROM file_mappings WHERE media_id = ?", (identity,)
+            )
+            media = int(connection.execute(
+                "DELETE FROM media_items WHERE id = ?", (identity,)
+            ).rowcount or 0)
+        return {
+            "media": media,
+            "history": history,
+            "torrents": torrents,
+            "jobs": jobs,
+        }
 
     def list_torrents(
         self,
@@ -1181,6 +1230,31 @@ class SQLiteStore:
                     (str(error or "")[:500], str(retry_at or now), now, identity),
                 )
 
+    def delete_qb_delete_job(self, job_id: object) -> bool:
+        identity = str(job_id or "").strip()
+        if not identity:
+            return False
+        with self.connection() as connection:
+            cursor = connection.execute(
+                "DELETE FROM qb_delete_jobs WHERE id = ?", (identity,)
+            )
+        return bool(cursor.rowcount)
+
+    def delete_qb_delete_jobs_for_torrent(
+        self, downloader_id: object, info_hash: object
+    ) -> int:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            return 0
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """DELETE FROM qb_delete_jobs
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                (downloader, normalized_hash),
+            )
+        return int(cursor.rowcount or 0)
+
     def list_qb_delete_jobs(self) -> List[Dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -1340,7 +1414,18 @@ class SQLiteStore:
         return self.list_all_rss_tasks()
 
     def list_rss_history(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
-        return self._list_table("rss_history", "created_at", offset, limit)
+        safe_offset, safe_limit = self._page(offset, limit)
+        with self.connection() as connection:
+            total = connection.execute(
+                "SELECT COUNT(*) FROM rss_history WHERE status != 'archived'"
+            ).fetchone()[0]
+            rows = connection.execute(
+                """SELECT * FROM rss_history
+                   WHERE status != 'archived'
+                   ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (safe_limit, safe_offset),
+            ).fetchall()
+        return self._result(rows, total, safe_offset, safe_limit)
 
     def find_rss_source_keys(
         self,
@@ -1365,7 +1450,7 @@ class SQLiteStore:
                         WHERE task_id = ?
                           AND status IN (
                             'queued', 'queued_warning', 'content_duplicate',
-                            'existing', 'processed'
+                            'existing', 'processed', 'archived'
                           )
                           AND source_key IN ({placeholders})""",
                     (normalized_task_id, *chunk),
@@ -1391,7 +1476,7 @@ class SQLiteStore:
                         WHERE content_key IN ({placeholders})
                           AND status IN (
                             'queued', 'queued_warning', 'content_duplicate',
-                            'existing', 'processed'
+                            'existing', 'processed', 'archived'
                           )""",
                     chunk,
                 ).fetchall()
@@ -1499,8 +1584,91 @@ class SQLiteStore:
                 values,
             )
 
+    def archive_rss_history_for_torrent(
+        self, downloader_id: object, info_hash: object
+    ) -> int:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not normalized_hash:
+            return 0
+        with self.connection() as connection:
+            return self._archive_rss_history_for_torrent(
+                connection, downloader, normalized_hash
+            )
+
+    def _archive_rss_history_for_torrent(
+        self,
+        connection: sqlite3.Connection,
+        downloader_id: str,
+        info_hash: str,
+    ) -> int:
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not normalized_hash:
+            return 0
+        exact_key = f"{str(downloader_id or '').strip()}:{normalized_hash}".lower()
+        rows = connection.execute(
+            """SELECT id, task_id, source_key, content_key, payload_json
+               FROM rss_history
+               WHERE status != 'archived'
+                 AND (
+                   lower(content_key) = ?
+                   OR lower(content_key) LIKE ?
+                   OR lower(COALESCE(json_extract(payload_json, '$.info_hash'), '')) = ?
+                 )""",
+            (exact_key, f"%:{normalized_hash}", normalized_hash),
+        ).fetchall()
+        if not rows:
+            return 0
+        now = utc_now()
+        task_ids = set()
+        for row in rows:
+            task_ids.add(str(row["task_id"] or ""))
+            try:
+                payload = json.loads(str(row["payload_json"] or "{}"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            compact_payload = {
+                "downloader": str(
+                    payload.get("downloader") or downloader_id or ""
+                ).strip(),
+                "info_hash": normalized_hash,
+                "dedup_archived": True,
+            }
+            connection.execute(
+                """UPDATE rss_history
+                   SET status = 'archived', title = '', reason = '',
+                       detail_url_masked = '', payload_json = ?, updated_at = ?
+                   WHERE id = ?""",
+                (self._json_dump(compact_payload), now, int(row["id"])),
+            )
+        for task_id in task_ids:
+            stale = connection.execute(
+                """SELECT id FROM rss_history
+                   WHERE task_id = ? AND status = 'archived'
+                   ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 1000""",
+                (task_id,),
+            ).fetchall()
+            if stale:
+                connection.executemany(
+                    "DELETE FROM rss_history WHERE id = ?",
+                    [(int(row["id"]),) for row in stale],
+                )
+        return len(rows)
+
     def list_background_tasks(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
         return self._list_table("background_tasks", "updated_at", offset, limit)
+
+    def clear_background_tasks(self) -> Dict[str, int]:
+        with self.connection() as connection:
+            running = int(connection.execute(
+                """SELECT COUNT(*) FROM background_tasks
+                   WHERE state IN ('queued', 'running')"""
+            ).fetchone()[0])
+            deleted = int(connection.execute(
+                """DELETE FROM background_tasks
+                   WHERE state NOT IN ('queued', 'running')"""
+            ).rowcount or 0)
+        return {"deleted": deleted, "running": running}
 
     def _list_table(
         self,

@@ -95,6 +95,50 @@ class SQLiteFrameworkTest(unittest.TestCase):
             item = store.list_media()["items"][0]
             self.assertEqual(item["season"], 0)
 
+    def test_archived_rss_history_is_hidden_but_still_deduplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            store.upsert_rss_history({
+                "task_id": "task-a",
+                "source_key": "source-a",
+                "content_key": "qb-main:abc123",
+                "title": "Movie",
+                "status": "processed",
+                "detail_url_masked": "https://example.invalid/details/1",
+                "payload": {"downloader": "qb-main", "info_hash": "abc123"},
+            })
+
+            archived = store.archive_rss_history_for_torrent("qb-main", "abc123")
+
+            self.assertEqual(archived, 1)
+            self.assertEqual(store.list_rss_history()["total"], 0)
+            self.assertEqual(store.counts()["rss_history"], 0)
+            self.assertEqual(
+                store.find_rss_source_keys("task-a", ["source-a"]),
+                {"source-a"},
+            )
+            self.assertEqual(
+                store.find_rss_content_keys(["qb-main:abc123"]),
+                {"qb-main:abc123"},
+            )
+
+    def test_clear_background_tasks_preserves_running_work(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            store.create_background_task("running", "rss_run")
+            store.create_background_task("done", "rss_run")
+            store.create_background_task("failed", "qb_refresh")
+            store.finish_background_task("done", "succeeded")
+            store.finish_background_task("failed", "failed", error_message="boom")
+
+            result = store.clear_background_tasks()
+
+            self.assertEqual(result, {"deleted": 2, "running": 1})
+            self.assertEqual(store.list_background_tasks()["total"], 1)
+            self.assertEqual(store.get_background_task("running")["state"], "running")
+
     def test_media_can_be_filtered_by_multiple_rss_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")
@@ -587,6 +631,7 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/media/action", api_paths)
                 self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
+                self.assertIn("/tasks/clear", api_paths)
                 self.assertIn("/external/catchup/control", api_paths)
                 self.assertIn("/external/scan/control", api_paths)
                 self.assertFalse(
@@ -753,6 +798,14 @@ class PluginLifecycleTest(unittest.TestCase):
                     due_at="2020-01-01T00:00:00+00:00",
                     details={"deletion_scope": "qb_task_and_save_path"},
                 )
+                plugin._store.upsert_rss_history({
+                    "task_id": "movies",
+                    "source_key": "delete-source",
+                    "content_key": "qb-main:delete-me",
+                    "title": "Movie",
+                    "status": "processed",
+                    "payload": {"downloader": "qb-main", "info_hash": "delete-me"},
+                })
                 removed = []
                 original_list = module.MoviePilotQbGateway.list_torrents
                 original_dict = module.MoviePilotQbGateway.torrent_dict
@@ -775,11 +828,18 @@ class PluginLifecycleTest(unittest.TestCase):
                     self.assertEqual(
                         removed, [("qb-main", "delete-me", True)]
                     )
-                    job = plugin._store.list_qb_delete_jobs()[0]
-                    self.assertEqual(job["state"], "succeeded")
+                    self.assertFalse(any(
+                        item["info_hash"] == "delete-me"
+                        for item in plugin._store.list_qb_delete_jobs()
+                    ))
                     self.assertEqual(
-                        job["source_path"],
-                        "/SSD/QB目录/REMUX/CHD/Movie.mkv",
+                        plugin._store.list_rss_history()["total"], 0
+                    )
+                    self.assertEqual(
+                        plugin._store.find_rss_source_keys(
+                            "movies", ["delete-source"]
+                        ),
+                        {"delete-source"},
                     )
 
                     plugin._store.schedule_qb_delete(

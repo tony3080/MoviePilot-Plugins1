@@ -49,6 +49,7 @@ const catchupState = ref(null)
 const scanState = ref(null)
 const catchupBusy = ref(false)
 const scanBusy = ref(false)
+const clearingTasks = ref(false)
 let qbPollTimer = null
 let rssPollTimer = null
 let pendingImportPollTimer = null
@@ -369,6 +370,25 @@ async function refreshMainPage() {
 async function reloadForFilter() {
   clearSelection()
   await loadActive()
+}
+
+async function clearBackgroundTasks() {
+  if (clearingTasks.value) return
+  clearingTasks.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/tasks/clear'),
+    ) || {}
+    if (!response.success) throw new Error(response.message || '清除后台任务失败')
+    successMessage.value = response.message || '已清除后台任务'
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '清除后台任务失败'
+  } finally {
+    clearingTasks.value = false
+  }
 }
 
 async function loadCategories() {
@@ -1449,7 +1469,20 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'tasks'">
-        <div class="section-count">{{ total }} 个后台任务</div>
+        <div class="section-toolbar">
+          <div class="section-count">{{ total }} 个后台任务</div>
+          <VBtn
+            size="small"
+            variant="tonal"
+            color="error"
+            prepend-icon="mdi-delete-sweep-outline"
+            :loading="clearingTasks"
+            :disabled="loading || total === 0"
+            @click="clearBackgroundTasks"
+          >
+            清除已结束任务
+          </VBtn>
+        </div>
         <VDataTable
           :headers="taskHeaders"
           :items="rows"
@@ -1797,9 +1830,17 @@ onBeforeUnmount(() => {
 }
 
 .section-count {
-  margin-bottom: 10px;
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.8rem;
+}
+
+.section-toolbar {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .selection-bar {

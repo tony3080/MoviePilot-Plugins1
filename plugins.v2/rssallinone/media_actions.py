@@ -399,7 +399,7 @@ class MediaActionService:
         self._validated_owned_hardlinks(mappings)
         _updated, links_deleted, links_missing, preserved = self._unlink_hardlinks(mappings)
         sources_deleted, sources_missing = self._unlink_sources(mappings)
-        self.store.delete_media_item(item.get("id"))
+        cleanup = self.store.delete_completed_media_workflow(item.get("id"))
         return {
             "message": (
                 f"双删完成：硬链接 {links_deleted}，源文件 {sources_deleted}，"
@@ -409,6 +409,7 @@ class MediaActionService:
             "sources_deleted": sources_deleted,
             "missing": links_missing + sources_missing,
             "preserved": preserved,
+            "database_cleanup": cleanup,
             "state": "deleted",
         }
 

@@ -183,6 +183,55 @@ class MediaActionServiceTest(unittest.TestCase):
         self.assertTrue(external_link.exists())
         self.assertIsNone(self.store.get_media_item("hash-three"))
 
+    def test_delete_both_removes_completed_workflow_but_keeps_rss_dedup(self) -> None:
+        source_dir = self.root / "source"
+        source_dir.mkdir()
+        source = source_dir / "Movie.mkv"
+        source.write_bytes(b"movie")
+        hardlink = self.root / "links" / "Movie.mkv"
+        hardlink.parent.mkdir()
+        os.link(source, hardlink)
+        self.add_item("hash-cleanup", [{
+            "source_relative_path": "Movie.mkv",
+            "source": source,
+            "target": hardlink,
+            "new_rel": "Movie/Movie.mkv",
+            "details": {"hardlink_owned": True},
+        }], state="imported")
+        self.store.upsert_rss_history({
+            "task_id": "task-a",
+            "source_key": "source-cleanup",
+            "content_key": "qb-main:hash-cleanup",
+            "title": "Movie",
+            "status": "processed",
+            "payload": {"downloader": "qb-main", "info_hash": "hash-cleanup"},
+        })
+        self.store.schedule_qb_delete(
+            task_id="task-a",
+            task_name="Movie RSS",
+            downloader_id="qb-main",
+            info_hash="hash-cleanup",
+            source_path=str(source),
+            delete_files=False,
+            due_at="2026-08-05T00:00:00+00:00",
+        )
+        job = self.store.list_qb_delete_jobs()[0]
+        self.store.finish_qb_delete_job(job["id"], success=True)
+
+        result = self.service.execute("delete_both", ["hash-cleanup"])
+
+        self.assertTrue(result["success"])
+        self.assertFalse(source.exists())
+        self.assertFalse(hardlink.exists())
+        self.assertIsNone(self.store.get_media_item("hash-cleanup"))
+        self.assertEqual(self.store.list_file_mappings("qb-main", "hash-cleanup"), [])
+        self.assertEqual(self.store.list_rss_history()["total"], 0)
+        self.assertEqual(self.store.list_qb_delete_jobs(), [])
+        self.assertEqual(
+            self.store.find_rss_source_keys("task-a", ["source-cleanup"]),
+            {"source-cleanup"},
+        )
+
     def test_destructive_action_refuses_missing_persisted_mappings(self) -> None:
         self.store.upsert_media_item({
             "id": "no-mapping",

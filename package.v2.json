@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.13.5",
+    "version": "0.13.6",
     "icon": "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/main/plugins.v2/rssallinone/assets/dragon.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.13.6": "后台任务增加一键清除已结束记录；qB 任务实际删除后自动隐藏并压缩对应 RSS 历史，同时保留限量去重指纹；已入库项目双删后清理完整业务链路残留",
       "v0.13.5": "总览能力、运行阶段及后台任务类型和状态中文化，后台任务增加结果/错误信息；文件管理移到入库管理前，并统一使用龙形侧栏与插件图标",
       "v0.13.4": "将追更与SA扫库状态灯移到插件主页面后台任务标签后方；QB管理新增多选删除任务，后端固定保留下载文件并仅允许删除现有受管卡片",
       "v0.13.3": "CD2 监控自动使用全部启用源路径路由的硬链接根目录，并按最长前缀计算相对路径；多个本地 staging 共用一个 CD2 上传任务目标根目录",

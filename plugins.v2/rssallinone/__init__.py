@@ -49,7 +49,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.5"
+    plugin_version = "0.13.6"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -307,6 +307,7 @@ class RssAllInOne(_PluginBase):
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
+            self._api("/tasks/clear", self.api_clear_background_tasks, "POST", "清除已结束后台任务"),
             self._api("/tasks/{task_id}", self.api_background_task, "GET", "后台任务详情"),
         ]
 
@@ -533,6 +534,8 @@ class RssAllInOne(_PluginBase):
                         raise RuntimeError("qB 删除任务返回失败")
                     if not store.delete_torrent_snapshot(downloader_id, info_hash):
                         raise RuntimeError("qB 任务已删除，但插件卡片清理失败，请刷新识别")
+                    store.archive_rss_history_for_torrent(downloader_id, info_hash)
+                    store.delete_qb_delete_jobs_for_torrent(downloader_id, info_hash)
                     result.update({
                         "success": True,
                         "message": "QB 任务已删除，下载文件已保留",
@@ -1044,6 +1047,19 @@ class RssAllInOne(_PluginBase):
             **self._require_store().list_background_tasks(offset=offset, limit=limit),
         }
 
+    def api_clear_background_tasks(self) -> Dict[str, Any]:
+        result = self._require_store().clear_background_tasks()
+        deleted = int(result.get("deleted") or 0)
+        running = int(result.get("running") or 0)
+        return {
+            "success": True,
+            **result,
+            "message": (
+                f"已清除 {deleted} 条已结束后台任务"
+                + (f"，保留 {running} 条运行中任务" if running else "")
+            ),
+        }
+
     def api_background_task(self, task_id: str) -> Dict[str, Any]:
         task = self._require_store().get_background_task(str(task_id or "").strip())
         if not task:
@@ -1082,6 +1098,13 @@ class RssAllInOne(_PluginBase):
                     self._store.finish_qb_delete_job(
                         job.get("id"), success=True
                     )
+                    self._store.archive_rss_history_for_torrent(
+                        job.get("downloader_id"), job.get("info_hash")
+                    )
+                    self._store.delete_torrent_snapshot(
+                        job.get("downloader_id"), job.get("info_hash")
+                    )
+                    self._store.delete_qb_delete_job(job.get("id"))
                     logger.info(
                         "RSS一条龙：qB 到期删除完成 "
                         f"{job.get('downloader_id')}/{job.get('info_hash')}，"
