@@ -35,4 +35,5 @@ plugins.v2/rssallinone/.runtime/
 plugins.v2/rssallinone/*.db
 plugins.v2/rssallinone/*.db-shm
 plugins.v2/rssallinone/*.db-wal
+plugins.v2/rssallinone/qb_completed_notify.sh
 *.egg-info/

@@ -60,7 +60,7 @@ qBittorrent 的“Torrent 完成时运行外部程序”填写：
 
 ```text
 POST /api/v1/plugin/RssAllInOne/qb/completed
-Authorization: Bearer <MoviePilot API Token>
+X-API-KEY: <MoviePilot API Token>
 {"info_hash":"<qB hash>"}
 ```
 
