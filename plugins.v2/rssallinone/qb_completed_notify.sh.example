@@ -1,15 +1,16 @@
 #!/bin/sh
-# qBittorrent "Run external program on torrent finished" example:
-# /bin/sh /config/qb_completed_notify.sh "%I" "%L" "%N" "%G"
-# Arguments: 1=hash 2=category 3=name 4=tags
+# Universal qBittorrent "Run external program on torrent finished" command:
+# /bin/sh /config/qb_completed_notify.sh "<node>" "<node_url>" "%I" "%L" "%N" "%G"
+# Arguments: 1=node 2=node_url 3=hash 4=category 5=name 6=tags
+# Legacy 4-argument mode remains compatible and defaults to QBSSD/8081.
 
 set -u
 
 LOG_FILE="/config/qb_notify.log"
 V1_CALLBACK_URL="http://192.168.110.31:18501/api/qb/callback/completed"
-V1_NODE="QBSSD"
-V1_NODE_URL="http://192.168.110.31:8081"
 V1_SECRET="CHANGE_ME"
+DEFAULT_NODE="QBSSD"
+DEFAULT_NODE_URL="http://192.168.110.31:8081"
 
 MP_BASE_URL="http://192.168.110.31:3033"
 MP_API_TOKEN="CHANGE_ME"
@@ -19,13 +20,24 @@ log() {
   printf '%s [qb_notify] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
 }
 
-HASH="${1:-}"
-CATEGORY="${2:-}"
-NAME="${3:-}"
-TAGS="${4:-}"
+if [ "$#" -ge 6 ]; then
+  NODE_NAME="${1:-}"
+  NODE_URL="${2:-}"
+  HASH="${3:-}"
+  CATEGORY="${4:-}"
+  NAME="${5:-}"
+  TAGS="${6:-}"
+else
+  NODE_NAME="$DEFAULT_NODE"
+  NODE_URL="$DEFAULT_NODE_URL"
+  HASH="${1:-}"
+  CATEGORY="${2:-}"
+  NAME="${3:-}"
+  TAGS="${4:-}"
+fi
 
-if [ -z "$HASH" ]; then
-  log "ERROR missing hash"
+if [ -z "$NODE_NAME" ] || [ -z "$NODE_URL" ] || [ -z "$HASH" ]; then
+  log "ERROR missing node, node_url, or hash"
   exit 2
 fi
 
@@ -34,13 +46,19 @@ if [ "$V1_SECRET" = "CHANGE_ME" ] || [ "$MP_API_TOKEN" = "CHANGE_ME" ]; then
   exit 2
 fi
 
-log "START hash=$HASH category=$CATEGORY name=$NAME tags=$TAGS"
+if [ -x /usr/bin/curl ]; then
+  CURL_BIN="/usr/bin/curl"
+else
+  CURL_BIN="curl"
+fi
+
+log "START node=$NODE_NAME node_url=$NODE_URL hash=$HASH category=$CATEGORY name=$NAME tags=$TAGS"
 
 V1_OK=0
-if V1_RESPONSE="$(curl -fsS --retry 3 --retry-delay 3 --retry-connrefused -G \
+if V1_RESPONSE="$("$CURL_BIN" -fsS --retry 3 --retry-delay 3 --retry-connrefused -G \
   "$V1_CALLBACK_URL" \
-  --data-urlencode "node=$V1_NODE" \
-  --data-urlencode "node_url=$V1_NODE_URL" \
+  --data-urlencode "node=$NODE_NAME" \
+  --data-urlencode "node_url=$NODE_URL" \
   --data-urlencode "hash=$HASH" \
   --data-urlencode "category=$CATEGORY" \
   --data-urlencode "name=$NAME" \
@@ -57,11 +75,12 @@ fi
 sleep 2
 
 PLUGIN_OK=0
-PLUGIN_RESPONSE="$(curl -fsS --retry 3 --retry-delay 3 --retry-connrefused \
+PLUGIN_PAYLOAD="$(printf '{"info_hash":"%s","downloader_id":"%s"}' "$HASH" "$NODE_NAME")"
+PLUGIN_RESPONSE="$("$CURL_BIN" -fsS --retry 3 --retry-delay 3 --retry-connrefused \
   -X POST "$PLUGIN_CALLBACK_URL" \
   -H "X-API-KEY: $MP_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data "{\"info_hash\":\"$HASH\"}" 2>&1)"
+  --data "$PLUGIN_PAYLOAD" 2>&1)"
 PLUGIN_RC=$?
 
 if [ "$PLUGIN_RC" -eq 0 ] && printf '%s' "$PLUGIN_RESPONSE" \

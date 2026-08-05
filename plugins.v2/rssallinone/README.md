@@ -50,18 +50,20 @@ RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统�
 
 仓库提供 [`qb_completed_notify.sh.example`](qb_completed_notify.sh.example)。复制到 qB 容器的 `/config/qb_completed_notify.sh` 后，只需填写 `V1_SECRET` 和 MoviePilot 的 `MP_API_TOKEN`，不要把真实密钥提交到 Git。
 
-qBittorrent 的“Torrent 完成时运行外部程序”填写：
+同一份脚本可以复制到多个 qB 容器。qBittorrent 的“Torrent 完成时运行外部程序”填写节点名、节点 WebUI 地址和四个 qB 占位符：
 
 ```sh
-/bin/sh /config/qb_completed_notify.sh "%I" "%L" "%N" "%G"
+/bin/sh /config/qb_completed_notify.sh "<MoviePilot下载器名称>" "<qB WebUI地址>" "%I" "%L" "%N" "%G"
 ```
+
+脚本仍兼容原来的四参数命令；未传节点信息时默认使用 `QBSSD` 和 `http://192.168.110.31:8081`。多 qB 部署建议始终使用六参数命令，避免相同 info-hash 出现在多个下载器时发生歧义。
 
 脚本先通知现有 V1，再独立通知：
 
 ```text
 POST /api/v1/plugin/RssAllInOne/qb/completed
 X-API-KEY: <MoviePilot API Token>
-{"info_hash":"<qB hash>"}
+{"info_hash":"<qB hash>","downloader_id":"<MoviePilot下载器名称>"}
 ```
 
 两个通知都会独立重试，V1 临时失败不会阻止 RSS 一条龙收到完成事件。插件对非受管 hash 返回 `success=true, ignored=true`，因此同一个 qB 全局完成脚本可以安全处理其他分类。
