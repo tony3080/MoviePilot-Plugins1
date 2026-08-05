@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 const props = defineProps({
   api: {
@@ -44,7 +44,6 @@ const defaults = {
   source_routes: defaultRoutes,
   cd2_grpc_addr: '',
   cd2_token: '',
-  cd2_plugin_staging_root: '/SSD/云盘/l',
   cd2_dest_root: '',
   pending_import_cron: '0 1 * * *',
   cd2_discovery_timeout: 180,
@@ -76,6 +75,17 @@ const catchupBusy = ref(false)
 const scanBusy = ref(false)
 const externalMessage = ref('')
 const externalMessageType = ref('info')
+const stagingRoots = computed(() => {
+  const roots = []
+  for (const route of config.value.source_routes || []) {
+    if (route.enabled === false) continue
+    for (const value of Object.values(route.link_roots || {})) {
+      const path = String(value || '').trim()
+      if (path && !roots.includes(path)) roots.push(path)
+    }
+  }
+  return roots
+})
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -112,6 +122,7 @@ function normalizeConfig(initial = {}) {
   const routes = Array.isArray(routeValue) ? routeValue : defaultRoutes
   next.source_routes = routes.map(normalizeRoute)
   delete next.category_groups
+  delete next.cd2_plugin_staging_root
   return next
 }
 
@@ -386,15 +397,6 @@ onMounted(async () => {
           </VCol>
           <VCol cols="12" md="6">
             <VTextField
-              v-model="config.cd2_plugin_staging_root"
-              label="插件侧 CD2 staging 根目录 *"
-              placeholder="/SSD/云盘/l"
-              hint="插件创建硬链接、CD2 自动备份所监控的本地根目录"
-              persistent-hint
-            />
-          </VCol>
-          <VCol cols="12" md="6">
-            <VTextField
               v-model="config.cd2_dest_root"
               label="CD2 上传任务目标根目录 *"
               placeholder="/云盘/影视库"
@@ -410,6 +412,23 @@ onMounted(async () => {
               hint="五段 CRON；只在存在待入库卡片时启动处理"
               persistent-hint
             />
+          </VCol>
+          <VCol cols="12">
+            <div class="text-caption text-medium-emphasis mb-2">自动使用的本地硬链接根目录</div>
+            <div class="staging-root-list">
+              <VChip
+                v-for="root in stagingRoots"
+                :key="root"
+                size="small"
+                variant="tonal"
+                color="info"
+              >
+                {{ root }}
+              </VChip>
+              <span v-if="!stagingRoots.length" class="text-caption text-error">
+                源路径路由中没有可用的硬链接根目录
+              </span>
+            </div>
           </VCol>
         </VRow>
 
@@ -683,6 +702,12 @@ onMounted(async () => {
 
 .advanced-panels {
   margin-top: 8px;
+}
+
+.staging-root-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .route-table {

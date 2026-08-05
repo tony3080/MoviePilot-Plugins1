@@ -140,6 +140,34 @@ class PendingImportTest(unittest.TestCase):
             logger=FakeLogger(),
         )
 
+    def test_multiple_staging_roots_share_one_cd2_destination_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            movie_root = base / "movie"
+            series_root = base / "series"
+            target = series_root / "国产剧" / "Show" / "Episode.mkv"
+            target.parent.mkdir(parents=True)
+            target.touch()
+            coordinator = pending_import.PendingImportCoordinator(
+                store=object(),
+                config=pending_import.PendingImportConfig(
+                    plugin_staging_roots=[str(movie_root), str(series_root)],
+                    cd2_dest_root="/cloud/library",
+                    callback_server_id="srv1",
+                    callback_task_id="task1",
+                ),
+                cd2=object(),
+                controls=object(),
+                scanner=object(),
+                stop_event=threading.Event(),
+                logger=FakeLogger(),
+            )
+
+            self.assertEqual(
+                coordinator._cd2_dest_path(str(target)),
+                "/cloud/library/国产剧/Show/Episode.mkv",
+            )
+
     def test_success_waits_for_scan_callback_before_restoring_switches(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, target, _inventory = self.make_store(directory)

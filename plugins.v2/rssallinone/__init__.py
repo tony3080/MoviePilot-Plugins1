@@ -49,7 +49,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.13.2"
+    plugin_version = "0.13.3"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -116,8 +116,7 @@ class RssAllInOne(_PluginBase):
         self._cd2_grpc_addr = str(config.get("cd2_grpc_addr") or "").strip()
         self._cd2_token = str(config.get("cd2_token") or "").strip()
         self._cd2_plugin_staging_root = str(
-            config.get("cd2_plugin_staging_root")
-            or defaults["cd2_plugin_staging_root"]
+            config.get("cd2_plugin_staging_root") or ""
         ).strip()
         self._cd2_dest_root = str(config.get("cd2_dest_root") or "").strip()
         self._pending_import_cron = str(
@@ -1225,7 +1224,7 @@ class RssAllInOne(_PluginBase):
         cd2_configured = bool(
             self._cd2_grpc_addr
             and self._cd2_token
-            and self._cd2_plugin_staging_root
+            and self._cd2_staging_roots()
             and self._cd2_dest_root
         )
         capabilities["clouddrive"].update({
@@ -1298,8 +1297,9 @@ class RssAllInOne(_PluginBase):
 
     def _pending_coordinator(self) -> PendingImportCoordinator:
         config = PendingImportConfig(
-            plugin_staging_root=self._cd2_plugin_staging_root,
             cd2_dest_root=self._cd2_dest_root,
+            plugin_staging_roots=self._cd2_staging_roots(),
+            plugin_staging_root=self._cd2_plugin_staging_root,
             discovery_timeout=self._bounded_int(
                 self._runtime_config.get("cd2_discovery_timeout"), 180, 30, 1800
             ),
@@ -1345,6 +1345,18 @@ class RssAllInOne(_PluginBase):
             logger=logger,
             notify=self._notify_pending_import,
         )
+
+    def _cd2_staging_roots(self) -> List[str]:
+        roots = []
+        for route in self._library_layout.routes:
+            if not route.enabled:
+                continue
+            roots.extend(
+                str(value or "").strip()
+                for value in route.link_roots.values()
+                if str(value or "").strip()
+            )
+        return list(dict.fromkeys(roots))
 
     def _start_pending_import(self, trigger_source: str) -> Dict[str, Any]:
         if not self._enabled:
@@ -1559,7 +1571,6 @@ class RssAllInOne(_PluginBase):
             **layout,
             "cd2_grpc_addr": "",
             "cd2_token": "",
-            "cd2_plugin_staging_root": "/SSD/云盘/l",
             "cd2_dest_root": "",
             "pending_import_cron": "0 1 * * *",
             "cd2_discovery_timeout": 180,

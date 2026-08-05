@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -63,8 +63,9 @@ def _normalized_path(value: object) -> str:
 
 @dataclass
 class PendingImportConfig:
-    plugin_staging_root: str
     cd2_dest_root: str
+    plugin_staging_roots: List[str] = field(default_factory=list)
+    plugin_staging_root: str = ""
     discovery_timeout: int = 180
     card_timeout: int = 7200
     poll_interval: int = 10
@@ -76,9 +77,15 @@ class PendingImportConfig:
     callback_task_id: str = ""
     callback_task_name: str = ""
 
+    def staging_roots(self) -> List[str]:
+        values = [*list(self.plugin_staging_roots or []), self.plugin_staging_root]
+        return list(dict.fromkeys(
+            str(value or "").strip() for value in values if str(value or "").strip()
+        ))
+
     def validate(self) -> None:
-        if not str(self.plugin_staging_root or "").strip():
-            raise RuntimeError("未配置插件侧 CD2 staging 根目录")
+        if not self.staging_roots():
+            raise RuntimeError("源路径路由中没有可用的硬链接根目录")
         if not str(self.cd2_dest_root or "").strip():
             raise RuntimeError("未配置 CD2 云端目标根目录")
         if not str(self.callback_server_id or "").strip():
@@ -358,11 +365,18 @@ class PendingImportCoordinator:
 
     def _cd2_dest_path(self, local_path: str) -> str:
         local = Path(str(local_path)).expanduser().resolve(strict=False)
-        root = Path(str(self.config.plugin_staging_root)).expanduser().resolve(strict=False)
-        try:
-            relative = local.relative_to(root)
-        except ValueError as error:
-            raise RuntimeError(f"硬链接路径不在 CD2 staging 根目录中：{local}") from error
+        matches = []
+        for value in self.config.staging_roots():
+            root = Path(value).expanduser().resolve(strict=False)
+            try:
+                relative = local.relative_to(root)
+            except ValueError:
+                continue
+            matches.append((len(root.parts), relative))
+        if not matches:
+            roots = "、".join(self.config.staging_roots())
+            raise RuntimeError(f"硬链接路径未命中源路径路由根目录：{local}；候选：{roots}")
+        _depth, relative = max(matches, key=lambda item: item[0])
         return str(
             PurePosixPath(self.config.cd2_dest_root)
             / PurePosixPath(*relative.parts)

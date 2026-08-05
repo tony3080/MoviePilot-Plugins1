@@ -379,6 +379,8 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("external/scan/control", config)
         self.assertIn("追更：", config)
         self.assertIn("扫库：", config)
+        self.assertIn("自动使用的本地硬链接根目录", config)
+        self.assertNotIn('v-model="config.cd2_plugin_staging_root"', config)
 
     def test_qb_refresh_preserves_rollback_marker(self) -> None:
         backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
