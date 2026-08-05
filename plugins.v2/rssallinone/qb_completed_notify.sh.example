@@ -15,6 +15,7 @@ DEFAULT_NODE_URL="http://192.168.110.31:8081"
 MP_BASE_URL="http://192.168.110.31:3033"
 MP_API_TOKEN="CHANGE_ME"
 PLUGIN_CALLBACK_URL="${MP_BASE_URL}/api/v1/plugin/RssAllInOne/qb/completed"
+MP_TRANSFER_URL="${MP_BASE_URL}/api/v1/transfer/now?token=${MP_API_TOKEN}"
 
 log() {
   printf '%s [qb_notify] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
@@ -92,10 +93,30 @@ else
   log "RSSALLINONE_CALLBACK fail rc=$PLUGIN_RC response=$PLUGIN_RESPONSE"
 fi
 
-if [ "$V1_OK" -eq 1 ] && [ "$PLUGIN_OK" -eq 1 ]; then
+MP_TRANSFER_OK=1
+TAGS_CLEAN="$(printf '%s' "$TAGS" | tr -d ' ')"
+case ",$TAGS_CLEAN," in
+  *,MOVIEPILOT,*)
+    MP_TRANSFER_OK=0
+    if MP_TRANSFER_RESPONSE="$("$CURL_BIN" -fsS --retry 3 --retry-delay 3 \
+      --retry-connrefused "$MP_TRANSFER_URL" 2>&1)"
+    then
+      MP_TRANSFER_OK=1
+      log "MOVIEPILOT_TRANSFER_CALLBACK ok response=$MP_TRANSFER_RESPONSE"
+    else
+      MP_TRANSFER_RC=$?
+      log "MOVIEPILOT_TRANSFER_CALLBACK fail rc=$MP_TRANSFER_RC response=$MP_TRANSFER_RESPONSE"
+    fi
+    ;;
+  *)
+    log "MOVIEPILOT_TRANSFER_CALLBACK skipped tag_not_matched"
+    ;;
+esac
+
+if [ "$V1_OK" -eq 1 ] && [ "$PLUGIN_OK" -eq 1 ] && [ "$MP_TRANSFER_OK" -eq 1 ]; then
   log "DONE"
   exit 0
 fi
 
-log "DONE_WITH_ERRORS v1_ok=$V1_OK rssallinone_ok=$PLUGIN_OK"
+log "DONE_WITH_ERRORS v1_ok=$V1_OK rssallinone_ok=$PLUGIN_OK moviepilot_transfer_ok=$MP_TRANSFER_OK"
 exit 1
