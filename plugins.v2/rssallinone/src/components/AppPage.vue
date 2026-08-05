@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import RssTaskEditor from './RssTaskEditor.vue'
 import MediaPosterCard from './MediaPosterCard.vue'
 import ManualIdentifyDialog from './ManualIdentifyDialog.vue'
+import FileManagerBrowser from './FileManagerBrowser.vue'
 
 const props = defineProps({
   api: {
@@ -49,6 +50,7 @@ const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
   { title: '入库管理', value: 'library', icon: 'mdi-database-import-outline' },
   { title: 'QB 管理', value: 'qb', icon: 'mdi-download-box-outline' },
+  { title: '文件管理', value: 'files', icon: 'mdi-folder-multiple-outline' },
   { title: 'VT+', value: 'vt', icon: 'mdi-rss-box' },
   { title: '后台任务', value: 'tasks', icon: 'mdi-progress-clock' },
 ]
@@ -298,6 +300,11 @@ async function loadActive() {
       await loadRssTasks()
     }
     if (activeTab.value === 'overview') {
+      rows.value = []
+      total.value = 0
+      return
+    }
+    if (activeTab.value === 'files') {
       rows.value = []
       total.value = 0
       return
@@ -1068,6 +1075,10 @@ onBeforeUnmount(() => {
         </div>
         <VEmptyState v-else-if="!loading" icon="mdi-download-box-outline" title="暂无 qB 任务" />
         <VProgressLinear v-if="loading" indeterminate color="primary" />
+      </section>
+
+      <section v-else-if="activeTab === 'files'">
+        <FileManagerBrowser :api="api" />
       </section>
 
       <section v-else-if="activeTab === 'vt'">

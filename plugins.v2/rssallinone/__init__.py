@@ -14,6 +14,7 @@ from app.plugins import _PluginBase
 
 from .capabilities import runtime_capabilities
 from .database import SQLiteStore, utc_now
+from .file_manager import FileManagerError, LocalFileManagerService
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
 from .media_actions import (
@@ -43,7 +44,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.10.2"
+    plugin_version = "0.11.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -73,6 +74,7 @@ class RssAllInOne(_PluginBase):
         self._qb_delete_lock = threading.Lock()
         self._rss_run_lock = threading.Lock()
         self._media_action_lock = threading.Lock()
+        self._file_scan_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
@@ -212,6 +214,8 @@ class RssAllInOne(_PluginBase):
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
+            self._api("/files/browse", self.api_files_browse, "GET", "浏览本地文件夹"),
+            self._api("/files/recognize", self.api_files_recognize, "POST", "批量识别本地文件夹"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
@@ -362,6 +366,29 @@ class RssAllInOne(_PluginBase):
             str(data.get("category") or "").strip()
         )
         try:
+            media_id = str(data.get("media_id") or "").strip()
+            media_item = self._require_store().get_media_item(media_id) if media_id else None
+            source_kind = str(
+                ((media_item or {}).get("details") or {})
+                .get("source_identity", {})
+                .get("kind") or ""
+            )
+            if media_item and source_kind == "local_folder":
+                result = self._file_manager_service().recognize_folder(
+                    media_item.get("source_path"),
+                    manual_override={
+                        "media_type": media_type,
+                        "tmdb_id": tmdb_id,
+                        "season": season,
+                        "category": category,
+                    },
+                    refresh_media_id=media_id,
+                )
+                return {
+                    "success": True,
+                    "message": "已按指定信息重新识别",
+                    "item": result.get("item"),
+                }
             item = self._qb_sync_service().refresh_item(
                 data.get("downloader_id"),
                 data.get("info_hash"),
@@ -513,6 +540,23 @@ class RssAllInOne(_PluginBase):
                     "mode": "inventory_only",
                     **result,
                 }
+            source_kind = str(
+                (item.get("details") or {})
+                .get("source_identity", {})
+                .get("kind") or ""
+            )
+            if source_kind == "local_folder":
+                result = self._file_manager_service().recognize_folder(
+                    item.get("source_path"),
+                    manual_override=(item.get("details") or {}).get("manual_override"),
+                    refresh_media_id=media_id,
+                )
+                return {
+                    "success": True,
+                    "message": "已重新识别并复查库存",
+                    "mode": "recognize_and_inventory",
+                    "item": result.get("item"),
+                }
             refreshed = self._qb_sync_service().refresh_item(
                 item.get("downloader_id"), item.get("info_hash")
             )
@@ -525,6 +569,30 @@ class RssAllInOne(_PluginBase):
         except Exception as error:
             logger.error(f"RSS一条龙：刷新入库管理记录失败：{error}", exc_info=True)
             return {"success": False, "message": str(error)}
+
+    def api_files_browse(self, path: str = "/") -> Dict[str, Any]:
+        try:
+            return {"success": True, **LocalFileManagerService.browse(path)}
+        except FileManagerError as error:
+            return {"success": False, "message": str(error), "items": [], "total": 0}
+
+    def api_files_recognize(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self._file_scan_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有文件夹正在识别，请稍后再试"}
+        try:
+            result = self._file_manager_service().recognize_folder(
+                (payload or {}).get("path")
+            )
+            return result
+        except FileManagerError as error:
+            return {"success": False, "message": str(error)}
+        except Exception as error:
+            logger.error(f"RSS一条龙：文件夹批量识别失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
+        finally:
+            self._file_scan_lock.release()
 
     def api_categories(self) -> Dict[str, Any]:
         categories = set(self._library_layout.category_options())
@@ -974,6 +1042,14 @@ class RssAllInOne(_PluginBase):
     def _qb_scope(self) -> RssTaskQbScope:
         tasks = self._store.list_all_rss_tasks() if self._store else []
         return RssTaskQbScope.from_tasks(tasks)
+
+    def _file_manager_service(self) -> LocalFileManagerService:
+        return LocalFileManagerService(
+            store=self._require_store(),
+            inventory_checker=LocalInventoryChecker([]),
+            library_layout=self._library_layout,
+            logger=logger,
+        )
 
     def _database_path(self) -> Path:
         getter = getattr(self, "get_data_path", None)

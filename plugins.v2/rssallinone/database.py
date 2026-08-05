@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -16,6 +17,13 @@ SCHEMA_VERSION = 4
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _path_identity(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return os.path.normcase(os.path.normpath(raw))
 
 
 class SQLiteStore:
@@ -405,6 +413,48 @@ class SQLiteStore:
                 (str(media_id or "").strip(),),
             ).fetchone()
         return self._decode_row(row) if row else None
+
+    def find_media_by_source_path(self, source_path: object) -> Optional[Dict[str, Any]]:
+        identity = _path_identity(source_path)
+        if not identity:
+            return None
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM media_items WHERE source_path != ''"
+            ).fetchall()
+        for row in rows:
+            decoded = self._decode_row(row)
+            if _path_identity(decoded.get("source_path")) == identity:
+                return decoded
+        return None
+
+    def find_media_owners_by_source_paths(
+        self,
+        source_paths: Iterable[object],
+        *,
+        exclude_media_id: object = "",
+    ) -> List[str]:
+        identities = {
+            identity for identity in (_path_identity(path) for path in source_paths)
+            if identity
+        }
+        if not identities:
+            return []
+        excluded = str(exclude_media_id or "").strip()
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT media_id, current_source_path
+                   FROM file_mappings
+                   WHERE media_id != '' AND current_source_path != ''"""
+            ).fetchall()
+        owners = []
+        for row in rows:
+            media_id = str(row["media_id"] or "")
+            if media_id == excluded:
+                continue
+            if _path_identity(row["current_source_path"]) in identities:
+                owners.append(media_id)
+        return sorted(set(owners))
 
     def delete_media_item(self, media_id: object) -> bool:
         identity = str(media_id or "").strip()

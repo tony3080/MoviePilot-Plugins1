@@ -349,6 +349,20 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("{ title: '入库中', value: 'importing' }", app_page)
         self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
 
+    def test_file_manager_page_contract(self) -> None:
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        browser = (
+            PLUGIN_DIR / "src" / "components" / "FileManagerBrowser.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("{ title: '文件管理', value: 'files'", app_page)
+        self.assertIn("files/browse", browser)
+        self.assertIn("files/recognize", browser)
+        self.assertIn("批量识别", browser)
+        self.assertNotIn("修改时间", browser)
+        self.assertNotIn("文件大小", browser)
+
     def test_qb_refresh_preserves_rollback_marker(self) -> None:
         backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
         self.assertIn(
