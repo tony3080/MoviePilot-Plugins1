@@ -1255,6 +1255,30 @@ class SQLiteStore:
             )
         return int(cursor.rowcount or 0)
 
+    def cleanup_completed_qb_delete_jobs(self) -> int:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT id, downloader_id, info_hash FROM qb_delete_jobs
+                   WHERE state = 'succeeded'"""
+            ).fetchall()
+            for row in rows:
+                downloader_id = str(row["downloader_id"] or "").strip()
+                info_hash = str(row["info_hash"] or "").strip().lower()
+                self._archive_rss_history_for_torrent(
+                    connection, downloader_id, info_hash
+                )
+                connection.execute(
+                    """DELETE FROM torrent_snapshots
+                       WHERE downloader_id = ? AND info_hash = ?""",
+                    (downloader_id, info_hash),
+                )
+            if rows:
+                connection.executemany(
+                    "DELETE FROM qb_delete_jobs WHERE id = ?",
+                    [(str(row["id"]),) for row in rows],
+                )
+        return len(rows)
+
     def list_qb_delete_jobs(self) -> List[Dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(

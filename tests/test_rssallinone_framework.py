@@ -139,6 +139,40 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(store.list_background_tasks()["total"], 1)
             self.assertEqual(store.get_background_task("running")["state"], "running")
 
+    def test_completed_qb_delete_jobs_are_cleaned_on_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            store.upsert_rss_history({
+                "task_id": "task-a",
+                "source_key": "source-a",
+                "content_key": "qb-main:abc123",
+                "title": "Movie",
+                "status": "processed",
+                "payload": {"downloader": "qb-main", "info_hash": "abc123"},
+            })
+            store.schedule_qb_delete(
+                task_id="task-a",
+                task_name="Movie RSS",
+                downloader_id="qb-main",
+                info_hash="abc123",
+                source_path="/downloads/Movie.mkv",
+                delete_files=False,
+                due_at="2026-08-05T00:00:00+00:00",
+            )
+            job = store.list_qb_delete_jobs()[0]
+            store.finish_qb_delete_job(job["id"], success=True)
+
+            cleaned = store.cleanup_completed_qb_delete_jobs()
+
+            self.assertEqual(cleaned, 1)
+            self.assertEqual(store.list_qb_delete_jobs(), [])
+            self.assertEqual(store.list_rss_history()["total"], 0)
+            self.assertEqual(
+                store.find_rss_source_keys("task-a", ["source-a"]),
+                {"source-a"},
+            )
+
     def test_media_can_be_filtered_by_multiple_rss_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")

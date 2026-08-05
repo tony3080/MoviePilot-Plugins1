@@ -153,6 +153,9 @@ class RssAllInOne(_PluginBase):
             recovered = self._store.recover_incomplete_tasks()
             if recovered:
                 logger.warning(f"RSS一条龙：已终止 {recovered} 个重启前未完成的后台任务")
+            cleaned_jobs = self._store.cleanup_completed_qb_delete_jobs()
+            if cleaned_jobs:
+                logger.info(f"RSS一条龙：已清理 {cleaned_jobs} 个历史 qB 删除计划")
         except Exception as error:
             self._store = None
             self._startup_error = str(error)
