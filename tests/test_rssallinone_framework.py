@@ -489,6 +489,7 @@ class PluginLifecycleTest(unittest.TestCase):
                 api_paths = {item["path"] for item in plugin.get_api()}
                 self.assertIn("/qb/completed", api_paths)
                 self.assertIn("/media/action", api_paths)
+                self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
                 service_ids = {item["id"] for item in plugin.get_service()}
                 self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)

@@ -8,7 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,7 @@ def load_package_module(name: str, filename: str):
 database = load_package_module("database", "database.py")
 load_package_module("domain", "domain.py")
 media_actions = load_package_module("media_actions", "media_actions.py")
+layout = sys.modules[f"{PACKAGE}.layout"]
 
 
 class MediaActionServiceTest(unittest.TestCase):
@@ -193,6 +194,57 @@ class MediaActionServiceTest(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("拒绝猜测", result["results"][0]["message"])
+
+    def test_imported_refresh_rechecks_saved_strm_paths_without_recognition(self) -> None:
+        source_dir = self.root / "source"
+        source_dir.mkdir()
+        first = source_dir / "E01.mkv"
+        second = source_dir / "E02.mkv"
+        first.write_bytes(b"episode-one")
+        second.write_bytes(b"episode-two")
+        inventory_root = self.root / "inventory"
+        category_root = inventory_root / "国产剧"
+        media_directory = "测试剧 (2026) - {tmdbid=42}"
+        existing = category_root / media_directory / "Season 1" / "测试剧 - S01E01.strm"
+        existing.parent.mkdir(parents=True)
+        existing.write_text("cloud://episode-one", encoding="utf-8")
+        first_rel = f"{media_directory}/Season 1/测试剧 - S01E01.mkv"
+        second_rel = f"{media_directory}/Season 1/测试剧 - S01E02.mkv"
+        self.add_item("hash-refresh", [
+            {
+                "source_relative_path": "E01.mkv",
+                "source": first,
+                "target": self.root / "links" / "E01.mkv",
+                "new_rel": first_rel,
+                "inventory_path": category_root / PurePosixPath(first_rel).with_suffix(".strm"),
+            },
+            {
+                "source_relative_path": "E02.mkv",
+                "source": second,
+                "target": self.root / "links" / "E02.mkv",
+                "new_rel": second_rel,
+                "inventory_path": category_root / PurePosixPath(second_rel).with_suffix(".strm"),
+            },
+        ], state="imported")
+        library_layout = layout.LibraryLayout(str(inventory_root), [])
+
+        result = media_actions.MediaInventoryRefreshService(
+            self.store, library_layout
+        ).refresh("hash-refresh")
+
+        self.assertEqual(result["inventory_state"], "partial")
+        self.assertEqual(result["exists_count"], 1)
+        self.assertEqual(result["total_files"], 2)
+        item = self.store.get_media_item("hash-refresh")
+        self.assertEqual(item["state"], "imported")
+        self.assertEqual(item["details"]["inventory"]["exists_count"], 1)
+        self.assertEqual(
+            item["details"]["inventory"]["refresh_mode"],
+            "saved_file_mappings",
+        )
+        mappings = self.store.list_file_mappings("qb-main", "hash-refresh")
+        self.assertTrue(mappings[0]["inventory_exists"])
+        self.assertFalse(mappings[1]["inventory_exists"])
 
 
 if __name__ == "__main__":

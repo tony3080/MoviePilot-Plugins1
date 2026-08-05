@@ -16,7 +16,11 @@ from .capabilities import runtime_capabilities
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
-from .media_actions import MediaActionError, MediaActionService
+from .media_actions import (
+    MediaActionError,
+    MediaActionService,
+    MediaInventoryRefreshService,
+)
 from .qb_sync import (
     MoviePilotQbGateway,
     QB_TASK_TYPE,
@@ -39,7 +43,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.10.0"
+    plugin_version = "0.10.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -207,6 +211,7 @@ class RssAllInOne(_PluginBase):
             self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
+            self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
@@ -486,6 +491,40 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": str(error)}
         finally:
             self._media_action_lock.release()
+
+    def api_media_refresh(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        media_id = str((payload or {}).get("media_id") or "").strip()
+        item = self._require_store().get_media_item(media_id)
+        if not item:
+            return {"success": False, "message": "媒体记录不存在"}
+        try:
+            if str(item.get("state") or "") == "imported":
+                result = MediaInventoryRefreshService(
+                    self._require_store(), self._library_layout
+                ).refresh(media_id)
+                return {
+                    "success": True,
+                    "message": (
+                        f"库存复查完成：已存在 {result['exists_count']}/"
+                        f"{result['total_files']}"
+                    ),
+                    "mode": "inventory_only",
+                    **result,
+                }
+            refreshed = self._qb_sync_service().refresh_item(
+                item.get("downloader_id"), item.get("info_hash")
+            )
+            return {
+                "success": True,
+                "message": "已重新识别并复查库存",
+                "mode": "recognize_and_inventory",
+                "item": refreshed,
+            }
+        except Exception as error:
+            logger.error(f"RSS一条龙：刷新入库管理记录失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
 
     def api_categories(self) -> Dict[str, Any]:
         categories = set(self._library_layout.category_options())

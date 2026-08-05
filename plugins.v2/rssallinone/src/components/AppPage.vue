@@ -576,7 +576,11 @@ function openIdentify(item) {
 
 async function refreshItem(item) {
   const key = itemKey(item)
-  if (!item.downloader_id || !item.info_hash) {
+  if (activeTab.value === 'library' && !item.id) {
+    errorMessage.value = '该记录缺少媒体 ID，暂时无法刷新'
+    return
+  }
+  if (activeTab.value !== 'library' && (!item.downloader_id || !item.info_hash)) {
     errorMessage.value = '该记录没有关联的 qB 任务，暂时无法重新识别'
     return
   }
@@ -584,10 +588,14 @@ async function refreshItem(item) {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    const response = unwrap(await props.api.post('plugin/RssAllInOne/qb/item/refresh', {
-      downloader_id: item.downloader_id,
-      info_hash: item.info_hash,
-    }))
+    const response = activeTab.value === 'library'
+      ? unwrap(await props.api.post('plugin/RssAllInOne/media/refresh', {
+        media_id: item.id,
+      }))
+      : unwrap(await props.api.post('plugin/RssAllInOne/qb/item/refresh', {
+        downloader_id: item.downloader_id,
+        info_hash: item.info_hash,
+      }))
     if (!response?.success) throw new Error(response?.message || '刷新失败')
     successMessage.value = response.message || '任务已刷新'
     await loadActive()

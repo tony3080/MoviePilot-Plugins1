@@ -5,10 +5,13 @@ from __future__ import annotations
 import copy
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
 from .domain import can_transition
+from .inventory import LocalInventoryChecker
+from .layout import LibraryLayout
 
 
 class MediaActionError(RuntimeError):
@@ -401,3 +404,123 @@ class MediaActionService:
                 seen.add(key)
                 paths.append(path)
         return paths
+
+
+class MediaInventoryRefreshService:
+    """Recheck imported inventory from saved mappings without re-identifying media."""
+
+    def __init__(self, store: SQLiteStore, library_layout: LibraryLayout):
+        self.store = store
+        self.library_layout = library_layout
+
+    def refresh(self, media_id: object) -> Dict[str, Any]:
+        identity = str(media_id or "").strip()
+        item = self.store.get_media_item(identity)
+        if not item:
+            raise MediaActionError("媒体记录不存在")
+        if str(item.get("state") or "") != "imported":
+            raise MediaActionError("只有已入库项目可以只复查库存")
+
+        mappings = self.store.list_file_mappings(
+            item.get("downloader_id"), item.get("info_hash")
+        )
+        if not mappings:
+            raise MediaActionError("没有持久化的文件映射，无法复查已入库库存")
+        category = self.library_layout.canonical_category(item.get("category") or "")
+        inventory_base = self.library_layout.inventory_base(category)
+        if not inventory_base:
+            raise MediaActionError("当前分类没有配置库存根目录")
+
+        expected_files = []
+        expected_directory = ""
+        for mapping in mappings:
+            new_rel = str(mapping.get("new_rel") or "").strip().replace("\\", "/")
+            if not new_rel:
+                continue
+            pure_new_rel = PurePosixPath(new_rel)
+            if not expected_directory and len(pure_new_rel.parts) > 1:
+                expected_directory = pure_new_rel.parts[0]
+            expected_files.append({
+                "file_index": mapping.get("file_index"),
+                "source_name": str(mapping.get("source_relative_path") or ""),
+                "relative_path": pure_new_rel.as_posix(),
+                "inventory_relative_path": self._inventory_relative_path(
+                    mapping, inventory_base, pure_new_rel
+                ),
+                "size": int(mapping.get("file_size") or 0),
+            })
+        if not expected_files:
+            raise MediaActionError("文件映射中没有可用于库存复查的目标路径")
+
+        checker = LocalInventoryChecker([])
+        inventory_state, inventory_details = checker.check_root(
+            inventory_base,
+            expected_files,
+            tmdb_id=item.get("tmdb_id"),
+            expected_directory=expected_directory,
+            media_title=item.get("title") or "",
+            total_files=len(expected_files),
+        )
+        inventory_details.update({
+            "category": category,
+            "group": self.library_layout.media_group(item.get("media_type") or ""),
+            "layout_errors": list(self.library_layout.config_errors),
+            "refresh_mode": "saved_file_mappings",
+            "refreshed_at": utc_now(),
+        })
+
+        results_by_index = {
+            self._file_index(result.get("file_index")): result
+            for result in inventory_details.get("files") or []
+        }
+        updated_mappings = copy.deepcopy(mappings)
+        for mapping in updated_mappings:
+            result = results_by_index.get(self._file_index(mapping.get("file_index"))) or {}
+            mapping["inventory_exists"] = bool(result.get("inventory_exists"))
+            mapping_details = dict(mapping.get("details") or {})
+            mapping_details.update({
+                "inventory_status": str(result.get("status") or ""),
+                "matched_inventory_path": str(result.get("matched_path") or ""),
+                "inventory_match_method": str(result.get("match_method") or ""),
+                "inventory_refreshed_at": utc_now(),
+            })
+            mapping["details"] = mapping_details
+        persisted_mappings = self.store.replace_file_mappings(
+            item.get("downloader_id"), item.get("info_hash"), updated_mappings
+        )
+
+        updated_item = copy.deepcopy(item)
+        details = dict(updated_item.get("details") or {})
+        details["inventory"] = inventory_details
+        details["file_mappings"] = persisted_mappings
+        updated_item.update({"details": details, "updated_at": utc_now()})
+        self.store.upsert_media_item(updated_item)
+        return {
+            "item": self.store.get_media_item(identity),
+            "inventory_state": inventory_state,
+            "folder_status": inventory_details.get("folder_status") or "",
+            "total_files": int(inventory_details.get("total_files") or 0),
+            "exists_count": int(inventory_details.get("exists_count") or 0),
+            "missing_count": int(inventory_details.get("missing_count") or 0),
+        }
+
+    @staticmethod
+    def _inventory_relative_path(
+        mapping: Dict[str, Any], inventory_base: str, new_rel: PurePosixPath
+    ) -> str:
+        inventory_path = str(mapping.get("inventory_path") or "").strip().replace("\\", "/")
+        if inventory_path:
+            try:
+                return PurePosixPath(inventory_path).relative_to(
+                    PurePosixPath(str(inventory_base).replace("\\", "/"))
+                ).as_posix()
+            except ValueError:
+                pass
+        return new_rel.with_suffix(".strm").as_posix()
+
+    @staticmethod
+    def _file_index(value: object) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1

@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.10.0",
+    "version": "0.10.1",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.10.1": "拆分入库管理刷新语义：已入库卡片只按持久化 new_rel 和 inventory_path 逐文件复查 STRM 库存并更新 exists_count；未入库和回退卡片继续执行 MoviePilot 重新识别与库存对比，修复已入库刷新后始终显示 0/N",
       "v0.10.0": "接通入库管理批量操作：支持转待入库、逐文件硬链接入库、只删插件硬链接、删源和硬链接源文件双删；所有写操作使用持久化文件映射，库存已存在文件跳过，失败时回滚本轮新建硬链接并回写卡片错误",
       "v0.9.2": "多 qB 完成回调分别携带 V1 节点名与 MoviePilot 下载器名称；非 VT+ RSS 分类统一正常忽略，避免全局完成脚本对普通任务产生假失败；8081 使用 V1=QBSSD、MoviePilot=QB 的独立映射",
       "v0.9.1": "RSS 入队后按普通改名、中文标题、站点国语/特效标签、标记归位的顺序完成 qB 源名称处理，再触发 MoviePilot 识别生成 QB 卡片；移除周期性 QB 全量刷新，改用完成回调闭环推进，并按下载器与 info-hash 延时删除 qB 任务及其保存路径文件",
