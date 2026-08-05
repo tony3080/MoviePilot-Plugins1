@@ -837,24 +837,43 @@ class SQLiteStore:
                 found.update(str(row["content_key"]) for row in rows)
         return found
 
-    def latest_rss_history_for_content(
-        self, content_key: object
+    def latest_rss_history_for_torrent(
+        self, downloader_id: object, info_hash: object
     ) -> Optional[Dict[str, Any]]:
-        normalized_key = str(content_key or "").strip()
-        if not normalized_key:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().casefold()
+        if not normalized_hash:
             return None
+        exact_key = f"{downloader}:{normalized_hash}".casefold()
+        suffix = f"%:{normalized_hash}"
+        payload_pattern = f'%"info_hash":"{normalized_hash}"%'
         with self.connection() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 """SELECT * FROM rss_history
-                   WHERE content_key = ?
-                     AND status IN (
+                   WHERE status IN (
                        'queued', 'queued_warning', 'content_duplicate',
                        'existing', 'processed'
                      )
-                   ORDER BY updated_at DESC LIMIT 1""",
-                (normalized_key,),
-            ).fetchone()
-        return self._decode_row(row) if row else None
+                     AND (
+                       lower(content_key) = ?
+                       OR lower(content_key) LIKE ?
+                       OR lower(payload_json) LIKE ?
+                     )
+                   ORDER BY CASE WHEN lower(content_key) = ? THEN 0 ELSE 1 END,
+                            updated_at DESC
+                   LIMIT 20""",
+                (exact_key, suffix, payload_pattern, exact_key),
+            ).fetchall()
+        for row in rows:
+            item = self._decode_row(row)
+            content_key = str(item.get("content_key") or "").casefold()
+            payload = item.get("payload") or {}
+            payload_hash = str(payload.get("info_hash") or "").casefold()
+            if content_key == exact_key or content_key.endswith(f":{normalized_hash}"):
+                return item
+            if payload_hash == normalized_hash:
+                return item
+        return None
 
     def upsert_rss_history(self, record: Dict[str, Any]) -> None:
         now = str(record.get("updated_at") or utc_now())

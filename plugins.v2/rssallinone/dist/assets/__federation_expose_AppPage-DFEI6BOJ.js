@@ -609,8 +609,13 @@ const title = computed$2(() => props.item.media_title || props.item.title || pro
 const sourceName = computed$2(() => props.item.source_name || props.item.name || '');
 const poster = computed$2(() => props.item.poster || media.value.poster_path || media.value.poster || '');
 const sourceUrl = computed$2(() => {
-  const value = props.item.comment_url || props.item.source_url_masked || details.value.comment_url || details.value.source_url || '';
-  return /^https?:\/\//i.test(value) && !value.includes('***') ? value : ''
+  const value = props.item.comment_url
+    || props.item.source_url_masked
+    || details.value.rss_source?.detail_url_masked
+    || details.value.comment_url
+    || details.value.source_url
+    || '';
+  return usableSourceUrl(value)
 });
 const mediaType = computed$2(() => props.item.media_type || override.value.media_type || '');
 const tmdbUrl = computed$2(() => {
@@ -624,6 +629,7 @@ const customization = computed$2(() => {
   const expected = details.value.inventory_plan?.expected_files || [];
   return [...new Set(expected.map(file => file.recognition?.customization).filter(Boolean))].join('@')
 });
+const customizationLabel = computed$2(() => customization.value.replaceAll('@', '@\u200b'));
 const resourceTokens = computed$2(() => {
   const expected = details.value.inventory_plan?.expected_files || [];
   return [...new Set(expected.flatMap(file => file.recognition?.resource_tokens || []).filter(Boolean))]
@@ -639,6 +645,7 @@ const status = computed$2(() => {
   if (props.mode === 'qb') {
     if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
     if (props.item.inventory_state === 'exists') return { text: '已存在', color: 'success' }
+    if (details.value.import_control?.import_enabled === false) return { text: '仅下载', color: 'orange' }
     return { text: '待入库', color: 'info' }
   }
   const state = props.item.state || '';
@@ -679,6 +686,22 @@ function formatSize(bytes) {
 
 function openLink(url) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function usableSourceUrl(value) {
+  const text = String(value || '').trim();
+  if (!/^https?:\/\//i.test(text)) return ''
+  try {
+    const url = new URL(text);
+    url.username = '';
+    url.password = '';
+    for (const [key, itemValue] of [...url.searchParams.entries()]) {
+      if (itemValue.includes('***')) url.searchParams.delete(key);
+    }
+    return url.toString()
+  } catch {
+    return ''
+  }
 }
 
 return (_ctx, _cache) => {
@@ -848,20 +871,18 @@ return (_ctx, _cache) => {
           _createElementVNode$2("div", _hoisted_4$1, [
             _createVNode$2(_component_VChip, {
               size: "x-small",
-              color: status.value.color,
               variant: "flat",
-              class: "info-chip status-chip"
+              class: _normalizeClass(['info-chip', 'status-chip', `tag-${status.value.color}`])
             }, {
               default: _withCtx$2(() => [
                 _createTextVNode$2(_toDisplayString$2(status.value.text), 1)
               ]),
               _: 1
-            }, 8, ["color"]),
+            }, 8, ["class"]),
             (mediaType.value !== 'movie' && __props.item.season !== null && __props.item.season !== undefined)
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 0,
                   size: "x-small",
-                  color: "purple",
                   variant: "flat",
                   class: "info-chip season-chip"
                 }, {
@@ -875,7 +896,6 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 1,
                   size: "x-small",
-                  color: "cyan-darken-2",
                   variant: "flat",
                   class: "info-chip resolution-chip"
                 }, {
@@ -889,7 +909,6 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 2,
                   size: "x-small",
-                  color: "indigo",
                   variant: "flat",
                   class: "info-chip category-chip"
                 }, {
@@ -903,12 +922,11 @@ return (_ctx, _cache) => {
               ? (_openBlock$2(), _createBlock$2(_component_VChip, {
                   key: 3,
                   size: "x-small",
-                  color: "teal-darken-1",
                   variant: "flat",
                   class: "info-chip customization-chip"
                 }, {
                   default: _withCtx$2(() => [
-                    _createTextVNode$2(_toDisplayString$2(customization.value), 1)
+                    _createTextVNode$2(_toDisplayString$2(customizationLabel.value), 1)
                   ]),
                   _: 1
                 }))
@@ -939,7 +957,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-f3188261"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-0f96f48f"]]);
 
 const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,createElementVNode:_createElementVNode$1,withCtx:_withCtx$1,toDisplayString:_toDisplayString$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1} = await importShared('vue');
 
@@ -1363,6 +1381,15 @@ function selectAllVisible() {
   selectedKeys.value = rows.value.map(itemKey);
 }
 
+function clearSelection() {
+  selectedKeys.value = [];
+}
+
+async function reloadForFilter() {
+  clearSelection();
+  await loadActive();
+}
+
 async function loadCategories() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/categories'));
   categoryOptions.value = response?.items || [];
@@ -1768,6 +1795,7 @@ function rssTestColor(state) {
 }
 
 watch(activeTab, async value => {
+  clearSelection();
   if (value === 'qb' && qbDownloaders.value.length === 0) {
     try {
       await loadQbDownloaders();
@@ -1778,12 +1806,15 @@ watch(activeTab, async value => {
   await loadActive();
 });
 watch(vtTab, () => {
+  clearSelection();
   if (activeTab.value === 'vt') loadActive();
 });
 watch([mediaState, mediaType], () => {
+  clearSelection();
   if (activeTab.value === 'library') loadActive();
 });
 watch([qbDownloader, qbView], () => {
+  clearSelection();
   if (activeTab.value === 'qb') loadActive();
 });
 onMounted(loadActive);
@@ -2141,8 +2172,8 @@ return (_ctx, _cache) => {
                     "hide-details": "",
                     clearable: "",
                     class: "qb-search",
-                    onKeyup: _withKeys(loadActive, ["enter"]),
-                    "onClick:clear": loadActive
+                    onKeyup: _withKeys(reloadForFilter, ["enter"]),
+                    "onClick:clear": reloadForFilter
                   }, null, 8, ["modelValue"]),
                   _createVNode(_component_VSpacer),
                   _createElementVNode("span", _hoisted_14, _toDisplayString(total.value) + " 项", 1),
@@ -2522,6 +2553,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-5bb0f48b"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-0be4604a"]]);
 
 export { AppPage as default };

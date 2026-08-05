@@ -522,6 +522,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
         downloader="qb-main",
         category="movie",
         enabled=True,
+        import_enabled=True,
     ):
         now = database.utc_now()
         connection = sqlite3.connect(store.path)
@@ -538,6 +539,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                     json.dumps({
                         "qb_downloader": downloader,
                         "qb_category": category,
+                        "import_enabled": import_enabled,
                     }, ensure_ascii=False),
                     now,
                     now,
@@ -682,7 +684,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             store.upsert_rss_history({
                 "task_id": "rss-task",
                 "source_key": "source-abc123",
-                "content_key": "qb-main:abc123",
+                "content_key": "legacy-qb-name:abc123",
                 "title": "Example.Movie.2026.1080p",
                 "status": "queued",
                 "detail_url_masked": "https://pt.example/details.php?id=42",
@@ -735,6 +737,69 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(second["inventory_state"], "missing")
             self.assertEqual(gateway.recognitions, 1)
             self.assertEqual(gateway.plans, 4)
+
+    def test_qb_comment_source_url_is_masked_before_card_storage(self) -> None:
+        value = qb_sync._source_url_for_torrent(
+            {},
+            {"comment": "https://pt.example/details.php?id=42&authkey=secret"},
+        )
+        self.assertEqual(
+            value,
+            "https://pt.example/details.php?id=42&authkey=***",
+        )
+
+    def test_completed_torrent_with_import_disabled_stays_out_of_library(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "NOIMPORT",
+                    "title": "Download.Only.2026",
+                    "state": "pausedUP",
+                    "category": "movie",
+                    "content_path": "/downloads/download-only.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, import_enabled=False)
+            store.create_background_task("download-only", qb_sync.QB_TASK_TYPE)
+
+            qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "download-only"
+            )
+
+            snapshot = store.get_torrent_snapshot("qb-main", "noimport")
+            self.assertIsNotNone(snapshot)
+            self.assertIsNone(snapshot["media_id"])
+            self.assertFalse(snapshot["details"]["import_control"]["import_enabled"])
+            self.assertTrue(snapshot["details"]["import_control"]["torrent_completed"])
+            self.assertEqual(store.list_media()["total"], 0)
 
     def test_sync_only_recognizes_rss_task_downloader_category_pairs(self) -> None:
         class Gateway:

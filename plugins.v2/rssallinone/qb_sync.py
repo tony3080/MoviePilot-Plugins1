@@ -8,10 +8,12 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout
+from .rss_feed import mask_url
 
 
 QB_TASK_TYPE = "qb_refresh"
@@ -63,6 +65,7 @@ class RssTaskQbRule:
     downloader: str
     category: str
     enabled: bool
+    import_enabled: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -71,6 +74,7 @@ class RssTaskQbRule:
             "downloader": self.downloader,
             "category": self.category,
             "enabled": self.enabled,
+            "import_enabled": self.import_enabled,
         }
 
 
@@ -120,6 +124,7 @@ class RssTaskQbScope:
                 downloader=downloader,
                 category=category,
                 enabled=bool(task.get("enabled")),
+                import_enabled=_as_bool(config.get("import_enabled", True)),
             ))
         return cls(rules, ignored)
 
@@ -138,6 +143,30 @@ class RssTaskQbScope:
 
     def matches(self, downloader: str, category: str) -> bool:
         return str(category or "").strip() in self.categories_for(downloader)
+
+    def rule_for(
+        self,
+        downloader: object,
+        category: object,
+        task_id: object = "",
+    ) -> Optional[RssTaskQbRule]:
+        normalized_task_id = str(task_id or "").strip()
+        if normalized_task_id:
+            for rule in self.rules:
+                if rule.task_id == normalized_task_id:
+                    return rule
+        normalized_downloader = str(downloader or "").strip()
+        normalized_category = str(category or "").strip()
+        matches = [
+            rule for rule in self.rules
+            if rule.downloader == normalized_downloader
+            and rule.category == normalized_category
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if matches and len({rule.import_enabled for rule in matches}) == 1:
+            return matches[0]
+        return None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -688,6 +717,7 @@ class QbSyncService:
             raw=raw,
             force_recognition=True,
             manual_override=manual_override,
+            scope=scope,
         )
         return self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
@@ -798,6 +828,7 @@ class QbSyncService:
                         downloader=downloader,
                         raw=raw,
                         force_recognition=force_recognition,
+                        scope=scope,
                     )
                     succeeded += 1
                     result["scanned"] += 1
@@ -833,6 +864,7 @@ class QbSyncService:
         raw: Dict[str, Any],
         force_recognition: bool,
         manual_override: Optional[Dict[str, Any]] = None,
+        scope: Optional[RssTaskQbScope] = None,
     ) -> str:
         now = utc_now()
         info_hash = str(raw.get("hash") or "").strip().lower()
@@ -843,14 +875,24 @@ class QbSyncService:
         ).hexdigest()
         existing = self.store.get_torrent_snapshot(downloader.name, info_hash) or {}
         existing_details = existing.get("details") or {}
-        rss_history = self.store.latest_rss_history_for_content(
-            f"{downloader.name}:{info_hash}"
+        rss_history = self.store.latest_rss_history_for_torrent(
+            downloader.name, info_hash
         ) or {}
-        source_url_masked = str(
-            rss_history.get("detail_url_masked")
-            or existing.get("source_url_masked")
-            or ""
-        ).strip()
+        task_scope = scope or RssTaskQbScope.from_tasks(
+            self.store.list_all_rss_tasks()
+        )
+        task_rule = task_scope.rule_for(
+            downloader.name,
+            raw.get("category") or "",
+            rss_history.get("task_id") or "",
+        )
+        import_enabled = bool(task_rule and task_rule.import_enabled)
+        torrent_completed = _torrent_completed(raw)
+        source_url_masked = _source_url_for_torrent(
+            rss_history,
+            raw,
+            existing.get("source_url_masked") or "",
+        )
         stored_override = existing_details.get("manual_override") or {}
         override = _normalize_manual_override(
             stored_override if manual_override is None else manual_override
@@ -1040,43 +1082,65 @@ class QbSyncService:
             "rss_source": {
                 "task_id": str(rss_history.get("task_id") or ""),
                 "source_key": str(rss_history.get("source_key") or ""),
-            } if rss_history else {},
+                "detail_url_masked": source_url_masked,
+            } if rss_history or source_url_masked else {},
+            "import_control": {
+                "task_id": task_rule.task_id if task_rule else "",
+                "task_name": task_rule.task_name if task_rule else "",
+                "import_enabled": import_enabled,
+                "torrent_completed": torrent_completed,
+            },
         }
         target_name = ""
         if path_plan.get("inventory_files"):
             target_name = str(path_plan["inventory_files"][0].get("path") or "")
         if not target_name:
             target_name = str(inventory_plan.get("inventory_target_name") or "")
-        self.store.upsert_media_item({
-            "id": media_id,
-            "state": media_state,
-            "media_type": media_type,
-            "title": media_title or title,
-            "source_name": title,
-            "source_path": content_path,
-            "downloader_id": downloader.name,
-            "info_hash": info_hash,
-            "tmdb_id": tmdb_id,
-            "season": season,
-            "category": category,
-            "target_name": target_name,
-            "failure_code": (
-                "recognition_failed"
-                if not media
-                else "missing_tmdb_id"
-                if not _valid_tmdb_id(tmdb_id)
-                else ""
-            ),
-            "failure_message": recognition_error,
-            "details": details,
-            "updated_at": now,
-        })
-        if media and _valid_tmdb_id(tmdb_id) and mapping_refresh_succeeded:
+        existing_media = self.store.get_media_item(media_id) or {}
+        imported_record = str(existing_media.get("state") or "") in {
+            "importing", "imported"
+        }
+        create_candidate = import_enabled and torrent_completed
+        if create_candidate and not imported_record:
+            self.store.upsert_media_item({
+                "id": media_id,
+                "state": media_state,
+                "media_type": media_type,
+                "title": media_title or title,
+                "source_name": title,
+                "source_path": content_path,
+                "downloader_id": downloader.name,
+                "info_hash": info_hash,
+                "tmdb_id": tmdb_id,
+                "season": season,
+                "category": category,
+                "target_name": target_name,
+                "failure_code": (
+                    "recognition_failed"
+                    if not media
+                    else "missing_tmdb_id"
+                    if not _valid_tmdb_id(tmdb_id)
+                    else ""
+                ),
+                "failure_message": recognition_error,
+                "details": details,
+                "updated_at": now,
+            })
+        elif not imported_record:
+            self.store.delete_media_item(media_id)
+        if (
+            create_candidate
+            and not imported_record
+            and media
+            and _valid_tmdb_id(tmdb_id)
+            and mapping_refresh_succeeded
+        ):
             self.store.replace_file_mappings(
                 downloader.name,
                 info_hash,
                 file_mappings,
             )
+        snapshot_media_id = media_id if create_candidate or imported_record else None
         self.store.upsert_torrent_snapshot({
             "downloader_id": downloader.name,
             "info_hash": info_hash,
@@ -1086,7 +1150,7 @@ class QbSyncService:
             "content_path": content_path,
             "progress": float(raw.get("progress") or 0),
             "size": int(raw.get("size") or 0),
-            "media_id": media_id,
+            "media_id": snapshot_media_id,
             "source_url_masked": source_url_masked,
             "present": 1,
             "recognition_state": recognition_state,
@@ -1191,6 +1255,60 @@ def _first_text(
             if text:
                 return text
     return ""
+
+
+def _source_url_for_torrent(
+    history: Dict[str, Any],
+    torrent: Dict[str, Any],
+    existing: object = "",
+) -> str:
+    for candidate in (
+        history.get("detail_url_masked"),
+        torrent.get("comment"),
+        existing,
+    ):
+        value = mask_url(candidate)
+        if value.casefold().startswith(("http://", "https://")):
+            return value
+
+    torrent_id = str((history.get("payload") or {}).get("torrent_id") or "").strip()
+    tracker = str(torrent.get("tracker") or "").strip()
+    parsed = urlparse(tracker)
+    if torrent_id.isdigit() and parsed.scheme.casefold() in {"http", "https"} and parsed.netloc:
+        return urlunparse((
+            parsed.scheme,
+            parsed.netloc.rsplit("@", 1)[-1],
+            "/details.php",
+            "",
+            urlencode({"id": torrent_id}),
+            "",
+        ))
+    return ""
+
+
+def _torrent_completed(torrent: Dict[str, Any]) -> bool:
+    try:
+        progress = float(torrent.get("progress") or 0)
+    except (TypeError, ValueError):
+        progress = 0
+    if progress >= 99.999 or 0.999999 <= progress <= 1.0:
+        return True
+    state = str(torrent.get("state") or "").strip().casefold()
+    return state in {
+        "completed",
+        "uploading",
+        "stalledup",
+        "pausedup",
+        "queuedup",
+        "checkingup",
+        "forcedup",
+    }
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
+    return bool(value)
 
 
 def build_source_target_mappings(

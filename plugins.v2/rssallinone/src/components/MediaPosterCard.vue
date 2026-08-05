@@ -18,8 +18,13 @@ const title = computed(() => props.item.media_title || props.item.title || props
 const sourceName = computed(() => props.item.source_name || props.item.name || '')
 const poster = computed(() => props.item.poster || media.value.poster_path || media.value.poster || '')
 const sourceUrl = computed(() => {
-  const value = props.item.comment_url || props.item.source_url_masked || details.value.comment_url || details.value.source_url || ''
-  return /^https?:\/\//i.test(value) && !value.includes('***') ? value : ''
+  const value = props.item.comment_url
+    || props.item.source_url_masked
+    || details.value.rss_source?.detail_url_masked
+    || details.value.comment_url
+    || details.value.source_url
+    || ''
+  return usableSourceUrl(value)
 })
 const mediaType = computed(() => props.item.media_type || override.value.media_type || '')
 const tmdbUrl = computed(() => {
@@ -33,6 +38,7 @@ const customization = computed(() => {
   const expected = details.value.inventory_plan?.expected_files || []
   return [...new Set(expected.map(file => file.recognition?.customization).filter(Boolean))].join('@')
 })
+const customizationLabel = computed(() => customization.value.replaceAll('@', '@\u200b'))
 const resourceTokens = computed(() => {
   const expected = details.value.inventory_plan?.expected_files || []
   return [...new Set(expected.flatMap(file => file.recognition?.resource_tokens || []).filter(Boolean))]
@@ -48,6 +54,7 @@ const status = computed(() => {
   if (props.mode === 'qb') {
     if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
     if (props.item.inventory_state === 'exists') return { text: '已存在', color: 'success' }
+    if (details.value.import_control?.import_enabled === false) return { text: '仅下载', color: 'orange' }
     return { text: '待入库', color: 'info' }
   }
   const state = props.item.state || ''
@@ -88,6 +95,22 @@ function formatSize(bytes) {
 
 function openLink(url) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function usableSourceUrl(value) {
+  const text = String(value || '').trim()
+  if (!/^https?:\/\//i.test(text)) return ''
+  try {
+    const url = new URL(text)
+    url.username = ''
+    url.password = ''
+    for (const [key, itemValue] of [...url.searchParams.entries()]) {
+      if (itemValue.includes('***')) url.searchParams.delete(key)
+    }
+    return url.toString()
+  } catch {
+    return ''
+  }
 }
 </script>
 
@@ -157,13 +180,13 @@ function openLink(url) {
     <VCardText class="card-body">
       <h3>{{ title }}</h3>
       <div class="chip-row">
-        <VChip size="x-small" :color="status.color" variant="flat" class="info-chip status-chip">{{ status.text }}</VChip>
-        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" color="purple" variant="flat" class="info-chip season-chip">
+        <VChip size="x-small" variant="flat" :class="['info-chip', 'status-chip', `tag-${status.color}`]">{{ status.text }}</VChip>
+        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" variant="flat" class="info-chip season-chip">
           {{ Number(item.season) === 0 ? '特别篇(S00)' : `第${Number(item.season)}季` }}
         </VChip>
-        <VChip v-if="resolution" size="x-small" color="cyan-darken-2" variant="flat" class="info-chip resolution-chip">{{ resolution }}</VChip>
-        <VChip v-if="mediaCategory" size="x-small" color="indigo" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
-        <VChip v-if="customization" size="x-small" color="teal-darken-1" variant="flat" class="info-chip customization-chip">{{ customization }}</VChip>
+        <VChip v-if="resolution" size="x-small" variant="flat" class="info-chip resolution-chip">{{ resolution }}</VChip>
+        <VChip v-if="mediaCategory" size="x-small" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
+        <VChip v-if="customization" size="x-small" variant="flat" class="info-chip customization-chip">{{ customizationLabel }}</VChip>
       </div>
       <p v-if="sourceName" class="source-name">源: {{ sourceName }}</p>
       <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
@@ -176,18 +199,18 @@ function openLink(url) {
 <style scoped>
 .media-poster-card {
   overflow: hidden;
-  border: 1px solid rgba(var(--v-border-color), 0.55);
+  border: 3px solid transparent;
   border-radius: 8px;
   background: rgb(var(--v-theme-surface));
   cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(var(--v-border-color), 0.55);
   transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
 .media-poster-card:hover { transform: translateY(-2px); }
 .media-poster-card.selected {
-  border-color: rgb(var(--v-theme-info));
-  border-width: 3px;
-  box-shadow: 0 0 0 3px rgba(var(--v-theme-info), 0.52), 0 8px 22px rgba(var(--v-theme-info), 0.22);
+  border-color: #22d3ee;
+  box-shadow: 0 0 0 3px rgba(34,211,238,.48), 0 8px 22px rgba(8,145,178,.24);
 }
 
 .poster-area { position: relative; aspect-ratio: 2 / 3; background: #111722; }
@@ -206,11 +229,33 @@ button.corner-badge { cursor: pointer; }
 .version-chip { position: absolute; right: 10px; bottom: 10px; }
 .card-body { display: grid; gap: 7px; padding: 12px 14px 14px; }
 .card-body h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.3; }
-.chip-row { display: flex; min-height: 24px; flex-wrap: wrap; gap: 5px; margin-top: -2px; }
-.info-chip { color: #fff !important; font-weight: 650; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+.chip-row { display: flex; min-width: 0; min-height: 24px; flex-wrap: wrap; align-items: flex-start; gap: 5px; margin-top: -2px; }
+.info-chip {
+  width: fit-content;
+  max-width: 100%;
+  height: auto !important;
+  min-height: 22px;
+  padding: 2px 6px !important;
+  border: 1px solid !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+  white-space: normal !important;
+  overflow: hidden;
+}
+.info-chip :deep(.v-chip__content) { display: block; max-width: 100%; line-height: 16px; white-space: normal; overflow-wrap: anywhere; }
+.tag-info { border-color: rgba(59,130,246,.30) !important; background: rgba(59,130,246,.20) !important; color: #60a5fa !important; }
+.tag-success { border-color: rgba(34,197,94,.30) !important; background: rgba(34,197,94,.20) !important; color: #4ade80 !important; }
+.tag-error { border-color: rgba(220,38,38,.30) !important; background: rgba(220,38,38,.20) !important; color: #f87171 !important; }
+.tag-orange { border-color: rgba(249,115,22,.30) !important; background: rgba(249,115,22,.20) !important; color: #fb923c !important; }
+.tag-purple, .season-chip { border-color: rgba(124,58,237,.30) !important; background: rgba(124,58,237,.20) !important; color: #a78bfa !important; }
+.resolution-chip { border-color: rgba(8,145,178,.30) !important; background: rgba(8,145,178,.20) !important; color: #22d3ee !important; }
+.category-chip { border-color: rgba(139,92,246,.30) !important; background: rgba(139,92,246,.20) !important; color: #a78bfa !important; }
+.customization-chip { border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
 .source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.45; }
-.size-label { width: fit-content; padding: 4px 9px; border: 1px solid rgba(var(--v-theme-on-surface), .2); border-radius: 5px; background: rgba(var(--v-theme-on-surface), .2); color: rgb(var(--v-theme-on-surface)); font-size: .75rem; font-weight: 600; }
+.size-label { width: fit-content; max-width: 100%; padding: 2px 6px; border: 1px solid #4b5563; border-radius: 4px; background: #374151; color: #fff; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
 .target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; }
 .inventory-line { font-size: .78rem; font-weight: 600; }
 .inventory-ok { color: rgb(var(--v-theme-success)); }

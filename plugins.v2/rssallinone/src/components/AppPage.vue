@@ -200,6 +200,15 @@ function selectAllVisible() {
   selectedKeys.value = rows.value.map(itemKey)
 }
 
+function clearSelection() {
+  selectedKeys.value = []
+}
+
+async function reloadForFilter() {
+  clearSelection()
+  await loadActive()
+}
+
 async function loadCategories() {
   const response = unwrap(await props.api.get('plugin/RssAllInOne/categories'))
   categoryOptions.value = response?.items || []
@@ -639,6 +648,7 @@ function rssTestColor(state) {
 }
 
 watch(activeTab, async value => {
+  clearSelection()
   if (value === 'qb' && qbDownloaders.value.length === 0) {
     try {
       await loadQbDownloaders()
@@ -649,12 +659,15 @@ watch(activeTab, async value => {
   await loadActive()
 })
 watch(vtTab, () => {
+  clearSelection()
   if (activeTab.value === 'vt') loadActive()
 })
 watch([mediaState, mediaType], () => {
+  clearSelection()
   if (activeTab.value === 'library') loadActive()
 })
 watch([qbDownloader, qbView], () => {
+  clearSelection()
   if (activeTab.value === 'qb') loadActive()
 })
 onMounted(loadActive)
@@ -839,8 +852,8 @@ onBeforeUnmount(() => {
             hide-details
             clearable
             class="qb-search"
-            @keyup.enter="loadActive"
-            @click:clear="loadActive"
+            @keyup.enter="reloadForFilter"
+            @click:clear="reloadForFilter"
           />
           <VSpacer />
           <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
