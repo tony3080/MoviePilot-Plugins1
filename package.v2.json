@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.11.0",
+    "version": "0.11.1",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.11.1": "文件管理根级入口只显示已启用的源路径路由，并在后端禁止浏览或识别路由范围以外的目录",
       "v0.11.0": "新增插件文件管理分页，支持只读目录浏览、文件夹批量识别，并按源文件夹与持久化文件映射核对现有入库卡片以避免重复",
       "v0.10.2": "重新识别回退卡片时保留 rolled_back 标记，直到再次成功入库才清除 R；入库管理状态筛选移除仅供内部流程使用的已发现和入库中过渡状态",
       "v0.10.1": "拆分入库管理刷新语义：已入库卡片只按持久化 new_rel 和 inventory_path 逐文件复查 STRM 库存并更新 exists_count；未入库和回退卡片继续执行 MoviePilot 重新识别与库存对比，修复已入库刷新后始终显示 0/N",

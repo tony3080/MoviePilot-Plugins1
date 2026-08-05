@@ -43,8 +43,22 @@ class LocalFileManagerService:
         self.logger = logger
 
     @staticmethod
-    def browse(path: object = "/") -> Dict[str, Any]:
+    def browse(
+        path: object = "/",
+        source_roots: Sequence[object] = (),
+    ) -> Dict[str, Any]:
+        roots = _accessible_source_roots(source_roots)
+        raw = str(path or "/").strip() or "/"
+        if roots and raw == "/":
+            return {
+                "path": "/",
+                "parent": "",
+                "items": [{"name": item.name, "path": str(item)} for item in roots],
+                "total": len(roots),
+            }
         directory = _local_directory(path)
+        if roots and not _inside_any(directory, roots):
+            raise FileManagerError("只能浏览已配置的源路径路由")
         try:
             folders = sorted(
                 (item for item in directory.iterdir() if item.is_dir()),
@@ -53,6 +67,8 @@ class LocalFileManagerService:
         except OSError as error:
             raise FileManagerError(f"目录读取失败：{error}") from error
         parent = directory.parent if directory.parent != directory else None
+        if roots and directory in roots:
+            parent = Path("/")
         return {
             "path": str(directory),
             "parent": str(parent) if parent else "",
@@ -63,6 +79,9 @@ class LocalFileManagerService:
             "total": len(folders),
         }
 
+    def browse_sources(self, path: object = "/") -> Dict[str, Any]:
+        return self.browse(path, self._source_roots())
+
     def recognize_folder(
         self,
         path: object,
@@ -71,6 +90,9 @@ class LocalFileManagerService:
         refresh_media_id: object = "",
     ) -> Dict[str, Any]:
         directory = _local_directory(path)
+        roots = self._source_roots()
+        if roots and not _inside_any(directory, roots):
+            raise FileManagerError("只能识别已配置的源路径路由中的文件夹")
         media_id, source_hash = _source_identity(directory)
         requested_media_id = str(refresh_media_id or "").strip()
         if requested_media_id and requested_media_id != media_id:
@@ -308,6 +330,11 @@ class LocalFileManagerService:
             raise FileManagerError(f"扫描媒体文件失败：{error}") from error
         return sorted(result, key=lambda item: str(item).casefold())
 
+    def _source_roots(self) -> List[Path]:
+        return _accessible_source_roots(
+            route.prefix for route in self.library_layout.routes if route.enabled
+        )
+
 
 def _local_directory(value: object) -> Path:
     raw = str(value or "/").strip() or "/"
@@ -321,6 +348,33 @@ def _local_directory(value: object) -> Path:
     if not resolved.is_dir():
         raise FileManagerError(f"路径不是文件夹：{resolved}")
     return resolved
+
+
+def _accessible_source_roots(values: Iterable[object]) -> List[Path]:
+    roots = []
+    seen = set()
+    for value in values or []:
+        try:
+            path = _local_directory(value)
+        except FileManagerError:
+            continue
+        identity = os.path.normcase(os.path.normpath(str(path)))
+        if identity not in seen:
+            seen.add(identity)
+            roots.append(path)
+    return sorted(roots, key=lambda item: item.name.casefold())
+
+
+def _inside_any(path: Path, roots: Sequence[Path]) -> bool:
+    identity = os.path.normcase(os.path.normpath(str(path)))
+    for root in roots:
+        root_identity = os.path.normcase(os.path.normpath(str(root)))
+        try:
+            if os.path.commonpath([identity, root_identity]) == root_identity:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _source_identity(path: Path) -> Tuple[str, str]:

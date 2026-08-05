@@ -44,7 +44,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.11.0"
+    plugin_version = "0.11.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -572,7 +572,7 @@ class RssAllInOne(_PluginBase):
 
     def api_files_browse(self, path: str = "/") -> Dict[str, Any]:
         try:
-            return {"success": True, **LocalFileManagerService.browse(path)}
+            return {"success": True, **self._file_manager_service().browse_sources(path)}
         except FileManagerError as error:
             return {"success": False, "message": str(error), "items": [], "total": 0}
 

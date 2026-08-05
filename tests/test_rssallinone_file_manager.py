@@ -47,6 +47,32 @@ class LocalFileManagerTest(unittest.TestCase):
             self.assertEqual(result["total"], 2)
             self.assertEqual(Path(result["path"]), root.resolve())
 
+    def test_virtual_root_only_lists_configured_source_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mp_root = root / "MP"
+            ssd_root = root / "SSD"
+            mp_root.mkdir()
+            ssd_root.mkdir()
+
+            result = file_manager.LocalFileManagerService.browse(
+                "/", [ssd_root, mp_root, root / "missing"]
+            )
+
+            self.assertEqual([item["name"] for item in result["items"]], ["MP", "SSD"])
+            self.assertEqual(result["path"], "/")
+
+    def test_configured_root_cannot_browse_outside_source_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            allowed = root / "allowed"
+            outside = root / "outside"
+            allowed.mkdir()
+            outside.mkdir()
+
+            with self.assertRaises(file_manager.FileManagerError):
+                file_manager.LocalFileManagerService.browse(outside, [allowed])
+
     def test_existing_source_folder_is_not_recognized_twice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
