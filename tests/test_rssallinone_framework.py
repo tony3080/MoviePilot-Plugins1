@@ -263,6 +263,34 @@ class RepositoryContractTest(unittest.TestCase):
             app_page.count("hide-default-footer"),
         )
 
+    def test_chinese_dashboard_task_labels_and_dragon_branding(self) -> None:
+        backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        metadata = json.loads((ROOT / "package.v2.json").read_text(encoding="utf-8"))[
+            PLUGIN_ID
+        ]
+        self.assertTrue((PLUGIN_DIR / "assets" / "dragon.svg").is_file())
+        self.assertTrue((PLUGIN_DIR / "assets" / "dragon.png").is_file())
+        self.assertIn('"icon": "tabler:dragon"', backend)
+        self.assertIn('icon="tabler:dragon"', app_page)
+        self.assertTrue(metadata["icon"].endswith("/assets/dragon.png"))
+        self.assertLess(
+            app_page.index("{ title: '文件管理', value: 'files'"),
+            app_page.index("{ title: '入库管理', value: 'library'"),
+        )
+        for label in (
+            "MoviePilot 本机能力",
+            "CloudDrive2 上传监控",
+            "下载完成回调闭环",
+            "RSS 任务执行",
+            "QB 刷新识别",
+            "文件批量识别",
+            "结果 / 错误",
+        ):
+            self.assertIn(label, app_page)
+
     def test_clouddrive_contract_is_original_and_generated(self) -> None:
         digest = hashlib.sha256((PLUGIN_DIR / "clouddrive.proto").read_bytes()).hexdigest()
         self.assertEqual(
@@ -532,6 +560,10 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(health["database"]["ready"])
                 self.assertTrue((data_path / "rssallinone.db").is_file())
                 self.assertEqual(plugin.get_sidebar_nav()[0]["nav_key"], "rssallinone")
+                self.assertEqual(
+                    plugin.get_sidebar_nav()[0]["icon"],
+                    "tabler:dragon",
+                )
                 self.assertTrue(saved["success"])
                 self.assertEqual(saved["items"][0]["config"]["qb_category"], "movie")
                 self.assertEqual(

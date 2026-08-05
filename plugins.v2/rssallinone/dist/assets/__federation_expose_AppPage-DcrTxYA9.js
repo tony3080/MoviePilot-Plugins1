@@ -1623,9 +1623,9 @@ let pendingImportPollTimer = null;
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
+  { title: '文件管理', value: 'files', icon: 'mdi-folder-multiple-outline' },
   { title: '入库管理', value: 'library', icon: 'mdi-database-import-outline' },
   { title: 'QB 管理', value: 'qb', icon: 'mdi-download-box-outline' },
-  { title: '文件管理', value: 'files', icon: 'mdi-folder-multiple-outline' },
   { title: 'VT+', value: 'vt', icon: 'mdi-rss-box' },
   { title: '后台任务', value: 'tasks', icon: 'mdi-progress-clock' },
 ];
@@ -1657,19 +1657,64 @@ const siteHeaders = [
 ];
 
 const taskHeaders = [
-  { title: '任务类型', key: 'task_type', minWidth: 160 },
-  { title: '状态', key: 'state', width: 110 },
+  { title: '任务类型', key: 'task_type_text', minWidth: 160 },
+  { title: '状态', key: 'state_text', width: 110 },
   { title: '当前项目', key: 'current_item', minWidth: 180 },
   { title: '进度', key: 'progress_text', width: 120 },
+  { title: '结果 / 错误', key: 'result_text', minWidth: 260 },
   { title: '更新时间', key: 'updated_at', minWidth: 170 },
 ];
+
+const capabilityNameLabels = {
+  moviepilot: 'MoviePilot 本机能力',
+  qbittorrent: 'qBittorrent 下载器',
+  clouddrive: 'CloudDrive2 上传监控',
+  catchup: 'Emby 追更控制',
+  scanner: 'SA 扫库控制',
+  rss_reader: 'RSS 读取与推送',
+  local_inventory: '本地库存检查',
+  hardlink_import: '硬链接入库',
+};
+
+const capabilityPhaseLabels = {
+  current_instance: '当前 MoviePilot 实例',
+  host_runtime: '使用 MoviePilot 内置能力',
+  enqueue: '读取 RSS 并推送 qB',
+  moviepilot_media_type_layout: '按 MoviePilot 类型规划目录',
+  upload_monitoring: '监控 CloudDrive2 秒传状态',
+  connection_pending: '等待连接配置',
+  batch_switch_guard: '入库批次开关保护',
+  refresh_callback_restore: '扫库回调后恢复开关',
+  manual_and_cd2_monitored_queue: '手动及 CD2 监控入库队列',
+  local_os_link: '本机文件系统硬链接',
+  completion_lifecycle: '下载完成回调闭环',
+  runtime_error: '运行异常',
+};
+
+const taskTypeLabels = {
+  rss_run: 'RSS 任务执行',
+  qb_refresh: 'QB 刷新识别',
+  file_batch_recognition: '文件批量识别',
+};
+
+const taskStateLabels = {
+  queued: '排队中',
+  running: '运行中',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
 
 const capabilityRows = computed(() => Object.entries(
   overview.value.capabilities || {},
 ).map(([name, value]) => ({
-  name,
+  key: name,
+  name: capabilityNameLabels[name] || name,
   ready: Boolean(value?.ready),
-  phase: value?.phase || value?.mode || '-',
+  phase: capabilityPhaseLabels[value?.phase || value?.mode]
+    || value?.phase
+    || value?.mode
+    || '-',
 })));
 
 const qbRefreshing = computed(() => ['queued', 'running'].includes(qbTask.value?.state));
@@ -1726,10 +1771,29 @@ function unwrap(response) {
 }
 
 function normalizeTaskRows(items) {
-  return (items || []).map(item => ({
-    ...item,
-    progress_text: `${item.processed || 0}/${item.total || 0}`,
-  }))
+  return (items || []).map(item => {
+    const firstResultError = (item.result?.errors || []).find(error => error?.message)?.message || '';
+    return {
+      ...item,
+      task_type_text: taskTypeLabels[item.task_type] || item.task_type || '未知任务',
+      state_text: taskStateLabels[item.state] || item.state || '未知状态',
+      current_item: item.current_item || '-',
+      progress_text: `${item.processed || 0}/${item.total || 0}`,
+      result_text: item.error_message
+        || firstResultError
+        || (item.state === 'succeeded' ? '执行完成' : '-'),
+    }
+  })
+}
+
+function taskStateColor(state) {
+  return {
+    queued: 'info',
+    running: 'primary',
+    succeeded: 'success',
+    failed: 'error',
+    cancelled: 'warning',
+  }[state] || 'default'
 }
 
 function uniqueTexts(values) {
@@ -2454,7 +2518,7 @@ return (_ctx, _cache) => {
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VIcon, {
-          icon: "mdi-rss",
+          icon: "tabler:dragon",
           color: "primary",
           class: "ms-3 me-3"
         }),
@@ -2657,7 +2721,7 @@ return (_ctx, _cache) => {
                 _createElementVNode("tbody", null, [
                   (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(capabilityRows.value, (item) => {
                     return (_openBlock(), _createElementBlock("tr", {
-                      key: item.name
+                      key: item.key
                     }, [
                       _createElementVNode("td", null, _toDisplayString(item.name), 1),
                       _createElementVNode("td", null, [
@@ -3191,7 +3255,21 @@ return (_ctx, _cache) => {
                         "hide-default-footer": "",
                         class: "data-table",
                         "no-data-text": "暂无后台任务"
-                      }, null, 8, ["items", "loading"])
+                      }, {
+                        "item.state_text": _withCtx(({ item }) => [
+                          _createVNode(_component_VChip, {
+                            color: taskStateColor(item.state),
+                            size: "small",
+                            variant: "tonal"
+                          }, {
+                            default: _withCtx(() => [
+                              _createTextVNode(_toDisplayString(item.state_text), 1)
+                            ]),
+                            _: 2
+                          }, 1032, ["color"])
+                        ]),
+                        _: 1
+                      }, 8, ["items", "loading"])
                     ]))
                   : _createCommentVNode("", true)
     ]),
@@ -3356,6 +3434,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-776d2096"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9926d8bc"]]);
 
 export { AppPage as default };

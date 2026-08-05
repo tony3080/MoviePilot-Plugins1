@@ -46,10 +46,10 @@ class RssAllInOne(_PluginBase):
     plugin_name = "RSS一条龙"
     plugin_desc = "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。"
     plugin_icon = (
-        "https://raw.githubusercontent.com/jxxghp/"
-        "MoviePilot-Plugins/main/icons/rss.png"
+        "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
+        "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.4"
+    plugin_version = "0.13.5"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -173,7 +173,7 @@ class RssAllInOne(_PluginBase):
     def get_sidebar_nav() -> List[Dict[str, Any]]:
         return [{
             "name": "RSS一条龙",
-            "icon": "rss",
+            "icon": "tabler:dragon",
             "path": "/rssallinone",
             "nav_key": "rssallinone",
         }]
