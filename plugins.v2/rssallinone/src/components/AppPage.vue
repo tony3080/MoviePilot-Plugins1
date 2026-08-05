@@ -25,6 +25,7 @@ const siteIdentities = ref([])
 const categoryOptions = ref([])
 const selectedKeys = ref([])
 const itemBusyKey = ref('')
+const batchAction = ref('')
 const identifyDialog = ref(false)
 const identifyItem = ref(null)
 const mediaState = ref('')
@@ -126,6 +127,26 @@ const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => (
   title: task.name || task.id,
   value: String(task.id || ''),
 })).filter(item => item.value))
+const selectedItems = computed(() => rows.value.filter(
+  item => selectedKeys.value.includes(itemKey(item)),
+))
+const selectedStates = computed(() => selectedItems.value.map(item => item.state || ''))
+const selectionAllImported = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => state === 'imported')
+))
+const selectionCanQueue = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => ['identified', 'rolled_back'].includes(state))
+))
+const selectionCanImport = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => ['identified', 'pending', 'rolled_back'].includes(state))
+))
+const selectionCanDeleteSource = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => state !== 'imported')
+))
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0)
   const taskTotal = Number(qbTask.value?.total || 0)
@@ -618,6 +639,60 @@ async function deleteMediaRecord(item) {
   }
 }
 
+const mediaActionLabels = {
+  queue_import: '转待入库',
+  import: '入库',
+  delete_source: '删源',
+  delete_hardlinks: '只删硬链接',
+  delete_both: '删除硬链接和源文件',
+}
+
+async function runMediaAction(action) {
+  if (!selectedItems.value.length || batchAction.value) return
+  const label = mediaActionLabels[action] || action
+  const destructive = ['delete_source', 'delete_hardlinks', 'delete_both'].includes(action)
+  if (destructive) {
+    const warning = action === 'delete_source'
+      ? '将删除选中卡片持久化映射中的源文件，并移除插件记录；不会删除硬链接。'
+      : action === 'delete_hardlinks'
+        ? '只删除本插件实际创建的硬链接；库存已存在或非插件创建的目标会保留。项目将回退到识别列表。'
+        : '将删除本插件实际创建的硬链接和映射中的源文件，并移除插件记录。此操作不可恢复。'
+    if (!window.confirm(`${warning}\n\n确定对 ${selectedItems.value.length} 项执行“${label}”吗？`)) return
+  }
+  batchAction.value = action
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const payload = {
+      action,
+      media_ids: selectedItems.value.map(item => item.id),
+    }
+    if (destructive) payload.confirm = `CONFIRM_${action.toUpperCase()}`
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/action', payload),
+    )
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || `${label}失败`)
+    }
+    if (response.partial) {
+      const failures = (response.results || [])
+        .filter(item => !item.success)
+        .slice(0, 3)
+        .map(item => item.message)
+        .join('；')
+      errorMessage.value = `${response.message}${failures ? `：${failures}` : ''}`
+    } else {
+      successMessage.value = response.message || `${label}完成`
+    }
+    clearSelection()
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || `${label}失败`
+  } finally {
+    batchAction.value = ''
+  }
+}
+
 function inventoryColor(state) {
   return {
     exists: 'success',
@@ -794,6 +869,7 @@ onBeforeUnmount(() => {
               { title: '待入库', value: 'pending' },
               { title: '入库中', value: 'importing' },
               { title: '已入库', value: 'imported' },
+              { title: '已回退', value: 'rolled_back' },
             ]"
             label="状态"
             density="compact"
@@ -830,6 +906,56 @@ onBeforeUnmount(() => {
           <span>已选 {{ selectedKeys.length }} 项</span>
           <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
           <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
+          <VSpacer />
+          <div v-if="!selectionAllImported" class="selection-actions">
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="purple"
+              prepend-icon="mdi-tray-arrow-down"
+              :disabled="!selectionCanQueue || Boolean(batchAction)"
+              :loading="batchAction === 'queue_import'"
+              @click="runMediaAction('queue_import')"
+            >转待入库</VBtn>
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="primary"
+              prepend-icon="mdi-link-variant-plus"
+              :disabled="!selectionCanImport || Boolean(batchAction)"
+              :loading="batchAction === 'import'"
+              @click="runMediaAction('import')"
+            >入库</VBtn>
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="error"
+              prepend-icon="mdi-delete-alert-outline"
+              :disabled="!selectionCanDeleteSource || Boolean(batchAction)"
+              :loading="batchAction === 'delete_source'"
+              @click="runMediaAction('delete_source')"
+            >删源</VBtn>
+          </div>
+          <div v-else class="selection-actions">
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="warning"
+              prepend-icon="mdi-link-variant-off"
+              :disabled="Boolean(batchAction)"
+              :loading="batchAction === 'delete_hardlinks'"
+              @click="runMediaAction('delete_hardlinks')"
+            >只删硬链接</VBtn>
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="error"
+              prepend-icon="mdi-delete-forever-outline"
+              :disabled="Boolean(batchAction)"
+              :loading="batchAction === 'delete_both'"
+              @click="runMediaAction('delete_both')"
+            >删除硬链接和源文件</VBtn>
+          </div>
         </div>
         <div v-if="rows.length" class="poster-grid">
           <MediaPosterCard
@@ -1317,10 +1443,18 @@ onBeforeUnmount(() => {
   display: flex;
   min-height: 38px;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 12px;
   color: rgba(var(--v-theme-on-surface), 0.68);
   font-size: 0.8rem;
+}
+
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .poster-grid {

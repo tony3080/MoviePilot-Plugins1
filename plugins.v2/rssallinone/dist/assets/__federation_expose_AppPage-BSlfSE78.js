@@ -674,6 +674,7 @@ const status = computed$2(() => {
     identified: { text: '已识别', color: 'info' },
     existing: { text: '已存在', color: 'success' },
     imported: { text: '已入库', color: 'success' },
+    rolled_back: { text: '已识别', color: 'info' },
     unidentified: { text: '未识别', color: 'error' },
     pending: { text: '待入库', color: 'purple' },
     pending_import: { text: '待入库', color: 'purple' },
@@ -977,7 +978,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-0f96f48f"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-8c9b15c8"]]);
 
 const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,createElementVNode:_createElementVNode$1,withCtx:_withCtx$1,toDisplayString:_toDisplayString$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1} = await importShared('vue');
 
@@ -1210,36 +1211,44 @@ const _hoisted_10 = {
   class: "selection-bar"
 };
 const _hoisted_11 = {
+  key: 0,
+  class: "selection-actions"
+};
+const _hoisted_12 = {
+  key: 1,
+  class: "selection-actions"
+};
+const _hoisted_13 = {
   key: 1,
   class: "poster-grid"
 };
-const _hoisted_12 = { key: 2 };
-const _hoisted_13 = { class: "qb-toolbar" };
-const _hoisted_14 = { class: "text-caption text-medium-emphasis" };
-const _hoisted_15 = { class: "qb-task-line" };
-const _hoisted_16 = {
+const _hoisted_14 = { key: 2 };
+const _hoisted_15 = { class: "qb-toolbar" };
+const _hoisted_16 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_17 = { class: "qb-task-line" };
+const _hoisted_18 = {
   key: 1,
   class: "text-caption mt-1 text-truncate"
 };
-const _hoisted_17 = {
+const _hoisted_19 = {
   key: 1,
   class: "selection-bar"
 };
-const _hoisted_18 = {
+const _hoisted_20 = {
   key: 2,
   class: "poster-grid"
 };
-const _hoisted_19 = { key: 3 };
-const _hoisted_20 = { key: 4 };
-const _hoisted_21 = { class: "section-count" };
-const _hoisted_22 = { class: "rss-test-summary" };
-const _hoisted_23 = {
+const _hoisted_21 = { key: 3 };
+const _hoisted_22 = { key: 4 };
+const _hoisted_23 = { class: "section-count" };
+const _hoisted_24 = { class: "rss-test-summary" };
+const _hoisted_25 = {
   key: 0,
   class: "rss-feed-title"
 };
-const _hoisted_24 = { class: "rss-feed-url" };
-const _hoisted_25 = { class: "url-cell" };
-const _hoisted_26 = { class: "url-cell" };
+const _hoisted_26 = { class: "rss-feed-url" };
+const _hoisted_27 = { class: "url-cell" };
+const _hoisted_28 = { class: "url-cell" };
 
 const {computed,onBeforeUnmount,onMounted,ref,watch} = await importShared('vue');
 
@@ -1270,6 +1279,7 @@ const siteIdentities = ref([]);
 const categoryOptions = ref([]);
 const selectedKeys = ref([]);
 const itemBusyKey = ref('');
+const batchAction = ref('');
 const identifyDialog = ref(false);
 const identifyItem = ref(null);
 const mediaState = ref('');
@@ -1345,6 +1355,26 @@ const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => (
   title: task.name || task.id,
   value: String(task.id || ''),
 })).filter(item => item.value));
+const selectedItems = computed(() => rows.value.filter(
+  item => selectedKeys.value.includes(itemKey(item)),
+));
+const selectedStates = computed(() => selectedItems.value.map(item => item.state || ''));
+const selectionAllImported = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => state === 'imported')
+));
+const selectionCanQueue = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => ['identified', 'rolled_back'].includes(state))
+));
+const selectionCanImport = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => ['identified', 'pending', 'rolled_back'].includes(state))
+));
+const selectionCanDeleteSource = computed(() => (
+  selectedItems.value.length > 0
+  && selectedStates.value.every(state => state !== 'imported')
+));
 const qbProgress = computed(() => {
   const processed = Number(qbTask.value?.processed || 0);
   const taskTotal = Number(qbTask.value?.total || 0);
@@ -1819,6 +1849,60 @@ async function deleteMediaRecord(item) {
   }
 }
 
+const mediaActionLabels = {
+  queue_import: '转待入库',
+  import: '入库',
+  delete_source: '删源',
+  delete_hardlinks: '只删硬链接',
+  delete_both: '删除硬链接和源文件',
+};
+
+async function runMediaAction(action) {
+  if (!selectedItems.value.length || batchAction.value) return
+  const label = mediaActionLabels[action] || action;
+  const destructive = ['delete_source', 'delete_hardlinks', 'delete_both'].includes(action);
+  if (destructive) {
+    const warning = action === 'delete_source'
+      ? '将删除选中卡片持久化映射中的源文件，并移除插件记录；不会删除硬链接。'
+      : action === 'delete_hardlinks'
+        ? '只删除本插件实际创建的硬链接；库存已存在或非插件创建的目标会保留。项目将回退到识别列表。'
+        : '将删除本插件实际创建的硬链接和映射中的源文件，并移除插件记录。此操作不可恢复。';
+    if (!window.confirm(`${warning}\n\n确定对 ${selectedItems.value.length} 项执行“${label}”吗？`)) return
+  }
+  batchAction.value = action;
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const payload = {
+      action,
+      media_ids: selectedItems.value.map(item => item.id),
+    };
+    if (destructive) payload.confirm = `CONFIRM_${action.toUpperCase()}`;
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/action', payload),
+    );
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || `${label}失败`)
+    }
+    if (response.partial) {
+      const failures = (response.results || [])
+        .filter(item => !item.success)
+        .slice(0, 3)
+        .map(item => item.message)
+        .join('；');
+      errorMessage.value = `${response.message}${failures ? `：${failures}` : ''}`;
+    } else {
+      successMessage.value = response.message || `${label}完成`;
+    }
+    clearSelection();
+    await loadActive();
+  } catch (error) {
+    errorMessage.value = error?.message || `${label}失败`;
+  } finally {
+    batchAction.value = '';
+  }
+}
+
 function rssTestColor(state) {
   return {
     ready: 'success',
@@ -1895,7 +1979,7 @@ return (_ctx, _cache) => {
           class: "ms-3 me-3"
         }),
         _createElementVNode("div", _hoisted_2, [
-          _cache[13] || (_cache[13] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
+          _cache[18] || (_cache[18] = _createElementVNode("div", { class: "text-h6" }, "RSS一条龙", -1)),
           _createElementVNode("div", _hoisted_3, _toDisplayString(overview.value.plugin?.enabled ? '运行已启用' : '运行未启用'), 1)
         ]),
         _createVNode(_component_VSpacer),
@@ -1988,7 +2072,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[14] || (_cache[14] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
+                  _cache[19] || (_cache[19] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "媒体记录", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.media || 0), 1)
                 ]),
                 _: 1
@@ -1998,7 +2082,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[15] || (_cache[15] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
+                  _cache[20] || (_cache[20] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "qB 快照", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.torrents || 0), 1)
                 ]),
                 _: 1
@@ -2008,7 +2092,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[16] || (_cache[16] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
+                  _cache[21] || (_cache[21] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "RSS 历史", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.rss_history || 0), 1)
                 ]),
                 _: 1
@@ -2018,7 +2102,7 @@ return (_ctx, _cache) => {
                 class: "metric-item"
               }, {
                 default: _withCtx(() => [
-                  _cache[17] || (_cache[17] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
+                  _cache[22] || (_cache[22] = _createElementVNode("span", { class: "text-caption text-medium-emphasis" }, "后台任务", -1)),
                   _createElementVNode("strong", null, _toDisplayString(overview.value.counts?.background_tasks || 0), 1)
                 ]),
                 _: 1
@@ -2029,7 +2113,7 @@ return (_ctx, _cache) => {
               class: "capability-table"
             }, {
               default: _withCtx(() => [
-                _cache[18] || (_cache[18] = _createElementVNode("thead", null, [
+                _cache[23] || (_cache[23] = _createElementVNode("thead", null, [
                   _createElementVNode("tr", null, [
                     _createElementVNode("th", null, "能力"),
                     _createElementVNode("th", null, "状态"),
@@ -2077,6 +2161,7 @@ return (_ctx, _cache) => {
               { title: '待入库', value: 'pending' },
               { title: '入库中', value: 'importing' },
               { title: '已入库', value: 'imported' },
+              { title: '已回退', value: 'rolled_back' },
             ],
                   label: "状态",
                   density: "compact",
@@ -2119,7 +2204,7 @@ return (_ctx, _cache) => {
                       variant: "text",
                       onClick: selectAllVisible
                     }, {
-                      default: _withCtx(() => [...(_cache[19] || (_cache[19] = [
+                      default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
                         _createTextVNode("全选当前", -1)
                       ]))]),
                       _: 1
@@ -2130,15 +2215,91 @@ return (_ctx, _cache) => {
                       disabled: !selectedKeys.value.length,
                       onClick: _cache[4] || (_cache[4] = $event => (selectedKeys.value = []))
                     }, {
-                      default: _withCtx(() => [...(_cache[20] || (_cache[20] = [
+                      default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
                         _createTextVNode("取消选择", -1)
                       ]))]),
                       _: 1
-                    }, 8, ["disabled"])
+                    }, 8, ["disabled"]),
+                    _createVNode(_component_VSpacer),
+                    (!selectionAllImported.value)
+                      ? (_openBlock(), _createElementBlock("div", _hoisted_11, [
+                          _createVNode(_component_VBtn, {
+                            size: "small",
+                            variant: "tonal",
+                            color: "purple",
+                            "prepend-icon": "mdi-tray-arrow-down",
+                            disabled: !selectionCanQueue.value || Boolean(batchAction.value),
+                            loading: batchAction.value === 'queue_import',
+                            onClick: _cache[5] || (_cache[5] = $event => (runMediaAction('queue_import')))
+                          }, {
+                            default: _withCtx(() => [...(_cache[26] || (_cache[26] = [
+                              _createTextVNode("转待入库", -1)
+                            ]))]),
+                            _: 1
+                          }, 8, ["disabled", "loading"]),
+                          _createVNode(_component_VBtn, {
+                            size: "small",
+                            variant: "tonal",
+                            color: "primary",
+                            "prepend-icon": "mdi-link-variant-plus",
+                            disabled: !selectionCanImport.value || Boolean(batchAction.value),
+                            loading: batchAction.value === 'import',
+                            onClick: _cache[6] || (_cache[6] = $event => (runMediaAction('import')))
+                          }, {
+                            default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
+                              _createTextVNode("入库", -1)
+                            ]))]),
+                            _: 1
+                          }, 8, ["disabled", "loading"]),
+                          _createVNode(_component_VBtn, {
+                            size: "small",
+                            variant: "tonal",
+                            color: "error",
+                            "prepend-icon": "mdi-delete-alert-outline",
+                            disabled: !selectionCanDeleteSource.value || Boolean(batchAction.value),
+                            loading: batchAction.value === 'delete_source',
+                            onClick: _cache[7] || (_cache[7] = $event => (runMediaAction('delete_source')))
+                          }, {
+                            default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
+                              _createTextVNode("删源", -1)
+                            ]))]),
+                            _: 1
+                          }, 8, ["disabled", "loading"])
+                        ]))
+                      : (_openBlock(), _createElementBlock("div", _hoisted_12, [
+                          _createVNode(_component_VBtn, {
+                            size: "small",
+                            variant: "tonal",
+                            color: "warning",
+                            "prepend-icon": "mdi-link-variant-off",
+                            disabled: Boolean(batchAction.value),
+                            loading: batchAction.value === 'delete_hardlinks',
+                            onClick: _cache[8] || (_cache[8] = $event => (runMediaAction('delete_hardlinks')))
+                          }, {
+                            default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
+                              _createTextVNode("只删硬链接", -1)
+                            ]))]),
+                            _: 1
+                          }, 8, ["disabled", "loading"]),
+                          _createVNode(_component_VBtn, {
+                            size: "small",
+                            variant: "tonal",
+                            color: "error",
+                            "prepend-icon": "mdi-delete-forever-outline",
+                            disabled: Boolean(batchAction.value),
+                            loading: batchAction.value === 'delete_both',
+                            onClick: _cache[9] || (_cache[9] = $event => (runMediaAction('delete_both')))
+                          }, {
+                            default: _withCtx(() => [...(_cache[30] || (_cache[30] = [
+                              _createTextVNode("删除硬链接和源文件", -1)
+                            ]))]),
+                            _: 1
+                          }, 8, ["disabled", "loading"])
+                        ]))
                   ]))
                 : _createCommentVNode("", true),
               (rows.value.length)
-                ? (_openBlock(), _createElementBlock("div", _hoisted_11, [
+                ? (_openBlock(), _createElementBlock("div", _hoisted_13, [
                     (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(rows.value, (item) => {
                       return (_openBlock(), _createBlock(MediaPosterCard, {
                         key: itemKey(item),
@@ -2169,11 +2330,11 @@ return (_ctx, _cache) => {
                 : _createCommentVNode("", true)
             ]))
           : (activeTab.value === 'qb')
-            ? (_openBlock(), _createElementBlock("section", _hoisted_12, [
-                _createElementVNode("div", _hoisted_13, [
+            ? (_openBlock(), _createElementBlock("section", _hoisted_14, [
+                _createElementVNode("div", _hoisted_15, [
                   _createVNode(_component_VSelect, {
                     modelValue: qbDownloader.value,
-                    "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((qbDownloader).value = $event)),
+                    "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((qbDownloader).value = $event)),
                     items: [{ title: '全部节点', value: '' }, ...qbDownloaders.value],
                     label: "QB 节点",
                     density: "compact",
@@ -2182,7 +2343,7 @@ return (_ctx, _cache) => {
                   }, null, 8, ["modelValue", "items"]),
                   _createVNode(_component_VBtnToggle, {
                     modelValue: qbView.value,
-                    "onUpdate:modelValue": _cache[6] || (_cache[6] = $event => ((qbView).value = $event)),
+                    "onUpdate:modelValue": _cache[11] || (_cache[11] = $event => ((qbView).value = $event)),
                     mandatory: "",
                     divided: "",
                     density: "compact",
@@ -2191,19 +2352,19 @@ return (_ctx, _cache) => {
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VBtn, { value: "" }, {
-                        default: _withCtx(() => [...(_cache[21] || (_cache[21] = [
+                        default: _withCtx(() => [...(_cache[31] || (_cache[31] = [
                           _createTextVNode("全部", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "existing" }, {
-                        default: _withCtx(() => [...(_cache[22] || (_cache[22] = [
+                        default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
                           _createTextVNode("已存在", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VBtn, { value: "pending" }, {
-                        default: _withCtx(() => [...(_cache[23] || (_cache[23] = [
+                        default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
                           _createTextVNode("待下载", -1)
                         ]))]),
                         _: 1
@@ -2213,7 +2374,7 @@ return (_ctx, _cache) => {
                   }, 8, ["modelValue"]),
                   _createVNode(_component_VTextField, {
                     modelValue: qbKeyword.value,
-                    "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((qbKeyword).value = $event)),
+                    "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((qbKeyword).value = $event)),
                     label: "搜索名称或 Hash",
                     "prepend-inner-icon": "mdi-magnify",
                     density: "compact",
@@ -2224,7 +2385,7 @@ return (_ctx, _cache) => {
                     "onClick:clear": reloadForFilter
                   }, null, 8, ["modelValue"]),
                   _createVNode(_component_VSpacer),
-                  _createElementVNode("span", _hoisted_14, _toDisplayString(total.value) + " 项", 1),
+                  _createElementVNode("span", _hoisted_16, _toDisplayString(total.value) + " 项", 1),
                   _createVNode(_component_VBtn, {
                     color: "primary",
                     variant: "tonal",
@@ -2233,7 +2394,7 @@ return (_ctx, _cache) => {
                     disabled: qbRefreshing.value || !overview.value.plugin?.enabled,
                     onClick: refreshQb
                   }, {
-                    default: _withCtx(() => [...(_cache[24] || (_cache[24] = [
+                    default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
                       _createTextVNode(" 刷新识别 ", -1)
                     ]))]),
                     _: 1
@@ -2248,7 +2409,7 @@ return (_ctx, _cache) => {
                       class: "qb-task-status"
                     }, {
                       default: _withCtx(() => [
-                        _createElementVNode("div", _hoisted_15, [
+                        _createElementVNode("div", _hoisted_17, [
                           _createElementVNode("span", null, _toDisplayString(qbRefreshing.value ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.value.state}`), 1),
                           _createElementVNode("span", null, _toDisplayString(qbTask.value.processed || 0) + "/" + _toDisplayString(qbTask.value.total || 0), 1)
                         ]),
@@ -2261,21 +2422,21 @@ return (_ctx, _cache) => {
                             }, null, 8, ["model-value"]))
                           : _createCommentVNode("", true),
                         (qbTask.value.current_item)
-                          ? (_openBlock(), _createElementBlock("div", _hoisted_16, _toDisplayString(qbTask.value.current_item), 1))
+                          ? (_openBlock(), _createElementBlock("div", _hoisted_18, _toDisplayString(qbTask.value.current_item), 1))
                           : _createCommentVNode("", true)
                       ]),
                       _: 1
                     }, 8, ["type"]))
                   : _createCommentVNode("", true),
                 (rows.value.length)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_17, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_19, [
                       _createElementVNode("span", null, "已选 " + _toDisplayString(selectedKeys.value.length) + " 项", 1),
                       _createVNode(_component_VBtn, {
                         size: "small",
                         variant: "text",
                         onClick: selectAllVisible
                       }, {
-                        default: _withCtx(() => [...(_cache[25] || (_cache[25] = [
+                        default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
                           _createTextVNode("全选当前", -1)
                         ]))]),
                         _: 1
@@ -2284,9 +2445,9 @@ return (_ctx, _cache) => {
                         size: "small",
                         variant: "text",
                         disabled: !selectedKeys.value.length,
-                        onClick: _cache[8] || (_cache[8] = $event => (selectedKeys.value = []))
+                        onClick: _cache[13] || (_cache[13] = $event => (selectedKeys.value = []))
                       }, {
-                        default: _withCtx(() => [...(_cache[26] || (_cache[26] = [
+                        default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
                           _createTextVNode("取消选择", -1)
                         ]))]),
                         _: 1
@@ -2294,7 +2455,7 @@ return (_ctx, _cache) => {
                     ]))
                   : _createCommentVNode("", true),
                 (rows.value.length)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_18, [
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_20, [
                       (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(rows.value, (item) => {
                         return (_openBlock(), _createBlock(MediaPosterCard, {
                           key: itemKey(item),
@@ -2324,29 +2485,29 @@ return (_ctx, _cache) => {
                   : _createCommentVNode("", true)
               ]))
             : (activeTab.value === 'vt')
-              ? (_openBlock(), _createElementBlock("section", _hoisted_19, [
+              ? (_openBlock(), _createElementBlock("section", _hoisted_21, [
                   _createVNode(_component_VTabs, {
                     modelValue: vtTab.value,
-                    "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((vtTab).value = $event)),
+                    "onUpdate:modelValue": _cache[14] || (_cache[14] = $event => ((vtTab).value = $event)),
                     density: "compact",
                     color: "primary",
                     class: "sub-tabs"
                   }, {
                     default: _withCtx(() => [
                       _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                        default: _withCtx(() => [...(_cache[27] || (_cache[27] = [
+                        default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
                           _createTextVNode("RSS任务", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "rss_history" }, {
-                        default: _withCtx(() => [...(_cache[28] || (_cache[28] = [
+                        default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
                           _createTextVNode("RSS历史", -1)
                         ]))]),
                         _: 1
                       }),
                       _createVNode(_component_VTab, { value: "sites" }, {
-                        default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
+                        default: _withCtx(() => [...(_cache[39] || (_cache[39] = [
                           _createTextVNode("站点访问身份", -1)
                         ]))]),
                         _: 1
@@ -2424,8 +2585,8 @@ return (_ctx, _cache) => {
                         }, 8, ["items", "loading"]))
                 ]))
               : (activeTab.value === 'tasks')
-                ? (_openBlock(), _createElementBlock("section", _hoisted_20, [
-                    _createElementVNode("div", _hoisted_21, _toDisplayString(total.value) + " 个后台任务", 1),
+                ? (_openBlock(), _createElementBlock("section", _hoisted_22, [
+                    _createElementVNode("div", _hoisted_23, _toDisplayString(total.value) + " 个后台任务", 1),
                     _createVNode(_component_VDataTable, {
                       headers: taskHeaders,
                       items: rows.value,
@@ -2442,7 +2603,7 @@ return (_ctx, _cache) => {
     ]),
     _createVNode(ManualIdentifyDialog, {
       modelValue: identifyDialog.value,
-      "onUpdate:modelValue": _cache[10] || (_cache[10] = $event => ((identifyDialog).value = $event)),
+      "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((identifyDialog).value = $event)),
       item: identifyItem.value,
       categories: categoryOptions.value,
       loading: Boolean(itemBusyKey.value),
@@ -2450,7 +2611,7 @@ return (_ctx, _cache) => {
     }, null, 8, ["modelValue", "item", "categories", "loading"]),
     _createVNode(_component_VDialog, {
       modelValue: rssTestDialog.value,
-      "onUpdate:modelValue": _cache[12] || (_cache[12] = $event => ((rssTestDialog).value = $event)),
+      "onUpdate:modelValue": _cache[17] || (_cache[17] = $event => ((rssTestDialog).value = $event)),
       "max-width": "1280"
     }, {
       default: _withCtx(() => [
@@ -2468,7 +2629,7 @@ return (_ctx, _cache) => {
                   icon: "mdi-close",
                   variant: "text",
                   "aria-label": "关闭",
-                  onClick: _cache[11] || (_cache[11] = $event => (rssTestDialog.value = false))
+                  onClick: _cache[16] || (_cache[16] = $event => (rssTestDialog.value = false))
                 })
               ]),
               _: 1
@@ -2480,7 +2641,7 @@ return (_ctx, _cache) => {
                   class: "rss-test-content"
                 }, {
                   default: _withCtx(() => [
-                    _createElementVNode("div", _hoisted_22, [
+                    _createElementVNode("div", _hoisted_24, [
                       _createVNode(_component_VChip, {
                         size: "small",
                         variant: "tonal"
@@ -2553,9 +2714,9 @@ return (_ctx, _cache) => {
                         : _createCommentVNode("", true)
                     ]),
                     (rssTestResult.value.feed?.title)
-                      ? (_openBlock(), _createElementBlock("div", _hoisted_23, _toDisplayString(rssTestResult.value.feed.title), 1))
+                      ? (_openBlock(), _createElementBlock("div", _hoisted_25, _toDisplayString(rssTestResult.value.feed.title), 1))
                       : _createCommentVNode("", true),
-                    _createElementVNode("code", _hoisted_24, _toDisplayString(rssTestResult.value.feed?.final_url_masked), 1),
+                    _createElementVNode("code", _hoisted_26, _toDisplayString(rssTestResult.value.feed?.final_url_masked), 1),
                     _createVNode(_component_VDataTable, {
                       headers: rssTestHeaders,
                       items: rssTestResult.value.items || [],
@@ -2579,10 +2740,10 @@ return (_ctx, _cache) => {
                         }, 1032, ["color"])
                       ]),
                       "item.enclosure_url_masked": _withCtx(({ item }) => [
-                        _createElementVNode("code", _hoisted_25, _toDisplayString(item.enclosure_url_masked || '-'), 1)
+                        _createElementVNode("code", _hoisted_27, _toDisplayString(item.enclosure_url_masked || '-'), 1)
                       ]),
                       "item.detail_url_masked": _withCtx(({ item }) => [
-                        _createElementVNode("code", _hoisted_26, _toDisplayString(item.detail_url_masked || '-'), 1)
+                        _createElementVNode("code", _hoisted_28, _toDisplayString(item.detail_url_masked || '-'), 1)
                       ]),
                       _: 1
                     }, 8, ["items"])
@@ -2601,6 +2762,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f101bcd7"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a2908468"]]);
 
 export { AppPage as default };

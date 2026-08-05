@@ -16,6 +16,7 @@ from .capabilities import runtime_capabilities
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
+from .media_actions import MediaActionError, MediaActionService
 from .qb_sync import (
     MoviePilotQbGateway,
     QB_TASK_TYPE,
@@ -38,7 +39,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.9.2"
+    plugin_version = "0.10.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -67,6 +68,7 @@ class RssAllInOne(_PluginBase):
         self._qb_refresh_lock = threading.Lock()
         self._qb_delete_lock = threading.Lock()
         self._rss_run_lock = threading.Lock()
+        self._media_action_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
@@ -204,6 +206,7 @@ class RssAllInOne(_PluginBase):
             self._api("/qb/item/identify", self.api_qb_item_identify, "POST", "手动识别单个 QB 任务"),
             self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
+            self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
@@ -445,6 +448,44 @@ class RssAllInOne(_PluginBase):
             "success": deleted,
             "message": "媒体记录已删除" if deleted else "媒体记录不存在",
         }
+
+    def api_media_action(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        action = str(data.get("action") or "").strip().casefold()
+        media_ids = data.get("media_ids") or []
+        if isinstance(media_ids, str):
+            media_ids = [media_ids]
+        if action in MediaActionService.DESTRUCTIVE_ACTIONS:
+            expected = f"CONFIRM_{action.upper()}"
+            if str(data.get("confirm") or "").strip() != expected:
+                return {"success": False, "message": "高风险操作缺少确认标记"}
+        if not self._media_action_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有入库管理操作正在执行"}
+        try:
+            result = MediaActionService(self._require_store()).execute(action, media_ids)
+            if result["success"]:
+                result["message"] = f"操作完成：成功 {result['succeeded']} 项"
+            elif result["partial"]:
+                result["message"] = (
+                    f"操作部分完成：成功 {result['succeeded']} 项，"
+                    f"失败 {result['failed']} 项"
+                )
+            else:
+                first_error = next(
+                    (item.get("message") for item in result["results"] if not item["success"]),
+                    "操作失败",
+                )
+                result["message"] = str(first_error)
+            return result
+        except MediaActionError as error:
+            return {"success": False, "message": str(error)}
+        except Exception as error:
+            logger.error(f"RSS一条龙：入库管理操作失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
+        finally:
+            self._media_action_lock.release()
 
     def api_categories(self) -> Dict[str, Any]:
         categories = set(self._library_layout.category_options())
@@ -857,6 +898,13 @@ class RssAllInOne(_PluginBase):
             "qb_write": True,
         }
         capabilities["local_inventory"] = self._library_layout.capability()
+        capabilities["hardlink_import"] = {
+            "ready": True,
+            "phase": "library_actions",
+            "mode": "local_os_link",
+            "inventory_existing_files": "skip",
+            "clouddrive_api": False,
+        }
         try:
             downloaders = MoviePilotQbGateway.list_downloaders()
             scope = self._qb_scope()

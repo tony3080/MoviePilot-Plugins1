@@ -63,6 +63,7 @@ const status = computed(() => {
     identified: { text: '已识别', color: 'info' },
     existing: { text: '已存在', color: 'success' },
     imported: { text: '已入库', color: 'success' },
+    rolled_back: { text: '已识别', color: 'info' },
     unidentified: { text: '未识别', color: 'error' },
     pending: { text: '待入库', color: 'purple' },
     pending_import: { text: '待入库', color: 'purple' },
