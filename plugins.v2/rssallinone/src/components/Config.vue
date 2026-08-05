@@ -36,7 +36,6 @@ const defaultRoutes = [
 const defaults = {
   enabled: false,
   database_filename: 'rssallinone.db',
-  qb_refresh_cron: '*/10 * * * *',
   inventory_root: '/SSD/云盘/strm/影视库',
   source_routes: defaultRoutes,
   cd2_grpc_addr: '',
@@ -160,14 +159,7 @@ onMounted(() => {
               persistent-hint
             />
           </VCol>
-          <VCol cols="12" md="4">
-            <VTextField
-              v-model="config.qb_refresh_cron"
-              label="QB 只读刷新 CRON"
-              placeholder="*/10 * * * *"
-            />
-          </VCol>
-          <VCol cols="12" md="8">
+          <VCol cols="12">
             <VTextField
               v-model="config.inventory_root"
               label="最终媒体库根目录"

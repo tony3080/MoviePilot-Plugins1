@@ -1,0 +1,82 @@
+#!/bin/sh
+# qBittorrent "Run external program on torrent finished" example:
+# /bin/sh /config/qb_completed_notify.sh "%I" "%L" "%N" "%G"
+# Arguments: 1=hash 2=category 3=name 4=tags
+
+set -u
+
+LOG_FILE="/config/qb_notify.log"
+V1_CALLBACK_URL="http://192.168.110.31:18501/api/qb/callback/completed"
+V1_NODE="QBSSD"
+V1_NODE_URL="http://192.168.110.31:8081"
+V1_SECRET="CHANGE_ME"
+
+MP_BASE_URL="http://192.168.110.31:3033"
+MP_API_TOKEN="CHANGE_ME"
+PLUGIN_CALLBACK_URL="${MP_BASE_URL}/api/v1/plugin/RssAllInOne/qb/completed"
+
+log() {
+  printf '%s [qb_notify] %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"
+}
+
+HASH="${1:-}"
+CATEGORY="${2:-}"
+NAME="${3:-}"
+TAGS="${4:-}"
+
+if [ -z "$HASH" ]; then
+  log "ERROR missing hash"
+  exit 2
+fi
+
+if [ "$V1_SECRET" = "CHANGE_ME" ] || [ "$MP_API_TOKEN" = "CHANGE_ME" ]; then
+  log "ERROR configure V1_SECRET and MP_API_TOKEN first"
+  exit 2
+fi
+
+log "START hash=$HASH category=$CATEGORY name=$NAME tags=$TAGS"
+
+V1_OK=0
+if V1_RESPONSE="$(curl -fsS --retry 3 --retry-delay 3 --retry-connrefused -G \
+  "$V1_CALLBACK_URL" \
+  --data-urlencode "node=$V1_NODE" \
+  --data-urlencode "node_url=$V1_NODE_URL" \
+  --data-urlencode "hash=$HASH" \
+  --data-urlencode "category=$CATEGORY" \
+  --data-urlencode "name=$NAME" \
+  --data-urlencode "secret=$V1_SECRET" 2>&1)"
+then
+  V1_OK=1
+  log "V1_CALLBACK ok response=$V1_RESPONSE"
+else
+  V1_RC=$?
+  log "V1_CALLBACK fail rc=$V1_RC response=$V1_RESPONSE"
+fi
+
+# Give qB a moment to persist its final state before the plugin reads the torrent.
+sleep 2
+
+PLUGIN_OK=0
+PLUGIN_RESPONSE="$(curl -fsS --retry 3 --retry-delay 3 --retry-connrefused \
+  -X POST "$PLUGIN_CALLBACK_URL" \
+  -H "Authorization: Bearer $MP_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data "{\"info_hash\":\"$HASH\"}" 2>&1)"
+PLUGIN_RC=$?
+
+if [ "$PLUGIN_RC" -eq 0 ] && printf '%s' "$PLUGIN_RESPONSE" \
+  | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'
+then
+  PLUGIN_OK=1
+  log "RSSALLINONE_CALLBACK ok response=$PLUGIN_RESPONSE"
+else
+  log "RSSALLINONE_CALLBACK fail rc=$PLUGIN_RC response=$PLUGIN_RESPONSE"
+fi
+
+if [ "$V1_OK" -eq 1 ] && [ "$PLUGIN_OK" -eq 1 ]; then
+  log "DONE"
+  exit 0
+fi
+
+log "DONE_WITH_ERRORS v1_ok=$V1_OK rssallinone_ok=$PLUGIN_OK"
+exit 1

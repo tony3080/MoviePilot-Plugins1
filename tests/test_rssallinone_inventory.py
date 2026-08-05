@@ -527,6 +527,8 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
         realtime_hardlink_enabled=False,
         realtime_source_root="",
         realtime_link_root="",
+        delete_after_minutes=0,
+        delete_files=False,
     ):
         now = database.utc_now()
         connection = sqlite3.connect(store.path)
@@ -547,6 +549,8 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                         "realtime_hardlink_enabled": realtime_hardlink_enabled,
                         "realtime_source_root": realtime_source_root,
                         "realtime_link_root": realtime_link_root,
+                        "delete_after_minutes": delete_after_minutes,
+                        "delete_files": delete_files,
                     }, ensure_ascii=False),
                     now,
                     now,
@@ -996,6 +1000,82 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertIsNone(snapshot)
             self.assertEqual(store.list_torrents()["total"], 0)
             self.assertEqual(store.list_media()["total"], 0)
+
+    def test_completed_torrent_schedules_qb_source_deletion_by_hash(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "CHDDELETE",
+                    "title": "CHD.Movie.2026",
+                    "state": "pausedUP",
+                    "category": "chd",
+                    "content_path": "/SSD/QB目录/REMUX/CHD/CHD.Movie.2026.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_name="彩虹岛",
+                category="chd",
+                import_enabled=False,
+                delete_after_minutes=120,
+                delete_files=True,
+            )
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-chddelete",
+                "content_key": "qb-main:chddelete",
+                "title": "CHD.Movie.2026",
+                "status": "queued",
+                "payload": {"info_hash": "chddelete"},
+            })
+            store.create_background_task("chd-delete", qb_sync.QB_TASK_TYPE)
+
+            qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "chd-delete"
+            )
+
+            jobs = store.list_qb_delete_jobs()
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0]["downloader_id"], "qb-main")
+            self.assertEqual(jobs[0]["info_hash"], "chddelete")
+            self.assertTrue(jobs[0]["delete_files"])
+            self.assertEqual(
+                jobs[0]["source_path"],
+                "/SSD/QB目录/REMUX/CHD/CHD.Movie.2026.mkv",
+            )
+            self.assertEqual(
+                jobs[0]["details"]["deletion_scope"],
+                "qb_task_and_save_path",
+            )
+            self.assertNotIn("CHDlink", repr(jobs[0]))
 
     def test_completed_torrent_with_import_enabled_moves_to_library_only(self) -> None:
         class Gateway:

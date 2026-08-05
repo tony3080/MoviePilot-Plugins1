@@ -7,6 +7,7 @@ import hashlib
 import os
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -70,6 +71,8 @@ class RssTaskQbRule:
     realtime_hardlink_enabled: bool
     realtime_source_root: str
     realtime_link_root: str
+    delete_after_minutes: int
+    delete_files: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -82,6 +85,8 @@ class RssTaskQbRule:
             "realtime_hardlink_enabled": self.realtime_hardlink_enabled,
             "realtime_source_root": self.realtime_source_root,
             "realtime_link_root": self.realtime_link_root,
+            "delete_after_minutes": self.delete_after_minutes,
+            "delete_files": self.delete_files,
         }
 
 
@@ -141,6 +146,10 @@ class RssTaskQbScope:
                 realtime_link_root=str(
                     config.get("realtime_link_root") or ""
                 ).strip(),
+                delete_after_minutes=max(
+                    0, int(config.get("delete_after_minutes") or 0)
+                ),
+                delete_files=_as_bool(config.get("delete_files", False)),
             ))
         return cls(rules, ignored)
 
@@ -186,6 +195,8 @@ class RssTaskQbScope:
                 rule.realtime_hardlink_enabled,
                 rule.realtime_source_root,
                 rule.realtime_link_root,
+                rule.delete_after_minutes,
+                rule.delete_files,
             )
             for rule in matches
         }) == 1:
@@ -261,6 +272,18 @@ class MoviePilotQbGateway:
         if files is None:
             raise RuntimeError(f"读取 qBittorrent 文件清单失败：{downloader}/{info_hash}")
         return list(files)
+
+    @staticmethod
+    def remove_torrent(
+        downloader: str, info_hash: str, delete_files: bool
+    ) -> bool:
+        from app.chain.download import DownloadChain
+
+        return bool(DownloadChain().remove_torrents(
+            hashs=[str(info_hash or "").strip().lower()],
+            downloader=str(downloader or "").strip(),
+            delete_file=bool(delete_files),
+        ))
 
     @staticmethod
     def torrent_file_dict(file_item: Any) -> Dict[str, Any]:
@@ -718,7 +741,7 @@ class QbSyncService:
                     continue
                 if scope.matches(downloader.name, raw.get("category") or ""):
                     return downloader.name
-        raise RuntimeError("已配置的 RSS qB 任务中没有找到该 info-hash")
+        raise LookupError("已配置的 RSS qB 任务中没有找到该 info-hash")
 
     def refresh_item(
         self,
@@ -935,6 +958,46 @@ class QbSyncService:
         )
         return result
 
+    def _schedule_qb_delete(
+        self,
+        *,
+        task_rule: Optional[RssTaskQbRule],
+        downloader_id: str,
+        info_hash: str,
+        source_path: str,
+        completed: bool,
+    ) -> Dict[str, Any]:
+        if (
+            not completed
+            or not task_rule
+            or task_rule.delete_after_minutes <= 0
+        ):
+            return {}
+        due_at = (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=task_rule.delete_after_minutes)
+        ).isoformat(timespec="seconds")
+        job = self.store.schedule_qb_delete(
+            task_id=task_rule.task_id,
+            task_name=task_rule.task_name,
+            downloader_id=downloader_id,
+            info_hash=info_hash,
+            source_path=source_path,
+            delete_files=task_rule.delete_files,
+            due_at=due_at,
+            details={
+                "source_kind": "qb_download",
+                "deletion_scope": "qb_task_and_save_path",
+            },
+        )
+        return {
+            "job_id": str(job.get("id") or ""),
+            "due_at": str(job.get("due_at") or due_at),
+            "delete_files": bool(job.get("delete_files")),
+            "source_path": str(job.get("source_path") or source_path),
+            "deletion_scope": "qb_task_and_save_path",
+        }
+
     def _sync_one(
         self,
         *,
@@ -972,6 +1035,13 @@ class QbSyncService:
             raw,
             existing.get("source_url_masked") or "",
         )
+        qb_delete = self._schedule_qb_delete(
+            task_rule=task_rule,
+            downloader_id=downloader.name,
+            info_hash=info_hash,
+            source_path=content_path,
+            completed=torrent_completed,
+        )
         if torrent_completed and not import_enabled:
             existing_media = self.store.get_media_item(media_id) or {}
             if str(existing_media.get("state") or "") not in {
@@ -984,6 +1054,7 @@ class QbSyncService:
                 downloader_id=downloader.name,
                 info_hash=info_hash,
                 imported=False,
+                qb_delete=qb_delete,
             )
             return "recognized"
         stored_override = existing_details.get("manual_override") or {}
@@ -1185,6 +1256,12 @@ class QbSyncService:
                     task_rule and task_rule.realtime_hardlink_enabled
                 ),
             },
+            "source_identity": {
+                "kind": "qb_download",
+                "source_path": content_path,
+                "deletion_scope": "qb_task_and_save_path",
+            },
+            "qb_delete": qb_delete,
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -1274,6 +1351,7 @@ class QbSyncService:
                 info_hash=info_hash,
                 imported=create_candidate,
                 realtime_hardlink=realtime_hardlink,
+                qb_delete=qb_delete,
             )
         else:
             self.store.upsert_torrent_snapshot({

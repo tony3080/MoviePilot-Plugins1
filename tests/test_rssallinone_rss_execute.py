@@ -31,6 +31,7 @@ def load_package_module(name):
 
 database = load_package_module("database")
 rss_feed = load_package_module("rss_feed")
+rss_site_labels = load_package_module("rss_site_labels")
 rss_execute = load_package_module("rss_execute")
 
 
@@ -138,12 +139,21 @@ class RssExecutionServiceTest(unittest.TestCase):
     def tearDown(self):
         self.tempdir.cleanup()
 
-    def _run(self, gateway, renamer=None, **config):
+    def _run(
+        self,
+        gateway,
+        renamer=None,
+        label_service=None,
+        on_source_ready=None,
+        **config,
+    ):
         background_id = config.pop("background_id", "run-1")
         service = rss_execute.RssExecutionService(
             self.store,
             gateway=gateway,
             renamer=renamer,
+            label_service=label_service,
+            on_source_ready=on_source_ready,
             feed_fetcher=feed_fetcher,
             sleeper=gateway.sleeps.append,
         )
@@ -225,6 +235,118 @@ class RssExecutionServiceTest(unittest.TestCase):
         row = self.store.list_rss_history()["items"][0]
         self.assertEqual(row["status"], "queued_warning")
         self.assertIn("rename rejected", row["reason"])
+
+    def test_qb_card_is_created_only_after_all_source_name_stages(self):
+        events = []
+
+        class OrderedRenamer(FakeRenamer):
+            def apply(self, server, info_hash, **kwargs):
+                events.append(
+                    "marker_rename"
+                    if kwargs.get("add_cn") or kwargs.get("add_fx")
+                    else "base_rename"
+                )
+                self.calls.append((server, info_hash, kwargs))
+                return {
+                    "status": "renamed",
+                    "final_files": [{
+                        "index": 0,
+                        "name": (
+                            "[演示电影].Demo.Movie-国配-特效.mkv"
+                            if kwargs.get("add_cn") or kwargs.get("add_fx")
+                            else "[演示电影].Demo.Movie.mkv"
+                        ),
+                    }],
+                }
+
+        class Labels:
+            @staticmethod
+            def detect(**_kwargs):
+                events.append("site_labels")
+                return {
+                    "status": "matched",
+                    "mandarin": True,
+                    "effects": True,
+                }
+
+        def source_ready(downloader, info_hash):
+            history = self.store.latest_rss_history_for_torrent(
+                downloader, info_hash
+            )
+            self.assertEqual(history["payload"]["site_labels"]["status"], "matched")
+            self.assertEqual(
+                history["payload"]["source_rename"]["final_files"][0]["name"],
+                "[演示电影].Demo.Movie-国配-特效.mkv",
+            )
+            events.append("mp_recognition")
+
+        result = self._run(
+            FakeGateway(),
+            renamer=OrderedRenamer(),
+            label_service=Labels(),
+            on_source_ready=source_ready,
+            rename_enabled=True,
+            add_chinese_title=True,
+            recognize_cn=True,
+            recognize_fx=True,
+        )
+
+        self.assertEqual(events, [
+            "base_rename", "site_labels", "marker_rename", "mp_recognition",
+        ])
+        self.assertEqual(result["qb_recognized"], 1)
+        self.assertEqual(result["qb_recognition_deferred"], 0)
+
+    def test_failed_source_rename_defers_initial_qb_card(self):
+        callbacks = []
+        result = self._run(
+            FakeGateway(),
+            renamer=FakeRenamer({"status": "failed", "error": "rename rejected"}),
+            on_source_ready=lambda *_args: callbacks.append(True),
+            rename_enabled=True,
+        )
+
+        self.assertEqual(callbacks, [])
+        self.assertEqual(result["qb_recognition_deferred"], 1)
+
+
+class SiteLabelParsingTest(unittest.TestCase):
+    def test_ubits_only_reads_the_tags_row(self):
+        page = """
+          <table><tr><td>标签</td><td>
+            <a href="tags.php?tag_id5=1"><span class="tag">国语</span></a>
+            <span class="tag">特效字幕</span>
+          </td></tr></table>
+          <div class="recommend"><span class="tag">无关国语</span></div>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_ubits_labels(page, ["国语", "国配"]),
+            (True, True),
+        )
+
+    def test_chd_multiple_results_require_exact_rss_torrent_id(self):
+        page = """
+          <tr><td><a href="details.php?id=41">A</a><div class="tag-gy">国语</div></td></tr>
+          <tr><td><a href="details.php?id=42">B</a><div class="tag-txsub">特效</div></td></tr>
+        """
+        block, selected = rss_site_labels.select_exact_result(page, "42")
+        self.assertEqual(selected, "42")
+        self.assertEqual(
+            rss_site_labels.parse_chd_labels(block, ["国语", "国配"]),
+            (False, True),
+        )
+        with self.assertRaises(rss_site_labels.SiteLabelError):
+            rss_site_labels.select_exact_result(page, "")
+
+    def test_hdsky_optiontag_text_controls_both_labels(self):
+        block = """
+          <span class="optiontag selected">国配</span>
+          <span class="optiontag">特效字幕</span>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_hdsky_labels(block, ["国语", "国配"]),
+            (True, True),
+        )
 
 
 class MoviePilotRssGatewayTest(unittest.TestCase):

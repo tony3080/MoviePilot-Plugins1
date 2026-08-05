@@ -1,41 +1,41 @@
 
-.rss-editor[data-v-14f2eb45] {
+.rss-editor[data-v-fa67f210] {
   min-width: 0;
 }
-.rss-toolbar[data-v-14f2eb45],
-.task-title[data-v-14f2eb45] {
+.rss-toolbar[data-v-fa67f210],
+.task-title[data-v-fa67f210] {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 10px;
 }
-.rss-toolbar[data-v-14f2eb45] {
+.rss-toolbar[data-v-fa67f210] {
   margin-bottom: 12px;
 }
-.task-title[data-v-14f2eb45] {
+.task-title[data-v-fa67f210] {
   width: 100%;
 }
-.task-title strong[data-v-14f2eb45] {
+.task-title strong[data-v-fa67f210] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.switch-grid[data-v-14f2eb45] {
+.switch-grid[data-v-fa67f210] {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px 16px;
 }
 @media (max-width: 900px) {
-.rss-toolbar[data-v-14f2eb45] {
+.rss-toolbar[data-v-fa67f210] {
     flex-wrap: wrap;
 }
-.switch-grid[data-v-14f2eb45] {
+.switch-grid[data-v-fa67f210] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 }
 @media (max-width: 600px) {
-.switch-grid[data-v-14f2eb45] {
+.switch-grid[data-v-fa67f210] {
     grid-template-columns: 1fr;
 }
 }

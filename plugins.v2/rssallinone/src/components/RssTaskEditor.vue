@@ -62,7 +62,6 @@ function defaultConfig() {
     qb_category: '',
     name_contains: '',
     start_cron: '*/5 * * * *',
-    fallback_cron: '*/10 * * * *',
     delete_after_minutes: 0,
     upload_limit_kbps: 0,
     path_mappings: '',
@@ -260,14 +259,11 @@ watch(
             <VCol cols="12" md="4">
               <VTextField v-model="task.config.save_path" label="保存路径" />
             </VCol>
-            <VCol cols="12" md="4">
+            <VCol cols="12" md="6">
               <VTextField v-model="task.config.rss_cron" label="RSS周期 (CRON)" />
             </VCol>
-            <VCol cols="12" md="4">
+            <VCol cols="12" md="6">
               <VTextField v-model="task.config.start_cron" label="开始任务 CRON" />
-            </VCol>
-            <VCol cols="12" md="4">
-              <VTextField v-model="task.config.fallback_cron" label="轮询兜底 CRON" />
             </VCol>
             <VCol cols="12" md="6">
               <VTextField v-model="task.config.name_contains" label="限制条件 (名称包含)" />

@@ -22,6 +22,7 @@ from .rss_feed import (
     validate_feed_url,
 )
 from .rss_rename import QbSourceRenameService
+from .rss_site_labels import SiteHttpError, SiteLabelService
 
 
 RSS_RUN_TASK_TYPE = "rss_run"
@@ -39,6 +40,9 @@ class RssExecutionCancelled(RuntimeError):
 
 @dataclass(frozen=True)
 class SiteAccess:
+    site_key: str = ""
+    site_name: str = ""
+    site_url: str = ""
     cookie: str = ""
     user_agent: str = ""
     referer: str = ""
@@ -95,12 +99,39 @@ class MoviePilotRssGateway:
             raise RssExecutionError(f"MoviePilot 站点身份不存在：{raw_id}")
         proxies = settings.PROXY if bool(getattr(site, "proxy", False)) else None
         return SiteAccess(
+            site_key=str(getattr(site, "site_key", "") or ""),
+            site_name=str(getattr(site, "name", "") or ""),
+            site_url=str(getattr(site, "url", "") or ""),
             cookie=str(getattr(site, "cookie", "") or ""),
             user_agent=str(getattr(site, "ua", "") or user_agent),
             referer=str(getattr(site, "url", "") or ""),
             proxies=proxies,
             timeout=max(5, int(getattr(site, "timeout", 20) or 20)),
         )
+
+    @staticmethod
+    def fetch_site_html(url: str, access: SiteAccess) -> str:
+        from app.utils.http import RequestUtils
+
+        try:
+            response = RequestUtils(
+                ua=access.user_agent or None,
+                cookies=access.cookie or None,
+                proxies=access.proxies,
+                timeout=access.timeout,
+                referer=access.referer or access.site_url or None,
+                accept_type="text/html,application/xhtml+xml,*/*",
+            ).get_res(url)
+        except Exception as error:
+            raise RssExecutionError(
+                f"站点标签请求失败：{error.__class__.__name__}"
+            ) from error
+        if not response:
+            raise RssExecutionError("站点标签请求无响应")
+        status_code = int(getattr(response, "status_code", 200) or 0)
+        if status_code != 200:
+            raise SiteHttpError(status_code)
+        return str(getattr(response, "text", "") or "")
 
     @staticmethod
     def fetch_torrent(url: str, access: SiteAccess) -> bytes:
@@ -292,15 +323,24 @@ class RssExecutionService:
         renamer: Optional[QbSourceRenameService] = None,
         feed_fetcher: Any = None,
         sleeper: Any = None,
+        on_enqueued: Any = None,
+        on_source_ready: Any = None,
+        label_service: Any = None,
         logger: Any = None,
     ) -> None:
         self.store = store
         self.gateway = gateway or MoviePilotRssGateway()
         self.feed_fetcher = feed_fetcher or fetch_feed
         self.sleeper = sleeper or time.sleep
+        self.on_source_ready = on_source_ready or on_enqueued
         self.renamer = renamer or QbSourceRenameService(
             self.gateway,
             sleeper=self.sleeper,
+        )
+        self.label_service = label_service or SiteLabelService(
+            self.gateway,
+            sleeper=self.sleeper,
+            logger=logger,
         )
         self.logger = logger
 
@@ -356,6 +396,9 @@ class RssExecutionService:
             "duplicate_source": 0,
             "invalid": 0,
             "failed": 0,
+            "qb_recognized": 0,
+            "qb_recognition_failed": 0,
+            "qb_recognition_deferred": 0,
             "errors": [],
         }
         self.store.update_background_task(
@@ -428,10 +471,37 @@ class RssExecutionService:
                             "info_hash": outcome.get("info_hash") or "",
                             "mode": outcome.get("mode") or "",
                             "source_rename": outcome.get("source_rename") or {},
+                            "site_labels": outcome.get("site_labels") or {},
                         },
                     )
                     if source_key:
                         existing_sources.add(source_key)
+                    info_hash = str(outcome.get("info_hash") or "").strip().lower()
+                    if (
+                        self.on_source_ready
+                        and info_hash
+                        and outcome_status in {
+                            "queued", "queued_warning", "existing"
+                        }
+                    ):
+                        source_rename = outcome.get("source_rename") or {}
+                        if source_rename.get("status") == "failed":
+                            result["qb_recognition_deferred"] += 1
+                        else:
+                            try:
+                                self.on_source_ready(downloader, info_hash)
+                                result["qb_recognized"] += 1
+                            except Exception as error:
+                                result["qb_recognition_failed"] += 1
+                                result["errors"].append({
+                                    "title": title,
+                                    "message": f"QB 初始识别失败：{str(error)[:400]}",
+                                })
+                                self._log(
+                                    "error",
+                                    f"RSS一条龙：QB 初始识别失败 "
+                                    f"{downloader}/{info_hash}：{error}",
+                                )
                     succeeded += 1
                 except RssExecutionCancelled:
                     self.store.finish_background_task(
@@ -560,13 +630,41 @@ class RssExecutionService:
                         info_hash,
                         int(config.get("upload_limit_kbps") or 0),
                     )
-                    source_rename = self.renamer.apply(
+                    base_rename = self.renamer.apply(
                         server,
                         info_hash,
                         rss_title=str(prepared.get("title") or entry.title or ""),
                         rename_enabled=bool(config.get("rename_enabled")),
                         rename_rules=config.get("rename_rules") or "",
                         add_chinese_title=bool(config.get("add_chinese_title")),
+                    )
+                    site_labels: Dict[str, Any] = {}
+                    marker_rename: Dict[str, Any] = {}
+                    if base_rename.get("status") != "failed":
+                        site_labels = self.label_service.detect(
+                            access=access,
+                            title=str(prepared.get("title") or entry.title or ""),
+                            detail_url=str(entry.detail_url or ""),
+                            torrent_id=str(prepared.get("torrent_id") or ""),
+                            cn_keywords=config.get("cn_keywords") or "",
+                            recognize_cn=bool(config.get("recognize_cn")),
+                            recognize_fx=bool(config.get("recognize_fx")),
+                        )
+                        if site_labels.get("mandarin") or site_labels.get("effects"):
+                            marker_rename = self.renamer.apply(
+                                server,
+                                info_hash,
+                                rss_title="",
+                                rename_enabled=False,
+                                rename_rules="",
+                                add_chinese_title=False,
+                                add_cn=bool(site_labels.get("mandarin")),
+                                add_fx=bool(site_labels.get("effects")),
+                            )
+                    source_rename = _merge_source_processing(
+                        base_rename,
+                        site_labels,
+                        marker_rename,
                     )
                     warnings = []
                     if not limit_ok:
@@ -575,6 +673,11 @@ class RssExecutionService:
                         warnings.append(
                             "qB 源名称处理失败："
                             f"{source_rename.get('error') or '未知错误'}"
+                        )
+                    if site_labels.get("status") == "failed":
+                        warnings.append(
+                            "站点标签识别已跳过："
+                            f"{site_labels.get('reason') or '未知错误'}"
                         )
                     status = "queued_warning" if warnings else "queued"
                     reason = "种子已加入 qBittorrent"
@@ -587,6 +690,7 @@ class RssExecutionService:
                         "info_hash": info_hash,
                         "mode": mode,
                         "source_rename": source_rename,
+                        "site_labels": site_labels,
                     }
                 errors.append(outcome.reason or f"{mode} 模式添加失败")
                 existing_hash = self.gateway.find_existing(server, hash_candidates)
@@ -640,6 +744,45 @@ class RssExecutionService:
         callback = getattr(self.logger, level, None) if self.logger else None
         if callable(callback):
             callback(message)
+
+
+def _merge_source_processing(
+    base_rename: Dict[str, Any],
+    site_labels: Dict[str, Any],
+    marker_rename: Dict[str, Any],
+) -> Dict[str, Any]:
+    base = dict(base_rename or {})
+    markers = dict(marker_rename or {})
+    statuses = [
+        str(item.get("status") or "")
+        for item in (base, markers)
+        if item
+    ]
+    status = (
+        "failed" if "failed" in statuses
+        else "renamed" if "renamed" in statuses
+        else "unchanged" if "unchanged" in statuses
+        else "skipped"
+    )
+    errors = [
+        str(item.get("error") or "").strip()
+        for item in (base, markers)
+        if str(item.get("error") or "").strip()
+    ]
+    final_files = (
+        markers.get("final_files")
+        if markers.get("final_files") is not None
+        else base.get("final_files") or []
+    )
+    return {
+        **base,
+        "status": status,
+        "error": "；".join(errors)[:500],
+        "final_files": list(final_files or []),
+        "base_rename": base,
+        "site_labels": dict(site_labels or {}),
+        "marker_rename": markers,
+    }
 
 
 def torrent_hash_candidates(content: bytes) -> List[str]:

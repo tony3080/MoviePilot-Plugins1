@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.9.1": "RSS 入队后按普通改名、中文标题、站点国语/特效标签、标记归位的顺序完成 qB 源名称处理，再触发 MoviePilot 识别生成 QB 卡片；移除周期性 QB 全量刷新，改用完成回调闭环推进，并按下载器与 info-hash 延时删除 qB 任务及其保存路径文件",
       "v0.9.0": "QB 管理改为仅显示当前未完成任务，完成后按 RSS 入库开关转入入库管理或直接移除；新增 qB 完成回调、任务级实时硬链接与源路径继承、入库管理按 RSS 任务多选筛选，以及卡片数据清理和完成标记重置接口",
       "v0.8.2": "改用 V1 固定色值渲染状态、季、分辨率、分类、自定义和大小标签；固定选中边框避免标签跳行，长标签按 @ 换行，增强 P 来源回退；仅在 RSS 任务勾选入库且下载完成后生成入库候选，切换页面或筛选时清空选择",
       "v0.8.1": "强化卡片选中描边、标签和文件大小底色，压缩标题区间距，移除 QB 分类与节点标签；刷新 qB 项目时按下载器和 info-hash 关联 RSS 来源详情页并显示 P 按钮",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import uuid
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,7 +38,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.9.0"
+    plugin_version = "0.9.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -46,7 +47,6 @@ class RssAllInOne(_PluginBase):
 
     _enabled = False
     _database_filename = "rssallinone.db"
-    _qb_refresh_cron = "*/10 * * * *"
     _rss_enabled = True
     _inventory_root = ""
     _cd2_grpc_addr = ""
@@ -65,6 +65,7 @@ class RssAllInOne(_PluginBase):
         self._store: Optional[SQLiteStore] = None
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
+        self._qb_delete_lock = threading.Lock()
         self._rss_run_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
@@ -81,9 +82,6 @@ class RssAllInOne(_PluginBase):
         self._database_filename = self._safe_database_filename(
             config.get("database_filename") or "rssallinone.db"
         )
-        self._qb_refresh_cron = str(
-            config.get("qb_refresh_cron") or "*/10 * * * *"
-        ).strip()
         self._inventory_root = str(
             config.get("inventory_root", defaults["inventory_root"]) or ""
         ).strip()
@@ -156,20 +154,6 @@ class RssAllInOne(_PluginBase):
         try:
             from apscheduler.triggers.cron import CronTrigger
 
-            if self._qb_refresh_cron:
-                trigger = CronTrigger.from_crontab(self._qb_refresh_cron)
-                services.append({
-                    "id": "RssAllInOne.QbRefresh",
-                    "name": "RSS一条龙 QB 同步与完成转移",
-                    "trigger": trigger,
-                    "func": self._scheduled_qb_refresh,
-                    "func_kwargs": {},
-                })
-        except (ImportError, TypeError, ValueError) as error:
-            logger.error(f"RSS一条龙：无效的 QB 刷新周期 {self._qb_refresh_cron}：{error}")
-        try:
-            from apscheduler.triggers.cron import CronTrigger
-
             for task in self._store.list_all_rss_tasks():
                 if not task.get("enabled"):
                     continue
@@ -195,6 +179,18 @@ class RssAllInOne(_PluginBase):
                 })
         except ImportError:
             logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS CRON")
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+
+            services.append({
+                "id": "RssAllInOne.QbDeleteJobs",
+                "name": "RSS一条龙 qB 到期删除任务",
+                "trigger": CronTrigger.from_crontab("* * * * *"),
+                "func": self._scheduled_qb_deletes,
+                "func_kwargs": {},
+            })
+        except ImportError:
+            logger.error("RSS一条龙：缺少 APScheduler，无法执行 qB 到期删除任务")
         return services
 
     def stop_service(self) -> None:
@@ -414,6 +410,13 @@ class RssAllInOne(_PluginBase):
                 "transitioned_to_library": moved,
                 "media_id": item.get("media_id"),
             }
+        except LookupError as error:
+            return {
+                "success": True,
+                "ignored": True,
+                "message": str(error),
+                "info_hash": info_hash,
+            }
         except Exception as error:
             logger.error(f"RSS一条龙：处理 qB 完成回调失败：{error}", exc_info=True)
             return {"success": False, "message": str(error)}
@@ -614,15 +617,72 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": "后台任务不存在"}
         return {"success": True, "task": task}
 
-    def _scheduled_qb_refresh(self) -> None:
-        if not self._qb_scope().ready:
-            return
-        self._start_qb_refresh(force_recognition=False, source="scheduler")
-
     def _scheduled_rss_run(self, task_id: str) -> None:
         if not self._rss_enabled:
             return
         self._start_rss_run(task_id=str(task_id or "").strip(), source="scheduler")
+
+    def _scheduled_qb_deletes(self) -> None:
+        if not self._store or not self._qb_delete_lock.acquire(blocking=False):
+            return
+        try:
+            for job in self._store.claim_due_qb_delete_jobs():
+                try:
+                    torrent = None
+                    for item in MoviePilotQbGateway.list_torrents(
+                        str(job.get("downloader_id") or "")
+                    ):
+                        raw = MoviePilotQbGateway.torrent_dict(item)
+                        if str(raw.get("hash") or "").strip().lower() == str(
+                            job.get("info_hash") or ""
+                        ).strip().lower():
+                            torrent = raw
+                            break
+                    if torrent and not self._torrent_is_completed(torrent):
+                        raise RuntimeError("qB 任务当前尚未完成，延后删除")
+                    if torrent and not MoviePilotQbGateway.remove_torrent(
+                        str(job.get("downloader_id") or ""),
+                        str(job.get("info_hash") or ""),
+                        bool(job.get("delete_files")),
+                    ):
+                        raise RuntimeError("qB 删除任务返回失败")
+                    self._store.finish_qb_delete_job(
+                        job.get("id"), success=True
+                    )
+                    logger.info(
+                        "RSS一条龙：qB 到期删除完成 "
+                        f"{job.get('downloader_id')}/{job.get('info_hash')}，"
+                        f"删除文件={bool(job.get('delete_files'))}"
+                    )
+                except Exception as error:
+                    retry_at = (
+                        datetime.now(timezone.utc) + timedelta(seconds=60)
+                    ).isoformat(timespec="seconds")
+                    self._store.finish_qb_delete_job(
+                        job.get("id"),
+                        success=False,
+                        error=str(error),
+                        retry_at=retry_at,
+                    )
+                    logger.error(
+                        "RSS一条龙：qB 到期删除失败，60 秒后重试："
+                        f"{job.get('downloader_id')}/{job.get('info_hash')}：{error}"
+                    )
+        finally:
+            self._qb_delete_lock.release()
+
+    @staticmethod
+    def _torrent_is_completed(torrent: Dict[str, Any]) -> bool:
+        try:
+            progress = float(torrent.get("progress") or 0)
+        except (TypeError, ValueError):
+            progress = 0
+        if progress >= 99.999 or 0.999999 <= progress <= 1.0:
+            return True
+        return str(torrent.get("state") or "").strip().casefold() in {
+            "completed", "uploading", "stalledup", "pausedup",
+            "queuedup", "checkingup", "forcedup",
+        }
 
     def _start_rss_run(self, *, task_id: str, source: str) -> Dict[str, Any]:
         store = self._require_store()
@@ -684,6 +744,7 @@ class RssAllInOne(_PluginBase):
             )
             RssExecutionService(
                 store=store,
+                on_source_ready=self._recognize_rss_qb_item,
                 logger=logger,
             ).run(
                 background_task_id,
@@ -699,6 +760,9 @@ class RssAllInOne(_PluginBase):
             )
         finally:
             self._rss_run_lock.release()
+
+    def _recognize_rss_qb_item(self, downloader_id: str, info_hash: str) -> None:
+        self._qb_sync_service().refresh_item(downloader_id, info_hash)
 
     def _start_qb_refresh(
         self,
@@ -859,7 +923,6 @@ class RssAllInOne(_PluginBase):
             "enabled": False,
             "rss_enabled": True,
             "database_filename": "rssallinone.db",
-            "qb_refresh_cron": "*/10 * * * *",
             **layout,
             "cd2_grpc_addr": "",
             "cd2_token": "",

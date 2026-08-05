@@ -81,7 +81,6 @@ function defaultConfig() {
     qb_category: '',
     name_contains: '',
     start_cron: '*/5 * * * *',
-    fallback_cron: '*/10 * * * *',
     delete_after_minutes: 0,
     upload_limit_kbps: 0,
     path_mappings: '',
@@ -390,7 +389,7 @@ return (_ctx, _cache) => {
                           }, 1024),
                           _createVNode$3(_component_VCol, {
                             cols: "12",
-                            md: "4"
+                            md: "6"
                           }, {
                             default: _withCtx$3(() => [
                               _createVNode$3(_component_VTextField, {
@@ -403,26 +402,13 @@ return (_ctx, _cache) => {
                           }, 1024),
                           _createVNode$3(_component_VCol, {
                             cols: "12",
-                            md: "4"
+                            md: "6"
                           }, {
                             default: _withCtx$3(() => [
                               _createVNode$3(_component_VTextField, {
                                 modelValue: task.config.start_cron,
                                 "onUpdate:modelValue": $event => ((task.config.start_cron) = $event),
                                 label: "开始任务 CRON"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$3(_component_VCol, {
-                            cols: "12",
-                            md: "4"
-                          }, {
-                            default: _withCtx$3(() => [
-                              _createVNode$3(_component_VTextField, {
-                                modelValue: task.config.fallback_cron,
-                                "onUpdate:modelValue": $event => ((task.config.fallback_cron) = $event),
-                                label: "轮询兜底 CRON"
                               }, null, 8, ["modelValue", "onUpdate:modelValue"])
                             ]),
                             _: 2
@@ -591,7 +577,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-14f2eb45"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-fa67f210"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2,createElementBlock:_createElementBlock$1,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,normalizeClass:_normalizeClass} = await importShared('vue');
 

@@ -155,8 +155,19 @@ class SQLiteFrameworkTest(unittest.TestCase):
                     "info_hash": "abc123",
                     "completion_processed": True,
                     "imported_to_library": True,
+                    "qb_delete": {"job_id": "qb-main:abc123"},
                 },
             })
+            store.schedule_qb_delete(
+                task_id="task-a",
+                task_name="彩虹岛",
+                downloader_id="qb-main",
+                info_hash="abc123",
+                source_path="/SSD/QB目录/REMUX/CHD/Movie.mkv",
+                delete_files=True,
+                due_at="2026-08-05T00:00:00+00:00",
+                details={"deletion_scope": "qb_task_and_save_path"},
+            )
 
             counts = store.clear_card_data()
 
@@ -165,9 +176,12 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(store.list_media()["total"], 0)
             self.assertEqual(store.list_torrents()["total"], 0)
             self.assertEqual(store.list_rss_tasks()["total"], 1)
+            self.assertEqual(counts["qb_delete_jobs"], 1)
+            self.assertEqual(store.list_qb_delete_jobs(), [])
             history = store.latest_rss_history_for_torrent("qb-main", "abc123")
             self.assertEqual(history["status"], "queued")
             self.assertNotIn("completion_processed", history["payload"])
+            self.assertNotIn("qb_delete", history["payload"])
 
     def test_v1_torrent_snapshots_migrate_without_losing_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -206,7 +220,7 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(migrated["name"], "旧快照")
             self.assertEqual(migrated["present"], 1)
             self.assertEqual(migrated["inventory_state"], "unknown")
-            self.assertEqual(store.health()["schema_version"], 3)
+            self.assertEqual(store.health()["schema_version"], 4)
 
 
 class RepositoryContractTest(unittest.TestCase):
@@ -325,6 +339,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("saveRssTasks", app_page)
         self.assertNotIn("电影目录组分类", config)
         self.assertNotIn("剧集目录组分类", config)
+        self.assertNotIn("轮询兜底 CRON", editor)
 
     def test_rss_scheduler_uses_function_kwargs_for_task_id(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
@@ -341,11 +356,24 @@ class PluginLifecycleTest(unittest.TestCase):
         app_db = types.ModuleType("app.db")
         app_db.__path__ = []
         app_site_oper = types.ModuleType("app.db.site_oper")
+        apscheduler = types.ModuleType("apscheduler")
+        apscheduler.__path__ = []
+        apscheduler_triggers = types.ModuleType("apscheduler.triggers")
+        apscheduler_triggers.__path__ = []
+        apscheduler_cron = types.ModuleType("apscheduler.triggers.cron")
 
         class Logger:
             @staticmethod
             def error(*_args, **_kwargs):
                 return None
+
+            info = error
+            warning = error
+
+        class CronTrigger:
+            @staticmethod
+            def from_crontab(value):
+                return str(value)
 
         class SiteOper:
             @staticmethod
@@ -377,11 +405,13 @@ class PluginLifecycleTest(unittest.TestCase):
             app_log.logger = Logger()
             app_plugins._PluginBase = PluginBase
             app_site_oper.SiteOper = SiteOper
+            apscheduler_cron.CronTrigger = CronTrigger
             previous = {
                 name: sys.modules.get(name)
                 for name in (
                     "app", "app.log", "app.plugins", "app.db",
-                    "app.db.site_oper", "rssallinone",
+                    "app.db.site_oper", "apscheduler", "apscheduler.triggers",
+                    "apscheduler.triggers.cron", "rssallinone",
                 )
             }
             sys.modules["app"] = app
@@ -389,6 +419,9 @@ class PluginLifecycleTest(unittest.TestCase):
             sys.modules["app.plugins"] = app_plugins
             sys.modules["app.db"] = app_db
             sys.modules["app.db.site_oper"] = app_site_oper
+            sys.modules["apscheduler"] = apscheduler
+            sys.modules["apscheduler.triggers"] = apscheduler_triggers
+            sys.modules["apscheduler.triggers.cron"] = apscheduler_cron
             try:
                 spec = importlib.util.spec_from_file_location(
                     "rssallinone",
@@ -443,6 +476,92 @@ class PluginLifecycleTest(unittest.TestCase):
                 api_paths = {item["path"] for item in plugin.get_api()}
                 self.assertIn("/qb/completed", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
+                service_ids = {item["id"] for item in plugin.get_service()}
+                self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)
+                self.assertNotIn("RssAllInOne.QbRefresh", service_ids)
+
+                class MissingTorrentService:
+                    @staticmethod
+                    def find_torrent_downloader(_info_hash):
+                        raise LookupError("不是 RSS 一条龙受管任务")
+
+                original_service = plugin._qb_sync_service
+                plugin._qb_sync_service = lambda: MissingTorrentService()
+                ignored = plugin.api_qb_completed({"info_hash": "outside"})
+                plugin._qb_sync_service = original_service
+                self.assertTrue(ignored["success"])
+                self.assertTrue(ignored["ignored"])
+
+                plugin._store.schedule_qb_delete(
+                    task_id="movies",
+                    task_name="彩虹岛",
+                    downloader_id="qb-main",
+                    info_hash="delete-me",
+                    source_path="/SSD/QB目录/REMUX/CHD/Movie.mkv",
+                    delete_files=True,
+                    due_at="2020-01-01T00:00:00+00:00",
+                    details={"deletion_scope": "qb_task_and_save_path"},
+                )
+                removed = []
+                original_list = module.MoviePilotQbGateway.list_torrents
+                original_dict = module.MoviePilotQbGateway.torrent_dict
+                original_remove = module.MoviePilotQbGateway.remove_torrent
+                try:
+                    module.MoviePilotQbGateway.list_torrents = staticmethod(
+                        lambda _downloader: [{
+                            "hash": "delete-me",
+                            "progress": 1.0,
+                            "state": "pausedUP",
+                        }]
+                    )
+                    module.MoviePilotQbGateway.torrent_dict = staticmethod(dict)
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        lambda downloader, info_hash, delete_files: removed.append(
+                            (downloader, info_hash, delete_files)
+                        ) or True
+                    )
+                    plugin._scheduled_qb_deletes()
+                    self.assertEqual(
+                        removed, [("qb-main", "delete-me", True)]
+                    )
+                    job = plugin._store.list_qb_delete_jobs()[0]
+                    self.assertEqual(job["state"], "succeeded")
+                    self.assertEqual(
+                        job["source_path"],
+                        "/SSD/QB目录/REMUX/CHD/Movie.mkv",
+                    )
+
+                    plugin._store.schedule_qb_delete(
+                        task_id="movies",
+                        task_name="彩虹岛",
+                        downloader_id="qb-main",
+                        info_hash="retry-me",
+                        source_path="/SSD/QB目录/REMUX/CHD/Retry.mkv",
+                        delete_files=True,
+                        due_at="2020-01-01T00:00:00+00:00",
+                    )
+                    module.MoviePilotQbGateway.list_torrents = staticmethod(
+                        lambda _downloader: [{
+                            "hash": "retry-me",
+                            "progress": 1.0,
+                            "state": "pausedUP",
+                        }]
+                    )
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        lambda *_args: False
+                    )
+                    plugin._scheduled_qb_deletes()
+                    retry_job = next(
+                        item for item in plugin._store.list_qb_delete_jobs()
+                        if item["info_hash"] == "retry-me"
+                    )
+                    self.assertEqual(retry_job["state"], "pending")
+                    self.assertEqual(retry_job["attempts"], 1)
+                    self.assertIn("qB 删除任务返回失败", retry_job["last_error"])
+                finally:
+                    module.MoviePilotQbGateway.list_torrents = original_list
+                    module.MoviePilotQbGateway.torrent_dict = original_dict
+                    module.MoviePilotQbGateway.remove_torrent = original_remove
 
                 from rssallinone.generated import clouddrive_pb2_grpc
 

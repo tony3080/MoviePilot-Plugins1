@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
@@ -148,6 +148,25 @@ class SQLiteStore:
                         finished_at TEXT
                     );
 
+                    CREATE TABLE IF NOT EXISTS qb_delete_jobs (
+                        id TEXT PRIMARY KEY,
+                        task_id TEXT NOT NULL DEFAULT '',
+                        task_name TEXT NOT NULL DEFAULT '',
+                        downloader_id TEXT NOT NULL,
+                        info_hash TEXT NOT NULL,
+                        source_path TEXT NOT NULL DEFAULT '',
+                        delete_files INTEGER NOT NULL DEFAULT 0,
+                        due_at TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'pending',
+                        attempts INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_qb_delete_jobs_due
+                        ON qb_delete_jobs(state, due_at);
+
                     CREATE TABLE IF NOT EXISTS import_watches (
                         id TEXT PRIMARY KEY,
                         media_id TEXT NOT NULL,
@@ -199,6 +218,7 @@ class SQLiteStore:
                 )
                 self._migrate_v2(connection)
                 self._migrate_v3(connection)
+                self._migrate_v4(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -267,6 +287,31 @@ class SQLiteStore:
                WHERE downloader_id != '' AND info_hash != ''"""
         )
 
+    @staticmethod
+    def _migrate_v4(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS qb_delete_jobs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL DEFAULT '',
+                task_name TEXT NOT NULL DEFAULT '',
+                downloader_id TEXT NOT NULL,
+                info_hash TEXT NOT NULL,
+                source_path TEXT NOT NULL DEFAULT '',
+                delete_files INTEGER NOT NULL DEFAULT 0,
+                due_at TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_qb_delete_jobs_due
+                ON qb_delete_jobs(state, due_at);
+            """
+        )
+
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -286,6 +331,7 @@ class SQLiteStore:
             "rss_tasks": "rss_tasks",
             "rss_history": "rss_history",
             "background_tasks": "background_tasks",
+            "qb_delete_jobs": "qb_delete_jobs",
             "import_watches": "import_watches",
             "file_mappings": "file_mappings",
         }
@@ -529,12 +575,16 @@ class SQLiteStore:
                 "import_watches": int(connection.execute(
                     "SELECT COUNT(*) FROM import_watches"
                 ).fetchone()[0]),
+                "qb_delete_jobs": int(connection.execute(
+                    "SELECT COUNT(*) FROM qb_delete_jobs"
+                ).fetchone()[0]),
                 "completion_markers": 0,
             }
             connection.execute("DELETE FROM torrent_snapshots")
             connection.execute("DELETE FROM file_mappings")
             connection.execute("DELETE FROM import_watches")
             connection.execute("DELETE FROM media_items")
+            connection.execute("DELETE FROM qb_delete_jobs")
             history_rows = connection.execute(
                 "SELECT id, status, payload_json FROM rss_history"
             ).fetchall()
@@ -550,6 +600,7 @@ class SQLiteStore:
                     "completion_processed_at",
                     "imported_to_library",
                     "realtime_hardlink",
+                    "qb_delete",
                 ):
                     payload.pop(key, None)
                 connection.execute(
@@ -702,6 +753,125 @@ class SQLiteStore:
                    WHERE downloader_id = ? AND info_hash = ?
                    ORDER BY file_index""",
                 (downloader, normalized_hash),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
+    def schedule_qb_delete(
+        self,
+        *,
+        task_id: object,
+        task_name: object,
+        downloader_id: object,
+        info_hash: object,
+        source_path: object,
+        delete_files: bool,
+        due_at: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        due = str(due_at or "").strip()
+        if not downloader or not normalized_hash or not due:
+            raise ValueError("qB 延时删除任务缺少下载器、info-hash 或到期时间")
+        identity = f"{downloader}:{normalized_hash}"
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO qb_delete_jobs(
+                    id, task_id, task_name, downloader_id, info_hash,
+                    source_path, delete_files, due_at, state, attempts,
+                    last_error, details_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    task_id = excluded.task_id,
+                    task_name = excluded.task_name,
+                    source_path = excluded.source_path,
+                    delete_files = excluded.delete_files,
+                    due_at = CASE
+                        WHEN qb_delete_jobs.state = 'succeeded'
+                            THEN qb_delete_jobs.due_at
+                        WHEN qb_delete_jobs.due_at < excluded.due_at
+                            THEN qb_delete_jobs.due_at
+                        ELSE excluded.due_at
+                    END,
+                    state = CASE
+                        WHEN qb_delete_jobs.state = 'succeeded'
+                            THEN qb_delete_jobs.state
+                        ELSE 'pending'
+                    END,
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at""",
+                (
+                    identity,
+                    str(task_id or "").strip(),
+                    str(task_name or "").strip(),
+                    downloader,
+                    normalized_hash,
+                    str(source_path or "").strip(),
+                    int(bool(delete_files)),
+                    due,
+                    self._json_dump(details or {}),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM qb_delete_jobs WHERE id = ?", (identity,)
+            ).fetchone()
+        return self._decode_row(row)
+
+    def claim_due_qb_delete_jobs(
+        self, now: Optional[str] = None, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        current = str(now or utc_now())
+        safe_limit = max(1, min(int(limit or 20), 100))
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM qb_delete_jobs
+                   WHERE state = 'pending' AND due_at <= ?
+                   ORDER BY due_at ASC LIMIT ?""",
+                (current, safe_limit),
+            ).fetchall()
+            connection.executemany(
+                """UPDATE qb_delete_jobs
+                   SET state = 'running', updated_at = ? WHERE id = ?""",
+                [(current, str(row["id"])) for row in rows],
+            )
+        return [self._decode_row(row) for row in rows]
+
+    def finish_qb_delete_job(
+        self,
+        job_id: object,
+        *,
+        success: bool,
+        error: str = "",
+        retry_at: str = "",
+    ) -> None:
+        identity = str(job_id or "").strip()
+        if not identity:
+            return
+        now = utc_now()
+        with self.connection() as connection:
+            if success:
+                connection.execute(
+                    """UPDATE qb_delete_jobs
+                       SET state = 'succeeded', last_error = '', updated_at = ?
+                       WHERE id = ?""",
+                    (now, identity),
+                )
+            else:
+                connection.execute(
+                    """UPDATE qb_delete_jobs
+                       SET state = 'pending', attempts = attempts + 1,
+                           last_error = ?, due_at = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (str(error or "")[:500], str(retry_at or now), now, identity),
+                )
+
+    def list_qb_delete_jobs(self) -> List[Dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM qb_delete_jobs ORDER BY due_at DESC"
             ).fetchall()
         return [self._decode_row(row) for row in rows]
 
@@ -961,6 +1131,7 @@ class SQLiteStore:
         info_hash: object,
         imported: bool,
         realtime_hardlink: Optional[Dict[str, Any]] = None,
+        qb_delete: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not history:
             return
@@ -974,6 +1145,8 @@ class SQLiteStore:
         })
         if realtime_hardlink:
             payload["realtime_hardlink"] = realtime_hardlink
+        if qb_delete:
+            payload["qb_delete"] = qb_delete
         self.upsert_rss_history({
             **history,
             "status": "processed",
