@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import parse_qs
 
 from app.log import logger
 from app.plugins import _PluginBase
@@ -47,7 +49,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.13.0"
+    plugin_version = "0.13.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -604,10 +606,10 @@ class RssAllInOne(_PluginBase):
 
     def api_emby_scheduled_completed(
         self,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: Optional[Union[Dict[str, Any], List[Any], str]] = None,
         secret: str = "",
     ) -> Dict[str, Any]:
-        data = payload or {}
+        data = self._coerce_emby_callback_payload(payload)
         if not self._scan_callback_secret:
             return {"success": False, "message": "尚未配置扫库回调密钥"}
         supplied_secret = str(secret or data.get("secret") or "").strip()
@@ -1332,6 +1334,36 @@ class RssAllInOne(_PluginBase):
         except Exception:
             logger.warning("RSS一条龙：发送待入库通知失败", exc_info=True)
         logger.warning(f"{title}：{text}")
+
+    @staticmethod
+    def _coerce_emby_callback_payload(payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            for item in payload:
+                parsed = RssAllInOne._coerce_emby_callback_payload(item)
+                if parsed:
+                    return parsed
+            return {}
+        if not isinstance(payload, str):
+            return {}
+
+        text = payload.strip()
+        if not text:
+            return {}
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            decoded = None
+        if decoded is not None and decoded != payload:
+            parsed = RssAllInOne._coerce_emby_callback_payload(decoded)
+            if parsed:
+                return parsed
+
+        form = parse_qs(text, keep_blank_values=True)
+        if form:
+            return {key: values[-1] if values else "" for key, values in form.items()}
+        return {"raw": text}
 
     @staticmethod
     def _normalize_emby_callback(payload: Dict[str, Any]) -> Dict[str, Any]:

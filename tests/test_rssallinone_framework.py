@@ -524,6 +524,27 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/media/action", api_paths)
                 self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload([
+                        {"Event": "scheduledtasks.completed"}
+                    ]),
+                    {"Event": "scheduledtasks.completed"},
+                )
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload(
+                        '{"Event":"scheduledtasks.completed"}'
+                    ),
+                    {"Event": "scheduledtasks.completed"},
+                )
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload(
+                        "Event=scheduledtasks.completed&task_id=scan"
+                    ),
+                    {
+                        "Event": "scheduledtasks.completed",
+                        "task_id": "scan",
+                    },
+                )
                 service_ids = {item["id"] for item in plugin.get_service()}
                 self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)
                 self.assertNotIn("RssAllInOne.QbRefresh", service_ids)
