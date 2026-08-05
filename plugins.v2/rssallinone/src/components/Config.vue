@@ -1,11 +1,7 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 const props = defineProps({
-  api: {
-    type: Object,
-    default: () => ({}),
-  },
   initialConfig: {
     type: Object,
     default: () => ({}),
@@ -69,12 +65,6 @@ const defaults = {
 
 const config = ref({ ...defaults })
 const section = ref('general')
-const catchupState = ref(null)
-const scanState = ref(null)
-const catchupBusy = ref(false)
-const scanBusy = ref(false)
-const externalMessage = ref('')
-const externalMessageType = ref('info')
 const stagingRoots = computed(() => {
   const roots = []
   for (const route of config.value.source_routes || []) {
@@ -138,128 +128,8 @@ function removeRoute(index) {
   config.value.source_routes.splice(index, 1)
 }
 
-function unwrap(response) {
-  return response?.data ?? response
-}
-
-function stateColor(state) {
-  if (state === true) return 'success'
-  if (state === false) return 'error'
-  return 'default'
-}
-
-function catchupConfigReady() {
-  return Boolean(
-    String(config.value.catchup_base_url || '').trim()
-    && String(config.value.catchup_page_id || '').trim()
-    && String(config.value.catchup_token || '').trim(),
-  )
-}
-
-function scanConfigReady() {
-  return Boolean(
-    String(config.value.scan_base_url || '').trim()
-    && String(config.value.scan_username || '').trim()
-    && String(config.value.scan_password || '').trim()
-    && String(config.value.scan_setting_name || '').trim()
-    && String(config.value.scan_target_name || '').trim(),
-  )
-}
-
-async function controlCatchup(forceRead = false) {
-  if (!catchupConfigReady()) {
-    catchupState.value = null
-    externalMessageType.value = 'warning'
-    externalMessage.value = '请先填写完整的追更 Emby 地址、PageId 和 Token'
-    return
-  }
-  catchupBusy.value = true
-  externalMessage.value = ''
-  try {
-    const action = forceRead || catchupState.value === null ? 'read' : 'toggle'
-    const result = unwrap(await props.api.post(
-      'plugin/RssAllInOne/external/catchup/control',
-      {
-        action,
-        catchup_base_url: config.value.catchup_base_url,
-        catchup_page_id: config.value.catchup_page_id,
-        catchup_token: config.value.catchup_token,
-      },
-    )) || {}
-    if (!result.success) throw new Error(result.message || '追更开关操作失败')
-    catchupState.value = Boolean(result.enabled)
-    externalMessageType.value = 'success'
-    externalMessage.value = result.message || '追更状态读取完成'
-  } catch (error) {
-    catchupState.value = null
-    externalMessageType.value = 'error'
-    externalMessage.value = error?.message || '追更开关操作失败'
-  } finally {
-    catchupBusy.value = false
-  }
-}
-
-async function controlScan(forceRead = false) {
-  if (!scanConfigReady()) {
-    scanState.value = null
-    externalMessageType.value = 'warning'
-    externalMessage.value = '请先填写完整的 SA 地址、账号、密码、配置名和节点名'
-    return
-  }
-  scanBusy.value = true
-  externalMessage.value = ''
-  try {
-    const action = forceRead || scanState.value === null ? 'read' : 'toggle'
-    const result = unwrap(await props.api.post(
-      'plugin/RssAllInOne/external/scan/control',
-      {
-        action,
-        scan_base_url: config.value.scan_base_url,
-        scan_username: config.value.scan_username,
-        scan_password: config.value.scan_password,
-        scan_setting_name: config.value.scan_setting_name,
-        scan_target_name: config.value.scan_target_name,
-      },
-    )) || {}
-    if (!result.success) throw new Error(result.message || 'SA 扫库开关操作失败')
-    scanState.value = Boolean(result.enabled)
-    externalMessageType.value = 'success'
-    externalMessage.value = result.message || 'SA 扫库状态读取完成'
-  } catch (error) {
-    scanState.value = null
-    externalMessageType.value = 'error'
-    externalMessage.value = error?.message || 'SA 扫库开关操作失败'
-  } finally {
-    scanBusy.value = false
-  }
-}
-
-watch(
-  () => [
-    config.value.catchup_base_url,
-    config.value.catchup_page_id,
-    config.value.catchup_token,
-  ],
-  () => { catchupState.value = null },
-)
-
-watch(
-  () => [
-    config.value.scan_base_url,
-    config.value.scan_username,
-    config.value.scan_password,
-    config.value.scan_setting_name,
-    config.value.scan_target_name,
-  ],
-  () => { scanState.value = null },
-)
-
-onMounted(async () => {
+onMounted(() => {
   config.value = normalizeConfig(props.initialConfig || {})
-  const reads = []
-  if (catchupConfigReady()) reads.push(controlCatchup(true))
-  if (scanConfigReady()) reads.push(controlScan(true))
-  await Promise.allSettled(reads)
 })
 </script>
 
@@ -485,41 +355,7 @@ onMounted(async () => {
       </VWindowItem>
 
       <VWindowItem value="external">
-        <VAlert
-          v-if="externalMessage"
-          :type="externalMessageType"
-          variant="tonal"
-          density="compact"
-          closable
-          class="mb-4"
-          @click:close="externalMessage = ''"
-        >
-          {{ externalMessage }}
-        </VAlert>
-
-        <div class="settings-title-row">
-          <div class="settings-section-title">追更控制（Emby）</div>
-          <VTooltip :text="catchupState === null ? '读取追更状态' : `点击${catchupState ? '关闭' : '开启'}追更`">
-            <template #activator="{ props: tooltipProps }">
-              <VBtn
-                v-bind="tooltipProps"
-                :color="stateColor(catchupState)"
-                variant="tonal"
-                size="small"
-                :loading="catchupBusy"
-                @click="controlCatchup(false)"
-              >
-                <VIcon
-                  icon="mdi-circle"
-                  :color="stateColor(catchupState)"
-                  size="12"
-                  class="me-2"
-                />
-                追更：{{ catchupState === null ? '检测' : (catchupState ? '开启' : '关闭') }}
-              </VBtn>
-            </template>
-          </VTooltip>
-        </div>
+        <div class="settings-section-title">追更控制（Emby）</div>
         <VRow>
           <VCol cols="12" md="5">
             <VTextField
@@ -546,29 +382,7 @@ onMounted(async () => {
         </VRow>
 
         <VDivider class="settings-divider" />
-        <div class="settings-title-row">
-          <div class="settings-section-title">外部扫库控制（SA）</div>
-          <VTooltip :text="scanState === null ? '读取 SA 扫库状态' : `点击${scanState ? '关闭' : '开启'} SA 扫库`">
-            <template #activator="{ props: tooltipProps }">
-              <VBtn
-                v-bind="tooltipProps"
-                :color="stateColor(scanState)"
-                variant="tonal"
-                size="small"
-                :loading="scanBusy"
-                @click="controlScan(false)"
-              >
-                <VIcon
-                  icon="mdi-circle"
-                  :color="stateColor(scanState)"
-                  size="12"
-                  class="me-2"
-                />
-                扫库：{{ scanState === null ? '检测' : (scanState ? '开启' : '关闭') }}
-              </VBtn>
-            </template>
-          </VTooltip>
-        </div>
+        <div class="settings-section-title">外部扫库控制（SA）</div>
         <VRow>
           <VCol cols="12" md="4">
             <VTextField
@@ -687,13 +501,6 @@ onMounted(async () => {
   margin: 2px 0 14px;
   font-size: 14px;
   font-weight: 700;
-}
-
-.settings-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .settings-divider {

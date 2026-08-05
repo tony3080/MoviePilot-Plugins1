@@ -45,6 +45,10 @@ const rssTestDialog = ref(false)
 const rssTestResult = ref(null)
 const pendingImport = ref({ running: false, batch: null, pending: 0, importing: 0, active_watches: 0 })
 const pendingImportStarting = ref(false)
+const catchupState = ref(null)
+const scanState = ref(null)
+const catchupBusy = ref(false)
+const scanBusy = ref(false)
 let qbPollTimer = null
 let rssPollTimer = null
 let pendingImportPollTimer = null
@@ -242,6 +246,60 @@ function selectAllVisible() {
 
 function clearSelection() {
   selectedKeys.value = []
+}
+
+function externalStateColor(state) {
+  if (state === true) return 'success'
+  if (state === false) return 'error'
+  return 'default'
+}
+
+async function controlCatchup(forceRead = false) {
+  if (catchupBusy.value) return
+  catchupBusy.value = true
+  try {
+    const action = forceRead || catchupState.value === null ? 'read' : 'toggle'
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/external/catchup/control',
+      { action },
+    )) || {}
+    if (!response.success) throw new Error(response.message || '追更开关操作失败')
+    catchupState.value = Boolean(response.enabled)
+    if (!forceRead) successMessage.value = response.message || '追更状态已更新'
+  } catch (error) {
+    catchupState.value = null
+    errorMessage.value = error?.message || '追更开关操作失败'
+  } finally {
+    catchupBusy.value = false
+  }
+}
+
+async function controlScan(forceRead = false) {
+  if (scanBusy.value) return
+  scanBusy.value = true
+  try {
+    const action = forceRead || scanState.value === null ? 'read' : 'toggle'
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/external/scan/control',
+      { action },
+    )) || {}
+    if (!response.success) throw new Error(response.message || 'SA 扫库开关操作失败')
+    scanState.value = Boolean(response.enabled)
+    if (!forceRead) successMessage.value = response.message || 'SA 扫库状态已更新'
+  } catch (error) {
+    scanState.value = null
+    errorMessage.value = error?.message || 'SA 扫库开关操作失败'
+  } finally {
+    scanBusy.value = false
+  }
+}
+
+async function refreshMainPage() {
+  await Promise.allSettled([
+    loadActive(),
+    controlCatchup(true),
+    controlScan(true),
+  ])
 }
 
 async function reloadForFilter() {
@@ -629,6 +687,42 @@ async function refreshQb() {
   }
 }
 
+async function deleteSelectedQbTasks() {
+  if (!selectedItems.value.length || batchAction.value) return
+  batchAction.value = 'delete_qb_task'
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/qb/delete', {
+        items: selectedItems.value.map(item => ({
+          downloader_id: item.downloader_id,
+          info_hash: item.info_hash,
+        })),
+      }),
+    )
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || 'QB 任务删除失败')
+    }
+    if (response.partial) {
+      const failures = (response.results || [])
+        .filter(item => !item.success)
+        .slice(0, 3)
+        .map(item => item.message)
+        .join('；')
+      errorMessage.value = `${response.message}${failures ? `：${failures}` : ''}`
+    } else {
+      successMessage.value = response.message || 'QB 任务已删除，下载文件已保留'
+    }
+    clearSelection()
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || 'QB 任务删除失败'
+  } finally {
+    batchAction.value = ''
+  }
+}
+
 function openIdentify(item) {
   identifyItem.value = item
   identifyDialog.value = true
@@ -829,7 +923,7 @@ watch([qbDownloader, qbView], () => {
   if (activeTab.value === 'qb') loadActive()
 })
 onMounted(async () => {
-  await loadActive()
+  await refreshMainPage()
   schedulePendingImportPoll()
 })
 onBeforeUnmount(() => {
@@ -859,24 +953,68 @@ onBeforeUnmount(() => {
             variant="text"
             :loading="loading"
             aria-label="刷新"
-            @click="loadActive"
+            @click="refreshMainPage"
           />
         </template>
       </VTooltip>
     </VToolbar>
 
-    <VTabs
-      v-model="activeTab"
-      color="primary"
-      density="compact"
-      show-arrows
-      class="main-tabs"
-    >
-      <VTab v-for="tab in tabs" :key="tab.value" :value="tab.value">
-        <VIcon :icon="tab.icon" size="18" class="me-2" />
-        {{ tab.title }}
-      </VTab>
-    </VTabs>
+    <div class="main-nav-row">
+      <VTabs
+        v-model="activeTab"
+        color="primary"
+        density="compact"
+        show-arrows
+        class="main-tabs"
+      >
+        <VTab v-for="tab in tabs" :key="tab.value" :value="tab.value">
+          <VIcon :icon="tab.icon" size="18" class="me-2" />
+          {{ tab.title }}
+        </VTab>
+      </VTabs>
+      <div class="external-switch-controls">
+        <VTooltip :text="catchupState === null ? '读取追更状态' : `点击${catchupState ? '关闭' : '开启'}追更`">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn
+              v-bind="tooltipProps"
+              :color="externalStateColor(catchupState)"
+              variant="tonal"
+              size="small"
+              :loading="catchupBusy"
+              @click="controlCatchup(false)"
+            >
+              <VIcon
+                icon="mdi-circle"
+                :color="externalStateColor(catchupState)"
+                size="12"
+                class="me-2"
+              />
+              追更：{{ catchupState === null ? '检测' : (catchupState ? '开启' : '关闭') }}
+            </VBtn>
+          </template>
+        </VTooltip>
+        <VTooltip :text="scanState === null ? '读取 SA 扫库状态' : `点击${scanState ? '关闭' : '开启'} SA 扫库`">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn
+              v-bind="tooltipProps"
+              :color="externalStateColor(scanState)"
+              variant="tonal"
+              size="small"
+              :loading="scanBusy"
+              @click="controlScan(false)"
+            >
+              <VIcon
+                icon="mdi-circle"
+                :color="externalStateColor(scanState)"
+                size="12"
+                class="me-2"
+              />
+              扫库：{{ scanState === null ? '检测' : (scanState ? '开启' : '关闭') }}
+            </VBtn>
+          </template>
+        </VTooltip>
+      </div>
+    </div>
 
     <VAlert v-if="errorMessage" type="error" variant="tonal" class="status-alert">
       {{ errorMessage }}
@@ -1124,6 +1262,21 @@ onBeforeUnmount(() => {
           >
             刷新识别
           </VBtn>
+          <VTooltip text="只删除选中的 qB 任务，保留已下载文件">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                color="error"
+                variant="tonal"
+                prepend-icon="mdi-delete-outline"
+                :loading="batchAction === 'delete_qb_task'"
+                :disabled="!selectedItems.length || Boolean(batchAction) || qbRefreshing"
+                @click="deleteSelectedQbTasks"
+              >
+                删除任务
+              </VBtn>
+            </template>
+          </VTooltip>
         </div>
         <VAlert
           v-if="qbTask"
@@ -1344,10 +1497,30 @@ onBeforeUnmount(() => {
   line-height: 1.2;
 }
 
-.main-tabs,
+.main-nav-row,
 .sub-tabs {
   border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   background: rgb(var(--v-theme-surface));
+}
+
+.main-nav-row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.main-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.external-switch-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .status-alert {
@@ -1590,6 +1763,21 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
+  .main-nav-row {
+    flex-wrap: wrap;
+  }
+
+  .main-tabs {
+    flex-basis: 100%;
+  }
+
+  .external-switch-controls {
+    width: 100%;
+    justify-content: flex-end;
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-left: 0;
+  }
+
   .workspace {
     padding: 10px;
   }

@@ -33,7 +33,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.13.3",
+    "version": "0.13.4",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/rss.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.13.4": "将追更与SA扫库状态灯移到插件主页面后台任务标签后方；QB管理新增多选删除任务，后端固定保留下载文件并仅允许删除现有受管卡片",
       "v0.13.3": "CD2 监控自动使用全部启用源路径路由的硬链接根目录，并按最长前缀计算相对路径；多个本地 staging 共用一个 CD2 上传任务目标根目录",
       "v0.13.2": "修正待入库配置边界：追更使用独立 Emby 地址、PageId 与 Token，外部扫库使用独立 SA 地址与登录配置；明确回调必填关系并折叠高级监控参数",
       "v0.13.1": "兼容 Emby 测试通知和正式 Webhook 的对象、数组、JSON 字符串及表单正文，避免扫库完成回调因请求体格式不同返回 422",

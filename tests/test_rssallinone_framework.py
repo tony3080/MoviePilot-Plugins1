@@ -371,16 +371,31 @@ class RepositoryContractTest(unittest.TestCase):
         config = (
             PLUGIN_DIR / "src" / "components" / "Config.vue"
         ).read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
         self.assertIn("追更控制（Emby）", config)
         self.assertIn("外部扫库控制（SA）", config)
         self.assertIn("catchup_base_url", config)
         self.assertIn("scan_base_url", config)
-        self.assertIn("external/catchup/control", config)
-        self.assertIn("external/scan/control", config)
-        self.assertIn("追更：", config)
-        self.assertIn("扫库：", config)
+        self.assertNotIn("external/catchup/control", config)
+        self.assertNotIn("external/scan/control", config)
+        self.assertIn("external/catchup/control", app_page)
+        self.assertIn("external/scan/control", app_page)
+        self.assertIn("追更", app_page)
+        self.assertIn("扫库", app_page)
         self.assertIn("自动使用的本地硬链接根目录", config)
         self.assertNotIn('v-model="config.cd2_plugin_staging_root"', config)
+
+    def test_qb_delete_button_preserves_downloaded_files(self) -> None:
+        backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn('self._api("/qb/delete"', backend)
+        self.assertIn("deleteSelectedQbTasks", app_page)
+        self.assertIn("删除任务", app_page)
+        self.assertIn("保留已下载文件", app_page)
 
     def test_qb_refresh_preserves_rollback_marker(self) -> None:
         backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
@@ -536,6 +551,7 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertNotIn("secret-cookie", repr(sites))
                 api_paths = {item["path"] for item in plugin.get_api()}
                 self.assertIn("/qb/completed", api_paths)
+                self.assertIn("/qb/delete", api_paths)
                 self.assertIn("/media/action", api_paths)
                 self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
@@ -601,6 +617,99 @@ class PluginLifecycleTest(unittest.TestCase):
                 plugin._qb_sync_service = original_service
                 self.assertTrue(ignored_with_downloader["success"])
                 self.assertTrue(ignored_with_downloader["ignored"])
+
+                plugin._store.upsert_torrent_snapshot({
+                    "downloader_id": "qb-main",
+                    "info_hash": "manual-delete-ok",
+                    "name": "保留文件",
+                    "state": "pausedDL",
+                    "category": "movie",
+                    "content_path": "/downloads/保留文件.mkv",
+                    "progress": 0.5,
+                    "size": 1024,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": "missing",
+                    "media_title": "保留文件",
+                    "media_type": "movie",
+                    "media_year": "2026",
+                    "poster": "",
+                    "recognition_error": "",
+                    "last_seen_at": database.utc_now(),
+                    "updated_at": database.utc_now(),
+                })
+                plugin._store.upsert_torrent_snapshot({
+                    "downloader_id": "qb-main",
+                    "info_hash": "manual-delete-fail",
+                    "name": "删除失败",
+                    "state": "pausedDL",
+                    "category": "movie",
+                    "content_path": "/downloads/删除失败.mkv",
+                    "progress": 0.5,
+                    "size": 1024,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": "missing",
+                    "media_title": "删除失败",
+                    "media_type": "movie",
+                    "media_year": "2026",
+                    "poster": "",
+                    "recognition_error": "",
+                    "last_seen_at": database.utc_now(),
+                    "updated_at": database.utc_now(),
+                })
+                manual_removed = []
+                original_remove = module.MoviePilotQbGateway.remove_torrent
+                try:
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        lambda downloader, info_hash, delete_files: (
+                            manual_removed.append(
+                                (downloader, info_hash, delete_files)
+                            )
+                            or info_hash == "manual-delete-ok"
+                        )
+                    )
+                    manual_delete = plugin.api_qb_delete({
+                        "items": [
+                            {
+                                "downloader_id": "qb-main",
+                                "info_hash": "manual-delete-ok",
+                            },
+                            {
+                                "downloader_id": "qb-main",
+                                "info_hash": "manual-delete-fail",
+                            },
+                        ],
+                    })
+                    self.assertFalse(manual_delete["success"])
+                    self.assertTrue(manual_delete["partial"])
+                    self.assertEqual(manual_delete["succeeded"], 1)
+                    self.assertEqual(manual_delete["failed"], 1)
+                    self.assertEqual(
+                        manual_removed,
+                        [
+                            ("qb-main", "manual-delete-ok", False),
+                            ("qb-main", "manual-delete-fail", False),
+                        ],
+                    )
+                    self.assertIsNone(plugin._store.get_torrent_snapshot(
+                        "qb-main", "manual-delete-ok"
+                    ))
+                    self.assertIsNotNone(plugin._store.get_torrent_snapshot(
+                        "qb-main", "manual-delete-fail"
+                    ))
+                    outside = plugin.api_qb_delete({
+                        "items": [{
+                            "downloader_id": "qb-main",
+                            "info_hash": "not-a-card",
+                        }],
+                    })
+                    self.assertFalse(outside["success"])
+                    self.assertEqual(len(manual_removed), 2)
+                finally:
+                    module.MoviePilotQbGateway.remove_torrent = original_remove
 
                 plugin._store.schedule_qb_delete(
                     task_id="movies",

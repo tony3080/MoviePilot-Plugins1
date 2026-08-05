@@ -49,7 +49,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.13.3"
+    plugin_version = "0.13.4"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -260,6 +260,7 @@ class RssAllInOne(_PluginBase):
         return [
             self._api("/qb/item/refresh", self.api_qb_item_refresh, "POST", "刷新单个 QB 任务"),
             self._api("/qb/item/identify", self.api_qb_item_identify, "POST", "手动识别单个 QB 任务"),
+            self._api("/qb/delete", self.api_qb_delete, "POST", "删除 QB 任务并保留下载文件"),
             self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
@@ -483,6 +484,87 @@ class RssAllInOne(_PluginBase):
         except Exception as error:
             logger.error(f"RSS一条龙：手动识别失败：{error}", exc_info=True)
             return {"success": False, "message": str(error), "item": None}
+
+    def api_qb_delete(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        raw_items = (payload or {}).get("items") or []
+        if isinstance(raw_items, dict):
+            raw_items = [raw_items]
+        if not isinstance(raw_items, list) or not raw_items:
+            return {"success": False, "message": "请选择要删除的 QB 任务"}
+        store = self._require_store()
+        if not self._qb_delete_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有 QB 删除操作正在执行"}
+
+        results = []
+        seen = set()
+        try:
+            for raw in raw_items:
+                data = raw if isinstance(raw, dict) else {}
+                downloader_id = str(data.get("downloader_id") or "").strip()
+                info_hash = str(data.get("info_hash") or "").strip().lower()
+                identity = (downloader_id, info_hash)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                result = {
+                    "downloader_id": downloader_id,
+                    "info_hash": info_hash,
+                    "success": False,
+                    "delete_files": False,
+                }
+                if not downloader_id or not info_hash:
+                    result["message"] = "任务缺少 QB 节点或 info-hash"
+                    results.append(result)
+                    continue
+                snapshot = store.get_torrent_snapshot(downloader_id, info_hash)
+                if not snapshot or not bool(snapshot.get("present")):
+                    result["message"] = "QB 管理卡片不存在或已失效"
+                    results.append(result)
+                    continue
+                try:
+                    removed = MoviePilotQbGateway.remove_torrent(
+                        downloader_id,
+                        info_hash,
+                        False,
+                    )
+                    if not removed:
+                        raise RuntimeError("qB 删除任务返回失败")
+                    if not store.delete_torrent_snapshot(downloader_id, info_hash):
+                        raise RuntimeError("qB 任务已删除，但插件卡片清理失败，请刷新识别")
+                    result.update({
+                        "success": True,
+                        "message": "QB 任务已删除，下载文件已保留",
+                    })
+                except Exception as error:
+                    result["message"] = str(error)
+                    logger.error(
+                        "RSS一条龙：手动删除 QB 任务失败："
+                        f"{downloader_id}/{info_hash}：{error}",
+                        exc_info=True,
+                    )
+                results.append(result)
+        finally:
+            self._qb_delete_lock.release()
+
+        succeeded = sum(1 for item in results if item["success"])
+        failed = len(results) - succeeded
+        return {
+            "success": bool(results) and failed == 0,
+            "partial": succeeded > 0 and failed > 0,
+            "message": (
+                f"已删除 {succeeded} 个 QB 任务，下载文件均已保留"
+                if failed == 0
+                else f"QB 任务删除部分完成：成功 {succeeded} 项，失败 {failed} 项"
+                if succeeded
+                else results[0]["message"]
+            ),
+            "succeeded": succeeded,
+            "failed": failed,
+            "delete_files": False,
+            "results": results,
+        }
 
     def api_qb_completed(
         self, payload: Optional[Dict[str, Any]] = None
