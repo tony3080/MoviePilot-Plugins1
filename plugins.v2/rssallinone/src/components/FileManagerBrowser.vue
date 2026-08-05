@@ -7,7 +7,7 @@ const props = defineProps({
 
 const currentPath = ref('/')
 const parentPath = ref('')
-const folders = ref([])
+const entries = ref([])
 const loading = ref(false)
 const recognizingPath = ref('')
 const errorMessage = ref('')
@@ -40,7 +40,7 @@ async function browse(path = '/') {
     if (!response?.success) throw new Error(response?.message || '读取文件夹失败')
     currentPath.value = response.path || path
     parentPath.value = response.parent || ''
-    folders.value = response.items || []
+    entries.value = response.items || []
   } catch (error) {
     errorMessage.value = error?.message || '读取文件夹失败'
   } finally {
@@ -104,20 +104,30 @@ onMounted(() => browse('/'))
       {{ successMessage }}
     </VAlert>
 
-    <div class="folder-list">
-      <div v-for="folder in folders" :key="folder.path" class="folder-row">
-        <button type="button" class="folder-name" @click="browse(folder.path)">
+    <div class="entry-list">
+      <div v-for="entry in entries" :key="entry.path" class="entry-row">
+        <button
+          v-if="entry.type === 'dir'"
+          type="button"
+          class="entry-name entry-link"
+          @click="browse(entry.path)"
+        >
           <VIcon icon="mdi-folder" color="amber" size="22" />
-          <span>{{ folder.name }}</span>
+          <span>{{ entry.name }}</span>
         </button>
+        <div v-else class="entry-name">
+          <VIcon icon="mdi-file-outline" color="blue-grey-lighten-1" size="22" />
+          <span>{{ entry.name }}</span>
+        </div>
         <VBtn
+          v-if="entry.type === 'dir'"
           color="primary"
           variant="tonal"
           size="small"
           prepend-icon="mdi-text-recognition"
-          :loading="recognizingPath === folder.path"
+          :loading="recognizingPath === entry.path"
           :disabled="Boolean(recognizingPath)"
-          @click="recognize(folder)"
+          @click="recognize(entry)"
         >
           批量识别
         </VBtn>
@@ -126,9 +136,9 @@ onMounted(() => browse('/'))
 
     <VProgressLinear v-if="loading" indeterminate color="primary" />
     <VEmptyState
-      v-else-if="!folders.length"
+      v-else-if="!entries.length"
       icon="mdi-folder-open-outline"
-      title="当前目录没有子文件夹"
+      title="当前目录为空"
     />
   </div>
 </template>
@@ -150,8 +160,8 @@ onMounted(() => browse('/'))
   font: inherit;
 }
 .browser-alert { margin: 12px 0; }
-.folder-list { display: grid; }
-.folder-row {
+.entry-list { display: grid; }
+.entry-row {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -159,8 +169,8 @@ onMounted(() => browse('/'))
   padding: 7px 10px;
   border-bottom: 1px solid rgba(var(--v-border-color), .35);
 }
-.folder-row:hover { background: rgba(var(--v-theme-on-surface), .035); }
-.folder-name {
+.entry-row:hover { background: rgba(var(--v-theme-on-surface), .035); }
+.entry-name {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -168,9 +178,11 @@ onMounted(() => browse('/'))
   flex: 1;
   color: inherit;
   text-align: left;
+}
+.entry-link {
+  cursor: pointer;
   background: none;
   border: 0;
-  cursor: pointer;
 }
-.folder-name span { overflow-wrap: anywhere; }
+.entry-name span { overflow-wrap: anywhere; }
 </style>

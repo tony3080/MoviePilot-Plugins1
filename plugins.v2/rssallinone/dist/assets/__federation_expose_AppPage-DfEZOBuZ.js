@@ -593,7 +593,7 @@ const _hoisted_5$2 = {
   key: 0,
   class: "source-name"
 };
-const _hoisted_6$1 = {
+const _hoisted_6$2 = {
   key: 1,
   class: "size-label"
 };
@@ -957,7 +957,7 @@ return (_ctx, _cache) => {
             ? (_openBlock$3(), _createElementBlock$2("p", _hoisted_5$2, "源: " + _toDisplayString$3(sourceName.value), 1))
             : _createCommentVNode$3("", true),
           (sizeText.value)
-            ? (_openBlock$3(), _createElementBlock$2("span", _hoisted_6$1, "大小: " + _toDisplayString$3(sizeText.value), 1))
+            ? (_openBlock$3(), _createElementBlock$2("span", _hoisted_6$2, "大小: " + _toDisplayString$3(sizeText.value), 1))
             : _createCommentVNode$3("", true),
           (plannedName.value && __props.item.recognition_state !== 'unidentified')
             ? (_openBlock$3(), _createElementBlock$2("p", _hoisted_7$1, _toDisplayString$3(plannedName.value), 1))
@@ -1197,8 +1197,12 @@ const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,toDisplay
 const _hoisted_1$1 = { class: "file-manager-browser" };
 const _hoisted_2$1 = { class: "browser-toolbar" };
 const _hoisted_3$1 = ["onClick"];
-const _hoisted_4$1 = { class: "folder-list" };
+const _hoisted_4$1 = { class: "entry-list" };
 const _hoisted_5$1 = ["onClick"];
+const _hoisted_6$1 = {
+  key: 1,
+  class: "entry-name"
+};
 
 const {computed: computed$1,onMounted: onMounted$1,ref: ref$1} = await importShared('vue');
 
@@ -1215,7 +1219,7 @@ const props = __props;
 
 const currentPath = ref$1('/');
 const parentPath = ref$1('');
-const folders = ref$1([]);
+const entries = ref$1([]);
 const loading = ref$1(false);
 const recognizingPath = ref$1('');
 const errorMessage = ref$1('');
@@ -1248,7 +1252,7 @@ async function browse(path = '/') {
     if (!response?.success) throw new Error(response?.message || '读取文件夹失败')
     currentPath.value = response.path || path;
     parentPath.value = response.parent || '';
-    folders.value = response.items || [];
+    entries.value = response.items || [];
   } catch (error) {
     errorMessage.value = error?.message || '读取文件夹失败';
   } finally {
@@ -1347,37 +1351,50 @@ return (_ctx, _cache) => {
         }))
       : _createCommentVNode$1("", true),
     _createElementVNode$1("div", _hoisted_4$1, [
-      (_openBlock$1(true), _createElementBlock$1(_Fragment$1, null, _renderList$1(folders.value, (folder) => {
+      (_openBlock$1(true), _createElementBlock$1(_Fragment$1, null, _renderList$1(entries.value, (entry) => {
         return (_openBlock$1(), _createElementBlock$1("div", {
-          key: folder.path,
-          class: "folder-row"
+          key: entry.path,
+          class: "entry-row"
         }, [
-          _createElementVNode$1("button", {
-            type: "button",
-            class: "folder-name",
-            onClick: $event => (browse(folder.path))
-          }, [
-            _createVNode$1(_component_VIcon, {
-              icon: "mdi-folder",
-              color: "amber",
-              size: "22"
-            }),
-            _createElementVNode$1("span", null, _toDisplayString$1(folder.name), 1)
-          ], 8, _hoisted_5$1),
-          _createVNode$1(_component_VBtn, {
-            color: "primary",
-            variant: "tonal",
-            size: "small",
-            "prepend-icon": "mdi-text-recognition",
-            loading: recognizingPath.value === folder.path,
-            disabled: Boolean(recognizingPath.value),
-            onClick: $event => (recognize(folder))
-          }, {
-            default: _withCtx$1(() => [...(_cache[2] || (_cache[2] = [
-              _createTextVNode$1(" 批量识别 ", -1)
-            ]))]),
-            _: 1
-          }, 8, ["loading", "disabled", "onClick"])
+          (entry.type === 'dir')
+            ? (_openBlock$1(), _createElementBlock$1("button", {
+                key: 0,
+                type: "button",
+                class: "entry-name entry-link",
+                onClick: $event => (browse(entry.path))
+              }, [
+                _createVNode$1(_component_VIcon, {
+                  icon: "mdi-folder",
+                  color: "amber",
+                  size: "22"
+                }),
+                _createElementVNode$1("span", null, _toDisplayString$1(entry.name), 1)
+              ], 8, _hoisted_5$1))
+            : (_openBlock$1(), _createElementBlock$1("div", _hoisted_6$1, [
+                _createVNode$1(_component_VIcon, {
+                  icon: "mdi-file-outline",
+                  color: "blue-grey-lighten-1",
+                  size: "22"
+                }),
+                _createElementVNode$1("span", null, _toDisplayString$1(entry.name), 1)
+              ])),
+          (entry.type === 'dir')
+            ? (_openBlock$1(), _createBlock$1(_component_VBtn, {
+                key: 2,
+                color: "primary",
+                variant: "tonal",
+                size: "small",
+                "prepend-icon": "mdi-text-recognition",
+                loading: recognizingPath.value === entry.path,
+                disabled: Boolean(recognizingPath.value),
+                onClick: $event => (recognize(entry))
+              }, {
+                default: _withCtx$1(() => [...(_cache[2] || (_cache[2] = [
+                  _createTextVNode$1(" 批量识别 ", -1)
+                ]))]),
+                _: 1
+              }, 8, ["loading", "disabled", "onClick"]))
+            : _createCommentVNode$1("", true)
         ]))
       }), 128))
     ]),
@@ -1387,11 +1404,11 @@ return (_ctx, _cache) => {
           indeterminate: "",
           color: "primary"
         }))
-      : (!folders.value.length)
+      : (!entries.value.length)
         ? (_openBlock$1(), _createBlock$1(_component_VEmptyState, {
             key: 3,
             icon: "mdi-folder-open-outline",
-            title: "当前目录没有子文件夹"
+            title: "当前目录为空"
           }))
         : _createCommentVNode$1("", true)
   ]))
@@ -1399,7 +1416,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-8e16605f"]]);
+const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-87bb5d1e"]]);
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 

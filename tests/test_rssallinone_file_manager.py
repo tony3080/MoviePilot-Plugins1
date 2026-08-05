@@ -34,7 +34,7 @@ file_manager = load_module("file_manager")
 
 
 class LocalFileManagerTest(unittest.TestCase):
-    def test_browse_returns_directories_only(self) -> None:
+    def test_browse_returns_directories_and_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "Beta").mkdir()
@@ -43,8 +43,15 @@ class LocalFileManagerTest(unittest.TestCase):
 
             result = file_manager.LocalFileManagerService.browse(root)
 
-            self.assertEqual([item["name"] for item in result["items"]], ["alpha", "Beta"])
-            self.assertEqual(result["total"], 2)
+            self.assertEqual(
+                [item["name"] for item in result["items"]],
+                ["alpha", "Beta", "movie.mkv"],
+            )
+            self.assertEqual(
+                [item["type"] for item in result["items"]],
+                ["dir", "dir", "file"],
+            )
+            self.assertEqual(result["total"], 3)
             self.assertEqual(Path(result["path"]), root.resolve())
 
     def test_virtual_root_only_lists_configured_source_roots(self) -> None:
@@ -60,6 +67,7 @@ class LocalFileManagerTest(unittest.TestCase):
             )
 
             self.assertEqual([item["name"] for item in result["items"]], ["MP", "SSD"])
+            self.assertEqual([item["type"] for item in result["items"]], ["dir", "dir"])
             self.assertEqual(result["path"], "/")
 
     def test_configured_root_cannot_browse_outside_source_routes(self) -> None:

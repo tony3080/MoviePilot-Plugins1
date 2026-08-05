@@ -53,16 +53,22 @@ class LocalFileManagerService:
             return {
                 "path": "/",
                 "parent": "",
-                "items": [{"name": item.name, "path": str(item)} for item in roots],
+                "items": [
+                    {"name": item.name, "path": str(item), "type": "dir"}
+                    for item in roots
+                ],
                 "total": len(roots),
             }
         directory = _local_directory(path)
         if roots and not _inside_any(directory, roots):
             raise FileManagerError("只能浏览已配置的源路径路由")
         try:
-            folders = sorted(
-                (item for item in directory.iterdir() if item.is_dir()),
-                key=lambda item: item.name.casefold(),
+            entries = sorted(
+                (
+                    item for item in directory.iterdir()
+                    if item.is_dir() or item.is_file()
+                ),
+                key=lambda item: (not item.is_dir(), item.name.casefold()),
             )
         except OSError as error:
             raise FileManagerError(f"目录读取失败：{error}") from error
@@ -73,10 +79,14 @@ class LocalFileManagerService:
             "path": str(directory),
             "parent": str(parent) if parent else "",
             "items": [
-                {"name": item.name, "path": str(item.resolve(strict=False))}
-                for item in folders
+                {
+                    "name": item.name,
+                    "path": str(item.resolve(strict=False)),
+                    "type": "dir" if item.is_dir() else "file",
+                }
+                for item in entries
             ],
-            "total": len(folders),
+            "total": len(entries),
         }
 
     def browse_sources(self, path: object = "/") -> Dict[str, Any]:
