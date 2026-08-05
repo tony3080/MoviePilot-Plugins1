@@ -56,9 +56,6 @@ async function browse(path = '/') {
 }
 
 async function recognize(entry) {
-  const label = entry.type === 'dir' ? '文件夹' : '文件'
-  const detail = entry.type === 'dir' ? '，并递归读取其中的媒体文件' : ''
-  if (!window.confirm(`确认识别${label}“${entry.name}”${detail}？`)) return
   recognizingPath.value = entry.path
   errorMessage.value = ''
   successMessage.value = ''
@@ -78,7 +75,6 @@ async function recognize(entry) {
 
 async function recognizeCurrentDirectory() {
   if (currentPath.value === '/') return
-  if (!window.confirm('确认逐项识别当前目录下的所有子文件夹和媒体文件？')) return
   errorMessage.value = ''
   successMessage.value = ''
   try {

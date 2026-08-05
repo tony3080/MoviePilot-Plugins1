@@ -1269,9 +1269,6 @@ async function browse(path = '/') {
 }
 
 async function recognize(entry) {
-  const label = entry.type === 'dir' ? '文件夹' : '文件';
-  const detail = entry.type === 'dir' ? '，并递归读取其中的媒体文件' : '';
-  if (!window.confirm(`确认识别${label}“${entry.name}”${detail}？`)) return
   recognizingPath.value = entry.path;
   errorMessage.value = '';
   successMessage.value = '';
@@ -1291,7 +1288,6 @@ async function recognize(entry) {
 
 async function recognizeCurrentDirectory() {
   if (currentPath.value === '/') return
-  if (!window.confirm('确认逐项识别当前目录下的所有子文件夹和媒体文件？')) return
   errorMessage.value = '';
   successMessage.value = '';
   try {
@@ -1503,7 +1499,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-9b7125d8"]]);
+const FileManagerBrowser = /*#__PURE__*/_export_sfc(_sfc_main$1, [['__scopeId',"data-v-92edeb24"]]);
 
 const {resolveComponent:_resolveComponent,createVNode:_createVNode,createElementVNode:_createElementVNode,toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,withCtx:_withCtx,mergeProps:_mergeProps,renderList:_renderList,Fragment:_Fragment,openBlock:_openBlock,createElementBlock:_createElementBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,withKeys:_withKeys} = await importShared('vue');
 

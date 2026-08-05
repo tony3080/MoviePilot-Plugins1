@@ -363,6 +363,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("files/task", browser)
         self.assertIn("批量识别", browser)
         self.assertIn(">\n          识别\n", browser)
+        self.assertNotIn("window.confirm", browser)
         self.assertNotIn("修改时间", browser)
         self.assertNotIn("文件大小", browser)
 

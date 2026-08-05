@@ -153,30 +153,30 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
 .dialog-actions[data-v-3e83c70b] { justify-content: flex-end; padding: 12px 18px;
 }
 
-.file-manager-browser[data-v-9b7125d8] { min-height: 420px;
+.file-manager-browser[data-v-92edeb24] { min-height: 420px;
 }
-.browser-toolbar[data-v-9b7125d8] {
+.browser-toolbar[data-v-92edeb24] {
   display: flex;
   align-items: center;
   min-height: 52px;
   border-bottom: 1px solid rgba(var(--v-border-color), .45);
 }
-.path-breadcrumbs[data-v-9b7125d8] { min-width: 0; padding-inline: 4px;
+.path-breadcrumbs[data-v-92edeb24] { min-width: 0; padding-inline: 4px;
 }
-.breadcrumb-link[data-v-9b7125d8] {
+.breadcrumb-link[data-v-92edeb24] {
   color: rgb(var(--v-theme-primary));
   background: none;
   border: 0;
   cursor: pointer;
   font: inherit;
 }
-.browser-alert[data-v-9b7125d8] { margin: 12px 0;
+.browser-alert[data-v-92edeb24] { margin: 12px 0;
 }
-.batch-progress-line[data-v-9b7125d8] { display: flex; justify-content: space-between; gap: 12px;
+.batch-progress-line[data-v-92edeb24] { display: flex; justify-content: space-between; gap: 12px;
 }
-.entry-list[data-v-9b7125d8] { display: grid;
+.entry-list[data-v-92edeb24] { display: grid;
 }
-.entry-row[data-v-9b7125d8] {
+.entry-row[data-v-92edeb24] {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -184,9 +184,9 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
   padding: 7px 10px;
   border-bottom: 1px solid rgba(var(--v-border-color), .35);
 }
-.entry-row[data-v-9b7125d8]:hover { background: rgba(var(--v-theme-on-surface), .035);
+.entry-row[data-v-92edeb24]:hover { background: rgba(var(--v-theme-on-surface), .035);
 }
-.entry-name[data-v-9b7125d8] {
+.entry-name[data-v-92edeb24] {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -195,12 +195,12 @@ button.corner-badge[data-v-8c9b15c8] { cursor: pointer;
   color: inherit;
   text-align: left;
 }
-.entry-link[data-v-9b7125d8] {
+.entry-link[data-v-92edeb24] {
   cursor: pointer;
   background: none;
   border: 0;
 }
-.entry-name span[data-v-9b7125d8] { overflow-wrap: anywhere;
+.entry-name span[data-v-92edeb24] { overflow-wrap: anywhere;
 }
 
 .app-page[data-v-544a39d0] {
