@@ -50,13 +50,21 @@ RSS一条龙是 ReelHarbor V1 的 MoviePilot V2 插件化版本，目标是统�
 
 仓库提供 [`qb_completed_notify.sh.example`](qb_completed_notify.sh.example)。复制到 qB 容器的 `/config/qb_completed_notify.sh` 后，只需填写 `V1_SECRET` 和 MoviePilot 的 `MP_API_TOKEN`，不要把真实密钥提交到 Git。
 
-同一份脚本可以复制到多个 qB 容器。qBittorrent 的“Torrent 完成时运行外部程序”填写节点名、节点 WebUI 地址和四个 qB 占位符：
+同一份脚本可以复制到多个 qB 容器。V1 节点名和 MoviePilot 下载器名必须分别传入，因为同一个 qB 在两个系统中可能使用不同名称。qBittorrent 的“Torrent 完成时运行外部程序”填写：
 
 ```sh
-/bin/sh /config/qb_completed_notify.sh "<MoviePilot下载器名称>" "<qB WebUI地址>" "%I" "%L" "%N" "%G"
+/bin/sh /config/qb_completed_notify.sh "<V1节点名称>" "<MoviePilot下载器名称>" "<qB WebUI地址>" "%I" "%L" "%N" "%G"
 ```
 
-脚本仍兼容原来的四参数命令；未传节点信息时默认使用 `QB` 和 `http://192.168.110.31:8081`。多 qB 部署建议始终使用六参数命令，避免相同 info-hash 出现在多个下载器时发生歧义。
+当前三个节点应分别配置：
+
+```sh
+/bin/sh /config/qb_completed_notify.sh "QBSSD" "QB" "http://192.168.110.31:8081" "%I" "%L" "%N" "%G"
+/bin/sh /config/qb_completed_notify.sh "QB电影" "QB电影" "http://192.168.110.31:8084" "%I" "%L" "%N" "%G"
+/bin/sh /config/qb_completed_notify.sh "QB完结" "QB完结" "http://192.168.110.31:8085" "%I" "%L" "%N" "%G"
+```
+
+脚本仍兼容原来的六参数和四参数命令。四参数模式默认使用 `V1=QBSSD`、`MoviePilot=QB` 和 `http://192.168.110.31:8081`；多 qB 部署建议使用上面的七参数命令。
 
 脚本会通知现有 V1，并独立通知 RSS一条龙：
 
@@ -69,6 +77,8 @@ X-API-KEY: <MoviePilot API Token>
 两个通知都会独立重试，V1 临时失败不会阻止 RSS 一条龙收到完成事件。插件对非受管 hash 返回 `success=true, ignored=true`，因此同一个 qB 全局完成脚本可以安全处理其他分类。
 
 如果 qB 任务标签中精确包含 `MOVIEPILOT`，脚本还会继续调用 MoviePilot 原生的 `/api/v1/transfer/now`；没有该标签时记录为跳过。RSS一条龙添加的任务不携带 `MOVIEPILOT` 标签，因此不会误触发 MoviePilot 原生整理流程。
+
+`/api/v1/transfer/now` 本身不接收节点名；V1 节点名只用于 V1 回调，MoviePilot 下载器名只用于 RSS一条龙插件回调。
 
 彩虹岛路径边界如下：
 

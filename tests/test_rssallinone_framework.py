@@ -346,6 +346,15 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn('"func_kwargs": {"task_id": task_id}', backend)
         self.assertNotIn('"kwargs": {"task_id": task_id}', backend)
 
+    def test_qb_callback_keeps_v1_and_moviepilot_node_names_separate(self) -> None:
+        script = (
+            PLUGIN_DIR / "qb_completed_notify.sh.example"
+        ).read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_V1_NODE="QBSSD"', script)
+        self.assertIn('DEFAULT_MP_DOWNLOADER="QB"', script)
+        self.assertIn('--data-urlencode "node=$V1_NODE_NAME"', script)
+        self.assertIn('"$HASH" "$MP_DOWNLOADER_ID"', script)
+
 
 class PluginLifecycleTest(unittest.TestCase):
     def test_plugin_loads_inside_a_minimal_moviepilot_host(self) -> None:
