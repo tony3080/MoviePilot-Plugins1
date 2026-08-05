@@ -49,7 +49,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/rss.png"
     )
-    plugin_version = "0.13.1"
+    plugin_version = "0.13.2"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -266,6 +266,18 @@ class RssAllInOne(_PluginBase):
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/import/run", self.api_pending_import_run, "POST", "立即处理待入库队列"),
             self._api("/import/status", self.api_pending_import_status, "GET", "读取待入库队列状态"),
+            self._api(
+                "/external/catchup/control",
+                self.api_external_catchup_control,
+                "POST",
+                "读取或切换 Emby 追更开关",
+            ),
+            self._api(
+                "/external/scan/control",
+                self.api_external_scan_control,
+                "POST",
+                "读取或切换 SA 扫库开关",
+            ),
             self._api(
                 "/emby/scheduledtasks/completed",
                 self.api_emby_scheduled_completed,
@@ -603,6 +615,58 @@ class RssAllInOne(_PluginBase):
 
     def api_pending_import_status(self) -> Dict[str, Any]:
         return {"success": True, **self._pending_coordinator().status()}
+
+    def api_external_catchup_control(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        action = str(data.get("action") or "read").strip().casefold()
+        if action not in {"read", "toggle"}:
+            return {"success": False, "message": "不支持的追更开关操作"}
+        client = CatchupSwitchClient(
+            str(data.get("catchup_base_url", self._catchup_base_url) or ""),
+            str(data.get("catchup_page_id", self._catchup_page_id) or ""),
+            str(data.get("catchup_token", self._catchup_token) or ""),
+        )
+        try:
+            current = bool(client.read()["enabled"])
+            enabled = client.set_enabled(not current) if action == "toggle" else current
+            return {
+                "success": True,
+                "enabled": bool(enabled),
+                "action": action,
+                "message": f"追更已{'开启' if enabled else '关闭'}",
+            }
+        except Exception as error:
+            logger.warning(f"RSS一条龙：追更开关测试失败：{error}")
+            return {"success": False, "message": str(error)}
+
+    def api_external_scan_control(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        action = str(data.get("action") or "read").strip().casefold()
+        if action not in {"read", "toggle"}:
+            return {"success": False, "message": "不支持的 SA 扫库开关操作"}
+        client = ScanSystemClient(
+            str(data.get("scan_base_url", self._scan_base_url) or ""),
+            str(data.get("scan_username", self._scan_username) or ""),
+            str(data.get("scan_password", self._scan_password) or ""),
+            str(data.get("scan_setting_name", self._scan_setting_name) or ""),
+            str(data.get("scan_target_name", self._scan_target_name) or ""),
+        )
+        try:
+            current = bool(client.read()["enabled"])
+            enabled = client.set_enabled(not current) if action == "toggle" else current
+            return {
+                "success": True,
+                "enabled": bool(enabled),
+                "action": action,
+                "message": f"SA 扫库已{'开启' if enabled else '关闭'}",
+            }
+        except Exception as error:
+            logger.warning(f"RSS一条龙：SA 扫库开关测试失败：{error}")
+            return {"success": False, "message": str(error)}
 
     def api_emby_scheduled_completed(
         self,

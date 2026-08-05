@@ -1,0 +1,51 @@
+
+.config-root[data-v-d259ad48] {
+  min-width: 0;
+}
+.config-tabs[data-v-d259ad48] {
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+.config-window[data-v-d259ad48] {
+  padding: 16px;
+}
+.config-section-header[data-v-d259ad48] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.settings-section-title[data-v-d259ad48] {
+  margin: 2px 0 14px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.settings-title-row[data-v-d259ad48] {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-divider[data-v-d259ad48] {
+  margin: 10px 0 18px;
+}
+.advanced-panels[data-v-d259ad48] {
+  margin-top: 8px;
+}
+.route-table[data-v-d259ad48] {
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.route-table th[data-v-d259ad48] {
+  white-space: nowrap;
+}
+.route-table td[data-v-d259ad48] {
+  min-width: 150px;
+  padding: 6px;
+}
+.route-table td[data-v-d259ad48]:first-child,
+.route-table td[data-v-d259ad48]:last-child {
+  min-width: 64px;
+  width: 64px;
+}

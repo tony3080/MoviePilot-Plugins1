@@ -367,6 +367,19 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("修改时间", browser)
         self.assertNotIn("文件大小", browser)
 
+    def test_external_control_config_keeps_emby_and_sa_separate(self) -> None:
+        config = (
+            PLUGIN_DIR / "src" / "components" / "Config.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("追更控制（Emby）", config)
+        self.assertIn("外部扫库控制（SA）", config)
+        self.assertIn("catchup_base_url", config)
+        self.assertIn("scan_base_url", config)
+        self.assertIn("external/catchup/control", config)
+        self.assertIn("external/scan/control", config)
+        self.assertIn("追更：", config)
+        self.assertIn("扫库：", config)
+
     def test_qb_refresh_preserves_rollback_marker(self) -> None:
         backend = (PLUGIN_DIR / "qb_sync.py").read_text(encoding="utf-8")
         self.assertIn(
@@ -524,6 +537,18 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/media/action", api_paths)
                 self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
+                self.assertIn("/external/catchup/control", api_paths)
+                self.assertIn("/external/scan/control", api_paths)
+                self.assertFalse(
+                    plugin.api_external_catchup_control({"action": "invalid"})[
+                        "success"
+                    ]
+                )
+                self.assertFalse(
+                    plugin.api_external_scan_control({"action": "invalid"})[
+                        "success"
+                    ]
+                )
                 self.assertEqual(
                     plugin._coerce_emby_callback_payload([
                         {"Event": "scheduledtasks.completed"}
