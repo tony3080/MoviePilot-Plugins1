@@ -29,6 +29,21 @@
       "v0.1.0": "创建符合 MoviePilot V2 规范的插件仓库骨架"
     }
   },
+  "Checkin": {
+    "name": "签到助手",
+    "description": "通过 MoviePilot CloakBrowser 执行什么值得买签到和 Chiphell 登录保活。",
+    "labels": "签到,自动化",
+    "version": "0.1.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/signin.png",
+    "author": "tony3080",
+    "author_url": "https://github.com/tony3080",
+    "level": 2,
+    "v2": true,
+    "system_version": ">=2.15.0",
+    "history": {
+      "v0.1.0": "首版支持什么值得买签到和 Chiphell 登录保活；统一调用 MoviePilot CloakBrowser，提供独立 Cron、手动执行、通知和历史记录"
+    }
+  },
   "RssAllInOne": {
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
