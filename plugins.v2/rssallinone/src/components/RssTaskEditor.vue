@@ -64,7 +64,6 @@ function defaultConfig() {
     start_cron: '*/5 * * * *',
     delete_after_minutes: 0,
     upload_limit_kbps: 0,
-    path_mappings: '',
     rename_rules: '',
     site_id: '',
     cn_keywords: '国语,国配',
@@ -282,14 +281,6 @@ watch(
                 label="上传限速 (kb/s)"
                 type="number"
                 min="0"
-              />
-            </VCol>
-            <VCol cols="12" md="6">
-              <VTextarea
-                v-model="task.config.path_mappings"
-                label="路径映射"
-                rows="3"
-                auto-grow
               />
             </VCol>
             <VCol cols="12" md="6">

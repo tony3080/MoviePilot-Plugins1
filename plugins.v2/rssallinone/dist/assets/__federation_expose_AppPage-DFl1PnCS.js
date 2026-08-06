@@ -83,7 +83,6 @@ function defaultConfig() {
     start_cron: '*/5 * * * *',
     delete_after_minutes: 0,
     upload_limit_kbps: 0,
-    path_mappings: '',
     rename_rules: '',
     site_id: '',
     cn_keywords: '国语,国配',
@@ -464,21 +463,6 @@ return (_ctx, _cache) => {
                           }, {
                             default: _withCtx$4(() => [
                               _createVNode$4(_component_VTextarea, {
-                                modelValue: task.config.path_mappings,
-                                "onUpdate:modelValue": $event => ((task.config.path_mappings) = $event),
-                                label: "路径映射",
-                                rows: "3",
-                                "auto-grow": ""
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextarea, {
                                 modelValue: task.config.rename_rules,
                                 "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
                                 label: "重命名规则",
@@ -577,7 +561,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-fa67f210"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-cb31c3f0"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeClass:_normalizeClass} = await importShared('vue');
 

@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.10"
+    plugin_version = "0.13.11"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -626,7 +626,11 @@ class RssAllInOne(_PluginBase):
             service = self._qb_sync_service()
             if not downloader_id:
                 downloader_id = service.find_torrent_downloader(info_hash)
-            item = service.refresh_item(downloader_id, info_hash)
+            item = service.refresh_item(
+                downloader_id,
+                info_hash,
+                schedule_delete=True,
+            )
             completed = bool(item.get("completed"))
             moved = bool(item.get("transitioned_to_library"))
             return {
@@ -1182,26 +1186,6 @@ class RssAllInOne(_PluginBase):
                         ).strip().lower():
                             torrent = raw
                             break
-                    if not torrent and bool(job.get("delete_files")):
-                        message = (
-                            "qB 任务已不存在，无法确认下载文件是否已由 qB 删除；"
-                            "任务已转为待人工复核，插件不会直接删除记录中的源路径"
-                        )
-                        self._store.mark_qb_delete_job_needs_review(
-                            job.get("id"), error=message
-                        )
-                        self._notify_pending_import(
-                            "RSS一条龙 qB 删除待复核",
-                            (
-                                f"{job.get('task_name') or job.get('task_id') or 'RSS任务'}："
-                                f"{job.get('downloader_id')}/{job.get('info_hash')}。{message}"
-                            ),
-                        )
-                        logger.warning(
-                            "RSS一条龙：qB 到期删除转为待人工复核："
-                            f"{job.get('downloader_id')}/{job.get('info_hash')}"
-                        )
-                        continue
                     if torrent and not self._torrent_is_completed(torrent):
                         raise RuntimeError("qB 任务当前尚未完成，延后删除")
                     if torrent and not MoviePilotQbGateway.remove_torrent(
@@ -1224,6 +1208,7 @@ class RssAllInOne(_PluginBase):
                         "RSS一条龙：qB 到期删除完成 "
                         f"{job.get('downloader_id')}/{job.get('info_hash')}，"
                         f"删除文件={bool(job.get('delete_files'))}"
+                        + ("，任务已由 qB 或用户提前移除" if not torrent else "")
                     )
                 except Exception as error:
                     retry_at = (

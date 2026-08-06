@@ -17,7 +17,6 @@ DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
     "start_cron": "*/5 * * * *",
     "delete_after_minutes": 0,
     "upload_limit_kbps": 0,
-    "path_mappings": "",
     "rename_rules": "",
     "site_id": "",
     "cn_keywords": "国语,国配",
@@ -43,7 +42,6 @@ TEXT_FIELDS = (
     "qb_category",
     "name_contains",
     "start_cron",
-    "path_mappings",
     "rename_rules",
     "site_id",
     "cn_keywords",
@@ -86,6 +84,7 @@ def normalize_rss_tasks(value: object) -> List[Dict[str, Any]]:
         raise ValueError("RSS 任务最多保存 100 条")
     normalized: List[Dict[str, Any]] = []
     seen_ids = set()
+    seen_qb_pairs: Dict[tuple[str, str], str] = {}
     for position, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f"第 {position + 1} 条 RSS 任务格式无效")
@@ -93,6 +92,18 @@ def normalize_rss_tasks(value: object) -> List[Dict[str, Any]]:
         if task["id"] in seen_ids:
             raise ValueError(f"RSS 任务 ID 重复：{task['id']}")
         seen_ids.add(task["id"])
+        config = task["config"]
+        downloader = str(config.get("qb_downloader") or "").strip()
+        category = str(config.get("qb_category") or "").strip()
+        if downloader and category:
+            pair = (downloader.casefold(), category.casefold())
+            previous_name = seen_qb_pairs.get(pair)
+            if previous_name:
+                raise ValueError(
+                    "RSS 任务不能共用相同的 QB 节点和分类："
+                    f"“{previous_name}”与“{task['name']}”"
+                )
+            seen_qb_pairs[pair] = task["name"]
         normalized.append(task)
     return normalized
 
@@ -105,6 +116,8 @@ def normalize_rss_task(item: Dict[str, Any], position: int) -> Dict[str, Any]:
     name = str(item.get("name") or f"RSS任务 {position + 1}").strip()[:200]
     config = item.get("config") if isinstance(item.get("config"), dict) else {}
     normalized_config = {**DEFAULT_RSS_TASK_CONFIG, **config}
+    # Path routing is configured globally by the plugin, not per RSS task.
+    normalized_config.pop("path_mappings", None)
     for field in TEXT_FIELDS:
         normalized_config[field] = str(normalized_config.get(field) or "").strip()
     for field in BOOLEAN_FIELDS:

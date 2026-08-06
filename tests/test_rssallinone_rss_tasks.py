@@ -66,6 +66,7 @@ class RssTaskContractTest(unittest.TestCase):
             task["config"]["realtime_link_root"],
             "/SSD/QB目录/REMUX/CHDlink",
         )
+        self.assertNotIn("path_mappings", task["config"])
         self.assertEqual(task["config"]["extension_value"], {"keep": True})
 
     def test_duplicate_ids_are_rejected(self) -> None:
@@ -73,6 +74,27 @@ class RssTaskContractTest(unittest.TestCase):
             rss_tasks.normalize_rss_tasks([
                 {"id": "same", "name": "A"},
                 {"id": "same", "name": "B"},
+            ])
+
+    def test_duplicate_qb_downloader_category_pairs_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "相同的 QB 节点和分类"):
+            rss_tasks.normalize_rss_tasks([
+                {
+                    "id": "one",
+                    "name": "电影 RSS",
+                    "config": {
+                        "qb_downloader": "QB01",
+                        "qb_category": "电影",
+                    },
+                },
+                {
+                    "id": "two",
+                    "name": "备用 RSS",
+                    "config": {
+                        "qb_downloader": "qb01",
+                        "qb_category": "电影",
+                    },
+                },
             ])
 
     def test_replace_is_ordered_and_removes_deleted_tasks(self) -> None:

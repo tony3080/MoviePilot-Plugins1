@@ -832,7 +832,7 @@ class PluginLifecycleTest(unittest.TestCase):
 
                 class OutsideScopeService:
                     @staticmethod
-                    def refresh_item(_downloader_id, _info_hash):
+                    def refresh_item(_downloader_id, _info_hash, **_kwargs):
                         raise LookupError("该任务不属于任何已保存的 VT+ RSS 分类")
 
                 plugin._qb_sync_service = lambda: OutsideScopeService()
@@ -1035,13 +1035,10 @@ class PluginLifecycleTest(unittest.TestCase):
                         lambda *_args: self.fail("qB 任务缺失时不应调用删除")
                     )
                     plugin._scheduled_qb_deletes()
-                    review_job = next(
-                        item for item in plugin._store.list_qb_delete_jobs()
-                        if item["info_hash"] == "missing-with-files"
-                    )
-                    self.assertEqual(review_job["state"], "needs_review")
-                    self.assertEqual(review_job["attempts"], 1)
-                    self.assertIn("待人工复核", review_job["last_error"])
+                    self.assertFalse(any(
+                        item["info_hash"] == "missing-with-files"
+                        for item in plugin._store.list_qb_delete_jobs()
+                    ))
                 finally:
                     module.MoviePilotQbGateway.list_torrents = original_list
                     module.MoviePilotQbGateway.torrent_dict = original_dict

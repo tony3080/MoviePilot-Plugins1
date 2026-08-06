@@ -792,6 +792,8 @@ class QbSyncService:
         downloader_id: object,
         info_hash: object,
         manual_override: Optional[Dict[str, Any]] = None,
+        *,
+        schedule_delete: bool = False,
     ) -> Dict[str, Any]:
         downloader_name = str(downloader_id or "").strip()
         normalized_hash = str(info_hash or "").strip().lower()
@@ -825,6 +827,7 @@ class QbSyncService:
             force_recognition=True,
             manual_override=manual_override,
             scope=scope,
+            schedule_delete=schedule_delete,
         )
         snapshot = self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
@@ -847,6 +850,7 @@ class QbSyncService:
         task_id: str,
         *,
         force_recognition: bool = False,
+        schedule_delete: bool = False,
         stop_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -972,6 +976,7 @@ class QbSyncService:
                         raw=raw,
                         force_recognition=force_recognition,
                         scope=scope,
+                        schedule_delete=schedule_delete,
                     )
                     succeeded += 1
                     result["scanned"] += 1
@@ -1050,6 +1055,7 @@ class QbSyncService:
         force_recognition: bool,
         manual_override: Optional[Dict[str, Any]] = None,
         scope: Optional[RssTaskQbScope] = None,
+        schedule_delete: bool = False,
     ) -> str:
         now = utc_now()
         info_hash = str(raw.get("hash") or "").strip().lower()
@@ -1079,12 +1085,16 @@ class QbSyncService:
             raw,
             existing.get("source_url_masked") or "",
         )
-        qb_delete = self._schedule_qb_delete(
-            task_rule=task_rule,
-            downloader_id=downloader.name,
-            info_hash=info_hash,
-            source_path=content_path,
-            completed=torrent_completed,
+        qb_delete = (
+            self._schedule_qb_delete(
+                task_rule=task_rule,
+                downloader_id=downloader.name,
+                info_hash=info_hash,
+                source_path=content_path,
+                completed=torrent_completed,
+            )
+            if schedule_delete
+            else {}
         )
         if torrent_completed and not import_enabled:
             existing_media = self.store.get_media_item(media_id) or {}

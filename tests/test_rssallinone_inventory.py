@@ -1059,7 +1059,8 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             store.create_background_task("chd-delete", qb_sync.QB_TASK_TYPE)
 
             qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
-                "chd-delete"
+                "chd-delete",
+                schedule_delete=True,
             )
 
             jobs = store.list_qb_delete_jobs()
