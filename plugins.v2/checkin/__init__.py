@@ -38,7 +38,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.1"
+    plugin_version = "0.1.2"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -142,12 +142,127 @@ class Checkin(_PluginBase):
     def get_command() -> List[Dict[str, Any]]:
         return []
 
-    @staticmethod
-    def get_render_mode() -> Tuple[str, str]:
-        return "vue", "dist/assets"
-
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        return [], self._default_config()
+        return [
+            {
+                "component": "VForm",
+                "content": [
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {"model": "enabled", "label": "启用插件"},
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {"model": "onlyonce", "label": "立即运行一次"},
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {"model": "notify", "label": "发送结果通知"},
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "history_days",
+                                        "label": "历史保留天数",
+                                        "type": "number",
+                                        "min": 1,
+                                        "max": 365,
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {
+                                        "model": "smzdm_enabled",
+                                        "label": "什么值得买定时签到",
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 8},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "smzdm_cron",
+                                        "label": "什么值得买执行周期",
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "smzdm_cookie",
+                                        "label": "什么值得买 Cookie",
+                                        "type": "password",
+                                        "autocomplete": "new-password",
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [{
+                                    "component": "VSwitch",
+                                    "props": {
+                                        "model": "chiphell_enabled",
+                                        "label": "Chiphell 定时保活",
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 8},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "chiphell_cron",
+                                        "label": "Chiphell 执行周期",
+                                    },
+                                }],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12},
+                                "content": [{
+                                    "component": "VTextField",
+                                    "props": {
+                                        "model": "chiphell_cookie",
+                                        "label": "Chiphell Cookie",
+                                        "type": "password",
+                                        "autocomplete": "new-password",
+                                    },
+                                }],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ], self._default_config()
 
     @staticmethod
     def get_page() -> List[dict]:

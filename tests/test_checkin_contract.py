@@ -46,7 +46,6 @@ class CheckinContractTest(unittest.TestCase):
         source = INIT_PATH.read_text(encoding="utf-8")
         self.assertIn("from app.helper.browser import PlaywrightHelper", source)
         self.assertIn("PlaywrightHelper().action", source)
-        self.assertIn('return "vue", "dist/assets"', source)
         self.assertIn('"func_kwargs": {"site": site}', source)
         self.assertIn("def _append_history", source)
         self.assertIn("self.save_data(", source)
@@ -55,11 +54,26 @@ class CheckinContractTest(unittest.TestCase):
         self.assertNotIn("requests.", source)
         self.assertNotIn("def get_sidebar_nav", source)
         self.assertNotIn("def get_api", source)
+        self.assertNotIn("def get_render_mode", source)
 
-    def test_frontend_sources_exist(self) -> None:
-        self.assertFalse((PLUGIN_DIR / "src" / "components" / "Page.vue").exists())
-        self.assertTrue((PLUGIN_DIR / "src" / "components" / "Config.vue").is_file())
-        self.assertTrue((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").is_file())
+    def test_native_config_form_contains_all_controls(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        for model in (
+            "enabled",
+            "onlyonce",
+            "notify",
+            "history_days",
+            "smzdm_enabled",
+            "smzdm_cookie",
+            "smzdm_cron",
+            "chiphell_enabled",
+            "chiphell_cookie",
+            "chiphell_cron",
+        ):
+            self.assertIn(f'"model": "{model}"', source)
+        self.assertFalse((PLUGIN_DIR / "src" / "components" / "Config.vue").exists())
+        self.assertFalse((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").exists())
+        self.assertFalse((PLUGIN_DIR / "package.json").exists())
 
 
 if __name__ == "__main__":

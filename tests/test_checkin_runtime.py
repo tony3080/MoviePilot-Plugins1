@@ -152,6 +152,27 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(record["trigger"], "scheduled")
         self.assertNotIn("secret-two", repr(self.plugin.get_data("history")))
 
+    def test_native_form_is_nonempty_and_contains_all_models(self):
+        form, defaults = self.plugin.get_form()
+        self.assertTrue(form)
+        self.assertEqual(form[0]["component"], "VForm")
+
+        models = set()
+
+        def walk(value):
+            if isinstance(value, dict):
+                model = (value.get("props") or {}).get("model")
+                if model:
+                    models.add(model)
+                for nested in value.values():
+                    walk(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    walk(nested)
+
+        walk(form)
+        self.assertEqual(models, set(defaults))
+
 
 if __name__ == "__main__":
     unittest.main()
