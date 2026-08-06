@@ -45,7 +45,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.5"
+    plugin_version = "0.1.6"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -289,6 +289,7 @@ class Checkin(_PluginBase):
                             {"title": "站点", "key": "site_name"},
                             {"title": "状态", "key": "status_label"},
                             {"title": "连续天数", "key": "streak_days"},
+                            {"title": "积分", "key": "points"},
                             {"title": "说明", "key": "message"},
                             {"title": "触发", "key": "trigger_label"},
                         ],
@@ -319,7 +320,11 @@ class Checkin(_PluginBase):
             if not isinstance(record, dict):
                 continue
             streak_days = self._positive_int(record.get("streak_days"))
-            if streak_days is None and record.get("status") in SUCCESS_STATUSES:
+            if (
+                streak_days is None
+                and record.get("site") == "smzdm"
+                and record.get("status") in SUCCESS_STATUSES
+            ):
                 streak_days = self._calculate_streak(record, records=history)
             row = {
                 "date": str(record.get("date") or ""),
@@ -332,6 +337,7 @@ class Checkin(_PluginBase):
                     if streak_days is not None
                     else "-"
                 ),
+                "points": str(record.get("points") or "-"),
                 "message": str(record.get("message") or ""),
                 "trigger_label": "手动" if record.get("trigger") == "manual" else "定时",
             }
@@ -539,7 +545,7 @@ class Checkin(_PluginBase):
             "trigger": "manual" if manual else "scheduled",
             **dict(result or {}),
         }
-        if record.get("status") in SUCCESS_STATUSES:
+        if site == "smzdm" and record.get("status") in SUCCESS_STATUSES:
             reported_days = self._positive_int(record.get("days"))
             record["streak_days"] = reported_days or self._calculate_streak(record)
         return record

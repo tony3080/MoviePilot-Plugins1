@@ -33,7 +33,7 @@
     "name": "签到助手",
     "description": "通过 MoviePilot CloakBrowser 执行什么值得买签到和 Chiphell 登录保活。",
     "labels": "签到,自动化",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/signin.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",

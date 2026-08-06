@@ -202,6 +202,7 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(record["status"], "success")
         self.assertEqual(record["username"], "tester")
         self.assertEqual(record["points"], "888")
+        self.assertNotIn("streak_days", record)
         self.assertEqual(record["trigger"], "scheduled")
         self.assertNotIn("secret-two", repr(self.plugin.get_data("history")))
 
@@ -253,6 +254,7 @@ class CheckinRuntimeTest(unittest.TestCase):
             "site_name": "Chiphell",
             "status": "success",
             "message": "论坛页访问成功，登录态有效",
+            "points": "1234",
             "trigger": "manual",
         }]
         page = self.plugin.get_page()
@@ -260,6 +262,8 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(table["component"], "VDataTableVirtual")
         self.assertEqual(table["props"]["items"][0]["site_name"], "Chiphell")
         self.assertEqual(table["props"]["items"][0]["trigger_label"], "手动")
+        self.assertEqual(table["props"]["items"][0]["points"], "1234")
+        self.assertEqual(table["props"]["items"][0]["streak_days"], "-")
 
     def test_success_notification_is_sent_even_when_failure_notifications_are_disabled(self):
         self.plugin._notify = False
@@ -271,18 +275,18 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.plugin._test_data["history"] = [
             {
                 "date": "2026-08-04 09:00:00",
-                "site": "chiphell",
+                "site": "smzdm",
                 "status": "success",
             },
             {
                 "date": "2026-08-05 09:00:00",
-                "site": "chiphell",
+                "site": "smzdm",
                 "status": "already",
             },
         ]
         self.plugin._module_now = None
         record = self.plugin._decorate_result(
-            "chiphell",
+            "smzdm",
             {"status": "success", "message": "ok"},
             manual=True,
         )
