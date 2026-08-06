@@ -40,6 +40,7 @@ from .rss_tasks import normalize_rss_tasks
 
 PLUGIN_ID = "RssAllInOne"
 PLUGIN_DIR = Path(__file__).resolve().parent
+RSS_MAX_CONCURRENT_RUNS = 2
 
 
 class RssAllInOne(_PluginBase):
@@ -49,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.8"
+    plugin_version = "0.13.9"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -84,7 +85,9 @@ class RssAllInOne(_PluginBase):
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
         self._qb_delete_lock = threading.Lock()
-        self._rss_run_lock = threading.Lock()
+        self._rss_queue_lock = threading.RLock()
+        self._rss_active_run_ids: Dict[str, str] = {}
+        self._rss_active_downloaders: Dict[str, str] = {}
         self._media_action_lock = threading.Lock()
         self._file_scan_lock = threading.Lock()
         self._pending_import_lock = threading.Lock()
@@ -150,12 +153,15 @@ class RssAllInOne(_PluginBase):
         try:
             self._store = SQLiteStore(self._database_path())
             self._store.initialize()
-            recovered = self._store.recover_incomplete_tasks()
+            recovered = self._store.recover_incomplete_tasks(
+                preserve_queued_types={RSS_RUN_TASK_TYPE}
+            )
             if recovered:
                 logger.warning(f"RSS一条龙：已终止 {recovered} 个重启前未完成的后台任务")
             cleaned_jobs = self._store.cleanup_completed_qb_delete_jobs()
             if cleaned_jobs:
                 logger.info(f"RSS一条龙：已清理 {cleaned_jobs} 个历史 qB 删除计划")
+            self._dispatch_rss_queue()
         except Exception as error:
             self._store = None
             self._startup_error = str(error)
@@ -316,6 +322,10 @@ class RssAllInOne(_PluginBase):
 
     def api_overview(self) -> Dict[str, Any]:
         store = self._require_store()
+        rss_runs = store.list_background_tasks_by_state(
+            RSS_RUN_TASK_TYPE,
+            {"queued", "running"},
+        )
         return {
             "success": True,
             "plugin": {
@@ -330,6 +340,12 @@ class RssAllInOne(_PluginBase):
             "capabilities": self._capabilities(),
             "qb_task": store.latest_running_task(QB_TASK_TYPE),
             "rss_task": store.latest_running_task(RSS_RUN_TASK_TYPE),
+            "rss_tasks": rss_runs,
+            "rss_queue": {
+                "max_concurrent": RSS_MAX_CONCURRENT_RUNS,
+                "running": sum(item.get("state") == "running" for item in rss_runs),
+                "queued": sum(item.get("state") == "queued" for item in rss_runs),
+            },
             "pending_import": self._pending_coordinator().status(),
         }
 
@@ -1028,6 +1044,7 @@ class RssAllInOne(_PluginBase):
         self._rss_enabled = enabled
         if enabled:
             self._rss_stop_event.clear()
+            self._dispatch_rss_queue()
         else:
             self._rss_stop_event.set()
         self._runtime_config["rss_enabled"] = enabled
@@ -1188,36 +1205,144 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": "RSS 任务不存在"}
         if not task.get("enabled"):
             return {"success": False, "message": "RSS 任务未启用"}
-        if not self._rss_run_lock.acquire(blocking=False):
-            running = store.latest_running_task(RSS_RUN_TASK_TYPE)
-            return {
-                "success": False,
-                "message": "RSS 执行正在运行",
-                "task_id": running.get("id") if running else None,
-            }
-        run_id = uuid.uuid4().hex
-        try:
-            store.create_background_task(run_id, RSS_RUN_TASK_TYPE)
-            thread = threading.Thread(
-                target=self._run_rss_task,
-                kwargs={
-                    "background_task_id": run_id,
-                    "task": deepcopy(task),
+        with self._rss_queue_lock:
+            existing = self._find_pending_rss_run_locked(task_id)
+            if existing:
+                return {
+                    "success": False,
+                    "message": "该 RSS 任务已在执行队列中",
+                    "task_id": existing.get("id"),
+                    "state": existing.get("state"),
+                }
+            run_id = uuid.uuid4().hex
+            store.create_background_task(
+                run_id,
+                RSS_RUN_TASK_TYPE,
+                state="queued",
+                result={
+                    "rss_task_id": task_id,
+                    "task_name": str(task.get("name") or task_id),
                     "source": source,
                 },
-                name=f"rssallinone-rss-{run_id[:8]}",
-                daemon=True,
             )
-            thread.start()
-        except Exception as error:
-            store.finish_background_task(run_id, "failed", error_message=str(error))
-            self._rss_run_lock.release()
-            raise
+            self._dispatch_rss_queue_locked()
+            queued_task = store.get_background_task(run_id) or {}
+        state = str(queued_task.get("state") or "queued")
         return {
             "success": True,
-            "message": "RSS 执行已启动",
+            "message": (
+                "RSS 执行已启动"
+                if state == "running"
+                else "RSS 任务已加入执行队列"
+            ),
             "task_id": run_id,
+            "state": state,
         }
+
+    def _find_pending_rss_run_locked(self, rss_task_id: str) -> Optional[Dict[str, Any]]:
+        store = self._store
+        if not store:
+            return None
+        normalized = str(rss_task_id or "").strip()
+        for run_id, task_id in self._rss_active_run_ids.items():
+            if task_id == normalized:
+                return store.get_background_task(run_id) or {
+                    "id": run_id,
+                    "state": "running",
+                }
+        for item in store.list_background_tasks_by_state(
+            RSS_RUN_TASK_TYPE,
+            {"queued"},
+        ):
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            if str(result.get("rss_task_id") or result.get("task_id") or "").strip() == normalized:
+                return item
+        return None
+
+    def _dispatch_rss_queue(self) -> None:
+        with self._rss_queue_lock:
+            self._dispatch_rss_queue_locked()
+
+    def _dispatch_rss_queue_locked(self) -> None:
+        store = self._store
+        if not store or not self._rss_enabled or self._rss_stop_event.is_set():
+            return
+        while len(self._rss_active_run_ids) < RSS_MAX_CONCURRENT_RUNS:
+            queued = store.list_background_tasks_by_state(
+                RSS_RUN_TASK_TYPE,
+                {"queued"},
+            )
+            if not queued:
+                return
+            tasks = {
+                str(item.get("id") or "").strip(): item
+                for item in store.list_all_rss_tasks()
+            }
+            selected = None
+            selected_task = None
+            selected_downloader = ""
+            selected_source = "scheduler"
+            for item in queued:
+                result = item.get("result") if isinstance(item.get("result"), dict) else {}
+                rss_task_id = str(
+                    result.get("rss_task_id") or result.get("task_id") or ""
+                ).strip()
+                task = tasks.get(rss_task_id)
+                if not task or not task.get("enabled"):
+                    store.finish_background_task(
+                        item.get("id"),
+                        "failed",
+                        error_message=(
+                            "排队期间 RSS 任务已删除或禁用"
+                            if rss_task_id
+                            else "排队记录缺少 RSS 任务 ID"
+                        ),
+                    )
+                    continue
+                config = task.get("config") if isinstance(task.get("config"), dict) else {}
+                downloader = str(config.get("qb_downloader") or "").strip()
+                if not downloader:
+                    store.finish_background_task(
+                        item.get("id"),
+                        "failed",
+                        error_message="RSS 任务未配置 QB 下载器",
+                    )
+                    continue
+                if downloader in self._rss_active_downloaders.values():
+                    continue
+                selected = item
+                selected_task = task
+                selected_downloader = downloader
+                selected_source = str(result.get("source") or "scheduler")
+                break
+            if not selected or not selected_task:
+                return
+            run_id = str(selected.get("id") or "").strip()
+            rss_task_id = str(selected_task.get("id") or "").strip()
+            if not store.start_background_task(run_id):
+                continue
+            self._rss_active_run_ids[run_id] = rss_task_id
+            self._rss_active_downloaders[run_id] = selected_downloader
+            try:
+                thread = threading.Thread(
+                    target=self._run_rss_task,
+                    kwargs={
+                        "background_task_id": run_id,
+                        "task": deepcopy(selected_task),
+                        "source": selected_source,
+                    },
+                    name=f"rssallinone-rss-{run_id[:8]}",
+                    daemon=True,
+                )
+                thread.start()
+            except Exception as error:
+                self._rss_active_run_ids.pop(run_id, None)
+                self._rss_active_downloaders.pop(run_id, None)
+                store.finish_background_task(
+                    run_id,
+                    "failed",
+                    error_message=f"后台线程启动失败：{error}",
+                )
 
     def _run_rss_task(
         self,
@@ -1228,7 +1353,9 @@ class RssAllInOne(_PluginBase):
     ) -> None:
         store = self._store
         if not store:
-            self._rss_run_lock.release()
+            with self._rss_queue_lock:
+                self._rss_active_run_ids.pop(background_task_id, None)
+                self._rss_active_downloaders.pop(background_task_id, None)
             return
         try:
             logger.info(
@@ -1251,7 +1378,10 @@ class RssAllInOne(_PluginBase):
                 error_message=str(error),
             )
         finally:
-            self._rss_run_lock.release()
+            with self._rss_queue_lock:
+                self._rss_active_run_ids.pop(background_task_id, None)
+                self._rss_active_downloaders.pop(background_task_id, None)
+                self._dispatch_rss_queue_locked()
 
     def _recognize_rss_qb_item(self, downloader_id: str, info_hash: str) -> None:
         self._qb_sync_service().refresh_item(downloader_id, info_hash)

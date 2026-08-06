@@ -7,6 +7,8 @@ import json
 import sqlite3
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -138,6 +140,50 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(result, {"deleted": 2, "running": 1})
             self.assertEqual(store.list_background_tasks()["total"], 1)
             self.assertEqual(store.get_background_task("running")["state"], "running")
+
+    def test_rss_queue_state_is_persisted_and_resumed_after_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            store.create_background_task(
+                "queued-rss",
+                "rss_run",
+                state="queued",
+                result={"rss_task_id": "task-a", "source": "scheduler"},
+            )
+            store.create_background_task("running-rss", "rss_run")
+            store.create_background_task(
+                "queued-other",
+                "file_batch",
+                state="queued",
+            )
+
+            recovered = store.recover_incomplete_tasks(
+                preserve_queued_types={"rss_run"}
+            )
+
+            self.assertEqual(recovered, 2)
+            self.assertEqual(
+                store.get_background_task("queued-rss")["state"],
+                "queued",
+            )
+            self.assertEqual(
+                store.get_background_task("running-rss")["state"],
+                "failed",
+            )
+            self.assertEqual(
+                store.get_background_task("queued-other")["state"],
+                "failed",
+            )
+            queued = store.list_background_tasks_by_state(
+                "rss_run", {"queued"}
+            )
+            self.assertEqual([item["id"] for item in queued], ["queued-rss"])
+            self.assertTrue(store.start_background_task("queued-rss"))
+            self.assertEqual(
+                store.get_background_task("queued-rss")["state"],
+                "running",
+            )
 
     def test_completed_qb_delete_jobs_are_cleaned_on_startup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -635,6 +681,9 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertTrue(overview["success"])
                 self.assertEqual(overview["plugin"]["id"], PLUGIN_ID)
                 self.assertTrue(overview["plugin"]["rss_enabled"])
+                self.assertEqual(overview["rss_queue"]["max_concurrent"], 2)
+                self.assertEqual(overview["rss_queue"]["running"], 0)
+                self.assertEqual(overview["rss_queue"]["queued"], 0)
                 self.assertTrue(overview["capabilities"]["hardlink_import"]["ready"])
                 self.assertFalse(
                     overview["capabilities"]["hardlink_import"]["clouddrive_api"]
@@ -935,6 +984,103 @@ class PluginLifecycleTest(unittest.TestCase):
                     module.MoviePilotQbGateway.list_torrents = original_list
                     module.MoviePilotQbGateway.torrent_dict = original_dict
                     module.MoviePilotQbGateway.remove_torrent = original_remove
+
+                queue_tasks = [{
+                    "id": "queue-a",
+                    "name": "队列 A",
+                    "enabled": True,
+                    "config": {
+                        "qb_downloader": "qb-a",
+                        "qb_category": "a",
+                    },
+                }, {
+                    "id": "queue-b",
+                    "name": "队列 B",
+                    "enabled": True,
+                    "config": {
+                        "qb_downloader": "qb-a",
+                        "qb_category": "b",
+                    },
+                }, {
+                    "id": "queue-c",
+                    "name": "队列 C",
+                    "enabled": True,
+                    "config": {
+                        "qb_downloader": "qb-c",
+                        "qb_category": "c",
+                    },
+                }, {
+                    "id": "queue-d",
+                    "name": "队列 D",
+                    "enabled": True,
+                    "config": {
+                        "qb_downloader": "qb-d",
+                        "qb_category": "d",
+                    },
+                }]
+                plugin.api_save_rss_tasks({"items": queue_tasks})
+                entered = []
+                two_started = threading.Event()
+                release_runs = threading.Event()
+                original_rss_run = module.RssExecutionService.run
+
+                def blocking_rss_run(
+                    service,
+                    background_task_id,
+                    task,
+                    *,
+                    stop_event=None,
+                ):
+                    entered.append(str(task.get("id") or ""))
+                    if len(entered) >= 2:
+                        two_started.set()
+                    release_runs.wait(5)
+                    result = {"task_id": task.get("id"), "queued": 0}
+                    service.store.finish_background_task(
+                        background_task_id,
+                        "succeeded",
+                        result=result,
+                    )
+                    return result
+
+                module.RssExecutionService.run = blocking_rss_run
+                try:
+                    run_a = plugin.api_rss_run({"task_id": "queue-a"})
+                    run_b = plugin.api_rss_run({"task_id": "queue-b"})
+                    run_c = plugin.api_rss_run({"task_id": "queue-c"})
+                    run_d = plugin.api_rss_run({"task_id": "queue-d"})
+                    self.assertEqual(run_a["state"], "running")
+                    self.assertEqual(run_b["state"], "queued")
+                    self.assertEqual(run_c["state"], "running")
+                    self.assertEqual(run_d["state"], "queued")
+                    self.assertTrue(two_started.wait(2))
+                    self.assertEqual(set(entered[:2]), {"queue-a", "queue-c"})
+                    duplicate = plugin.api_rss_run({"task_id": "queue-b"})
+                    self.assertFalse(duplicate["success"])
+                    self.assertEqual(duplicate["task_id"], run_b["task_id"])
+                    release_runs.set()
+                    deadline = time.time() + 3
+                    while time.time() < deadline:
+                        states = [
+                            plugin._store.get_background_task(item["task_id"])["state"]
+                            for item in (run_a, run_b, run_c, run_d)
+                        ]
+                        if states == [
+                            "succeeded", "succeeded", "succeeded", "succeeded"
+                        ]:
+                            break
+                        time.sleep(0.02)
+                    self.assertEqual(
+                        states,
+                        ["succeeded", "succeeded", "succeeded", "succeeded"],
+                    )
+                    self.assertEqual(
+                        set(entered),
+                        {"queue-a", "queue-b", "queue-c", "queue-d"},
+                    )
+                finally:
+                    release_runs.set()
+                    module.RssExecutionService.run = original_rss_run
 
                 from rssallinone.generated import clouddrive_pb2_grpc
 

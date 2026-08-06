@@ -698,7 +698,7 @@ async function runRssTask(task) {
     }
     rssBackgroundTask.value = {
       id: response.task_id,
-      state: 'running',
+      state: response.state || 'queued',
       processed: 0,
       total: 0,
     }

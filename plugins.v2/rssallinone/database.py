@@ -1301,15 +1301,32 @@ class SQLiteStore:
             ).fetchall()
         return [self._decode_row(row) for row in rows]
 
-    def create_background_task(self, task_id: str, task_type: str) -> None:
+    def create_background_task(
+        self,
+        task_id: str,
+        task_type: str,
+        *,
+        state: str = "running",
+        result: Optional[Dict[str, Any]] = None,
+    ) -> None:
         now = utc_now()
         with self.connection() as connection:
             connection.execute(
                 """INSERT INTO background_tasks(
-                    id, task_type, state, created_at, updated_at
-                ) VALUES (?, ?, 'running', ?, ?)""",
-                (task_id, task_type, now, now),
+                    id, task_type, state, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (task_id, task_type, state, self._json_dump(result or {}), now, now),
             )
+
+    def start_background_task(self, task_id: str) -> bool:
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """UPDATE background_tasks
+                   SET state = 'running', updated_at = ?
+                   WHERE id = ? AND state = 'queued'""",
+                (utc_now(), str(task_id or "").strip()),
+            )
+        return bool(cursor.rowcount)
 
     def update_background_task(
         self,
@@ -1389,17 +1406,60 @@ class SQLiteStore:
             ).fetchone()
         return self._decode_row(row) if row else None
 
-    def recover_incomplete_tasks(self) -> int:
+    def recover_incomplete_tasks(
+        self,
+        preserve_queued_types: Optional[Iterable[str]] = None,
+    ) -> int:
         now = utc_now()
+        preserved = sorted({
+            str(item or "").strip()
+            for item in (preserve_queued_types or [])
+            if str(item or "").strip()
+        })
         with self.connection() as connection:
+            params: List[Any] = [now, now]
+            if preserved:
+                placeholders = ",".join("?" for _ in preserved)
+                queued_clause = (
+                    f" OR (state = 'queued' AND task_type NOT IN ({placeholders}))"
+                )
+                params.extend(preserved)
+                state_clause = "state = 'running'" + queued_clause
+            else:
+                state_clause = "state IN ('queued', 'running')"
             cursor = connection.execute(
                 """UPDATE background_tasks
                    SET state = 'failed', error_message = '插件重启，任务已中断',
                        updated_at = ?, finished_at = ?
-                   WHERE state IN ('queued', 'running')""",
-                (now, now),
+                   WHERE """ + state_clause,
+                params,
             )
             return int(cursor.rowcount or 0)
+
+    def list_background_tasks_by_state(
+        self,
+        task_type: str,
+        states: Iterable[str],
+        *,
+        ascending: bool = True,
+    ) -> List[Dict[str, Any]]:
+        normalized_states = sorted({
+            str(item or "").strip()
+            for item in states or []
+            if str(item or "").strip()
+        })
+        if not normalized_states:
+            return []
+        placeholders = ",".join("?" for _ in normalized_states)
+        order = "ASC" if ascending else "DESC"
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM background_tasks
+                    WHERE task_type = ? AND state IN ({placeholders})
+                    ORDER BY created_at {order}, id {order}""",
+                (str(task_type or "").strip(), *normalized_states),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
 
     def list_rss_tasks(self, offset: object = 0, limit: object = 100) -> Dict[str, Any]:
         safe_offset, safe_limit = self._page(offset, limit)

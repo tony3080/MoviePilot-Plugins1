@@ -2223,7 +2223,7 @@ async function runRssTask(task) {
     }
     rssBackgroundTask.value = {
       id: response.task_id,
-      state: 'running',
+      state: response.state || 'queued',
       processed: 0,
       total: 0,
     };
@@ -3497,6 +3497,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-131952f3"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-fceef99b"]]);
 
 export { AppPage as default };
