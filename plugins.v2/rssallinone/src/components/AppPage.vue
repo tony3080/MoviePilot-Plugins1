@@ -118,6 +118,7 @@ const siteHeaders = [
 
 const taskHeaders = [
   { title: '任务类型', key: 'task_type_text', minWidth: 160 },
+  { title: '任务名称', key: 'task_name_text', minWidth: 180 },
   { title: '状态', key: 'state_text', width: 110 },
   { title: '当前项目', key: 'current_item', minWidth: 180 },
   { title: '进度', key: 'progress_text', width: 120 },
@@ -254,6 +255,7 @@ function normalizeTaskRows(items) {
     return {
       ...item,
       task_type_text: taskTypeLabels[item.task_type] || item.task_type || '未知任务',
+      task_name_text: item.task_name || item.result?.task_name || '-',
       state_text: taskStateLabels[item.state] || item.state || '未知状态',
       current_item: item.current_item || '-',
       progress_text: `${item.processed || 0}/${item.total || 0}`,

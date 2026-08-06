@@ -254,6 +254,50 @@ class MoviePilotQbGateway:
         return list(torrents)
 
     @staticmethod
+    def resume_torrents(downloader: str, info_hashes: Sequence[str]) -> bool:
+        """Resume qB tasks through MoviePilot's downloader chain."""
+        hashes = [
+            str(value or "").strip().lower()
+            for value in (info_hashes or [])
+            if str(value or "").strip()
+        ]
+        if not hashes:
+            return True
+        from app.chain.download import DownloadChain
+        from app.helper.downloader import DownloaderHelper
+
+        chain = DownloadChain()
+        starter = getattr(chain, "set_downloading", None)
+        if callable(starter):
+            results = [
+                bool(starter(info_hash, "start", downloader))
+                for info_hash in hashes
+            ]
+            return all(results)
+
+        # Compatibility fallback for older MoviePilot downloader wrappers.
+        service = DownloaderHelper().get_service(
+            name=str(downloader or "").strip(),
+            type_filter="qbittorrent",
+        )
+        server = getattr(service, "instance", None) if service else None
+        client = getattr(server, "qbc", None) if server else None
+        candidates = [client, server]
+        for target in candidates:
+            if not target:
+                continue
+            for method_name in ("torrents_resume", "resume_torrents", "start_torrents"):
+                method = getattr(target, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    method(torrent_hashes=hashes)
+                except TypeError:
+                    method(hashes)
+                return True
+        raise RuntimeError(f"qB 节点不支持恢复任务：{downloader}")
+
+    @staticmethod
     def torrent_dict(torrent: Any) -> Dict[str, Any]:
         if hasattr(torrent, "model_dump"):
             return torrent.model_dump(mode="json")

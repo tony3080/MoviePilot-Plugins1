@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.9"
+    plugin_version = "0.13.10"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -205,25 +205,44 @@ class RssAllInOne(_PluginBase):
                 if not task.get("enabled"):
                     continue
                 config = task.get("config") if isinstance(task.get("config"), dict) else {}
+                task_id = str(task.get("id") or "").strip()
+                task_name = str(task.get("name") or task_id).strip()
                 rss_url = str(config.get("rss_url") or "").strip()
                 rss_cron = str(config.get("rss_cron") or "").strip()
-                if not rss_url or not rss_cron:
-                    continue
-                try:
-                    trigger = CronTrigger.from_crontab(rss_cron)
-                except (TypeError, ValueError) as error:
-                    logger.error(
-                        f"RSS一条龙：任务 {task.get('name') or task.get('id')} 的 RSS CRON 无效：{error}"
-                    )
-                    continue
-                task_id = str(task.get("id") or "").strip()
-                services.append({
-                    "id": f"RssAllInOne.Rss.{task_id}",
-                    "name": f"RSS一条龙 RSS：{task.get('name') or task_id}",
-                    "trigger": trigger,
-                    "func": self._scheduled_rss_run,
-                    "func_kwargs": {"task_id": task_id},
-                })
+                if rss_url and rss_cron:
+                    try:
+                        trigger = CronTrigger.from_crontab(rss_cron)
+                    except (TypeError, ValueError) as error:
+                        logger.error(
+                            f"RSS一条龙：任务 {task_name} 的 RSS CRON 无效：{error}"
+                        )
+                    else:
+                        services.append({
+                            "id": f"RssAllInOne.Rss.{task_id}",
+                            "name": f"RSS一条龙 RSS：{task_name}",
+                            "trigger": trigger,
+                            "func": self._scheduled_rss_run,
+                            "func_kwargs": {"task_id": task_id},
+                        })
+
+                start_cron = str(config.get("start_cron") or "").strip()
+                downloader = str(config.get("qb_downloader") or "").strip()
+                category = str(config.get("qb_category") or "").strip()
+                if start_cron and downloader and category:
+                    try:
+                        start_trigger = CronTrigger.from_crontab(start_cron)
+                    except (TypeError, ValueError) as error:
+                        logger.error(
+                            f"RSS一条龙：任务 {task_name} 的开始任务 CRON 无效：{error}"
+                        )
+                    else:
+                        services.append({
+                            "id": f"RssAllInOne.Start.{task_id}",
+                            "name": f"RSS一条龙 开始任务：{task_name}",
+                            "trigger": start_trigger,
+                            "func": self._scheduled_rss_start,
+                            "func_kwargs": {"task_id": task_id},
+                        })
         except ImportError:
             logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS CRON")
         try:
@@ -1091,6 +1110,62 @@ class RssAllInOne(_PluginBase):
             return
         self._start_rss_run(task_id=str(task_id or "").strip(), source="scheduler")
 
+    def _scheduled_rss_start(self, task_id: str) -> None:
+        """Resume paused, incomplete qB tasks for one RSS task."""
+        if not self._rss_enabled or not self._store:
+            return
+        task_id = str(task_id or "").strip()
+        task = next(
+            (
+                item
+                for item in self._store.list_all_rss_tasks()
+                if str(item.get("id") or "").strip() == task_id
+            ),
+            None,
+        )
+        if not task or not task.get("enabled"):
+            return
+        config = task.get("config") if isinstance(task.get("config"), dict) else {}
+        if not bool(config.get("download_enabled", True)):
+            logger.info("RSS一条龙：任务 %s 未启用自动下载", task.get("name") or task_id)
+            return
+        downloader = str(config.get("qb_downloader") or "").strip()
+        category = str(config.get("qb_category") or "").strip()
+        if not downloader or not category:
+            return
+        try:
+            candidates: List[str] = []
+            for item in MoviePilotQbGateway.list_torrents(downloader):
+                raw = MoviePilotQbGateway.torrent_dict(item)
+                if str(raw.get("category") or "").strip() != category:
+                    continue
+                info_hash = str(raw.get("hash") or raw.get("info_hash") or "").strip().lower()
+                if not info_hash or self._torrent_is_completed(raw):
+                    continue
+                snapshot = self._store.get_torrent_snapshot(downloader, info_hash)
+                if str((snapshot or {}).get("inventory_state") or "").strip() == "exists":
+                    continue
+                state = str(raw.get("state") or "").strip().casefold()
+                if state not in {"paused", "pauseddl", "pausedup", "stopped", "stoppeddl"}:
+                    continue
+                candidates.append(info_hash)
+            if candidates:
+                if not MoviePilotQbGateway.resume_torrents(downloader, candidates):
+                    raise RuntimeError("qB 返回启动失败")
+                logger.info(
+                    "RSS一条龙：开始任务 CRON 已启动 %s 个 qB 任务，RSS任务=%s，分类=%s",
+                    len(candidates),
+                    task.get("name") or task_id,
+                    category,
+                )
+        except Exception as error:
+            logger.error(
+                "RSS一条龙：开始任务 CRON 执行失败，RSS任务=%s：%s",
+                task.get("name") or task_id,
+                error,
+                exc_info=True,
+            )
+
     def _scheduled_qb_deletes(self) -> None:
         if not self._store or not self._qb_delete_lock.acquire(blocking=False):
             return
@@ -1218,6 +1293,7 @@ class RssAllInOne(_PluginBase):
             store.create_background_task(
                 run_id,
                 RSS_RUN_TASK_TYPE,
+                task_name=str(task.get("name") or task_id),
                 state="queued",
                 result={
                     "rss_task_id": task_id,

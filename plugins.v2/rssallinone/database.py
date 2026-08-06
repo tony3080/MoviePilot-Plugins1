@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def utc_now() -> str:
@@ -143,6 +143,7 @@ class SQLiteStore:
                     CREATE TABLE IF NOT EXISTS background_tasks (
                         id TEXT PRIMARY KEY,
                         task_type TEXT NOT NULL,
+                        task_name TEXT NOT NULL DEFAULT '',
                         state TEXT NOT NULL,
                         current_item TEXT NOT NULL DEFAULT '',
                         processed INTEGER NOT NULL DEFAULT 0,
@@ -250,6 +251,7 @@ class SQLiteStore:
                 self._migrate_v3(connection)
                 self._migrate_v4(connection)
                 self._migrate_v5(connection)
+                self._migrate_v6(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -387,6 +389,17 @@ class SQLiteStore:
             """CREATE INDEX IF NOT EXISTS idx_import_watches_batch_state
                ON import_watches(batch_id, state, updated_at DESC)"""
         )
+
+    @staticmethod
+    def _migrate_v6(connection: sqlite3.Connection) -> None:
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(background_tasks)").fetchall()
+        }
+        if "task_name" not in columns:
+            connection.execute(
+                "ALTER TABLE background_tasks ADD COLUMN task_name TEXT NOT NULL DEFAULT ''"
+            )
 
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
@@ -1306,6 +1319,7 @@ class SQLiteStore:
         task_id: str,
         task_type: str,
         *,
+        task_name: str = "",
         state: str = "running",
         result: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -1313,9 +1327,17 @@ class SQLiteStore:
         with self.connection() as connection:
             connection.execute(
                 """INSERT INTO background_tasks(
-                    id, task_type, state, result_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)""",
-                (task_id, task_type, state, self._json_dump(result or {}), now, now),
+                    id, task_type, task_name, state, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    task_type,
+                    str(task_name or "").strip(),
+                    state,
+                    self._json_dump(result or {}),
+                    now,
+                    now,
+                ),
             )
 
     def start_background_task(self, task_id: str) -> bool:

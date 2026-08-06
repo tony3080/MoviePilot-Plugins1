@@ -141,6 +141,21 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(store.list_background_tasks()["total"], 1)
             self.assertEqual(store.get_background_task("running")["state"], "running")
 
+    def test_background_task_keeps_task_name_outside_result_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            store.create_background_task(
+                "rss-run",
+                "rss_run",
+                task_name="SKY纯净版",
+                result={"rss_task_id": "sky", "task_name": "SKY纯净版"},
+            )
+            store.update_background_task("rss-run", result={"total": 3, "queued": 2})
+            row = store.get_background_task("rss-run")
+            self.assertEqual(row["task_name"], "SKY纯净版")
+            self.assertEqual(row["result"], {"total": 3, "queued": 2})
+
     def test_rss_queue_state_is_persisted_and_resumed_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")
@@ -344,7 +359,7 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(migrated["name"], "旧快照")
             self.assertEqual(migrated["present"], 1)
             self.assertEqual(migrated["inventory_state"], "unknown")
-            self.assertEqual(store.health()["schema_version"], 5)
+            self.assertEqual(store.health()["schema_version"], 6)
 
 
 class RepositoryContractTest(unittest.TestCase):
@@ -754,7 +769,54 @@ class PluginLifecycleTest(unittest.TestCase):
                 )
                 service_ids = {item["id"] for item in plugin.get_service()}
                 self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)
+                self.assertIn("RssAllInOne.Start.movies", service_ids)
                 self.assertNotIn("RssAllInOne.QbRefresh", service_ids)
+
+                original_list_torrents = module.MoviePilotQbGateway.list_torrents
+                original_resume_torrents = module.MoviePilotQbGateway.resume_torrents
+                resumed = []
+                plugin._store.upsert_torrent_snapshot({
+                    "downloader_id": "qb-main",
+                    "info_hash": "already-exists",
+                    "name": "库存已存在",
+                    "state": "pausedDL",
+                    "category": "movie",
+                    "content_path": "/downloads/already-exists.mkv",
+                    "progress": 0.1,
+                    "size": 1024,
+                    "media_id": None,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": "exists",
+                    "media_title": "库存已存在",
+                    "media_type": "movie",
+                    "media_year": "2026",
+                    "tmdb_id": 1,
+                    "season": None,
+                    "poster": "",
+                    "recognition_error": "",
+                    "recognized_at": database.utc_now(),
+                    "last_seen_at": database.utc_now(),
+                    "missing_since": None,
+                    "details": {},
+                    "updated_at": database.utc_now(),
+                })
+                module.MoviePilotQbGateway.list_torrents = staticmethod(lambda _downloader: [
+                    {"hash": "pause-me", "category": "movie", "state": "pausedDL", "progress": 0.1},
+                    {"hash": "already-exists", "category": "movie", "state": "pausedDL", "progress": 0.1},
+                    {"hash": "done", "category": "movie", "state": "pausedUP", "progress": 1.0},
+                    {"hash": "other", "category": "series", "state": "pausedDL", "progress": 0.1},
+                ])
+                module.MoviePilotQbGateway.resume_torrents = staticmethod(
+                    lambda downloader, hashes: resumed.append((downloader, hashes)) or True
+                )
+                try:
+                    plugin._scheduled_rss_start("movies")
+                finally:
+                    module.MoviePilotQbGateway.list_torrents = original_list_torrents
+                    module.MoviePilotQbGateway.resume_torrents = original_resume_torrents
+                self.assertEqual(resumed, [("qb-main", ["pause-me"])])
 
                 class MissingTorrentService:
                     @staticmethod
