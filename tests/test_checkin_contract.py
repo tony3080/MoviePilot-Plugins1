@@ -55,6 +55,8 @@ class CheckinContractTest(unittest.TestCase):
         self.assertNotIn("def get_sidebar_nav", source)
         self.assertIn("def get_api", source)
         self.assertNotIn("def get_render_mode", source)
+        self.assertIn("def get_page", source)
+        self.assertIn("VDataTableVirtual", source)
 
     def test_native_config_form_contains_all_controls(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
@@ -74,6 +76,7 @@ class CheckinContractTest(unittest.TestCase):
         self.assertFalse((PLUGIN_DIR / "src" / "components" / "Config.vue").exists())
         self.assertFalse((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").exists())
         self.assertFalse((PLUGIN_DIR / "package.json").exists())
+        self.assertNotIn('"title": "签到历史"', source.split("def get_page", 1)[0])
 
 
 if __name__ == "__main__":

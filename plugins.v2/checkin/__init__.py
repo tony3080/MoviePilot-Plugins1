@@ -29,6 +29,7 @@ DESKTOP_UA = (
 )
 SMZDM_CHECKIN_URL = "https://zhiyou.smzdm.com/user/checkin/jsonp_checkin"
 SMZDM_API_CHECKIN_URL = "https://api.smzdm.com/v1/user/checkin"
+SMZDM_API_INFO_URL = "https://api.smzdm.com/v1/user/info"
 CHIPHELL_URL = "https://www.chiphell.com/forum.php"
 SMZDM_MOBILE_UA = (
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
@@ -44,7 +45,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.4"
+    plugin_version = "0.1.5"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -149,7 +150,6 @@ class Checkin(_PluginBase):
         return []
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
-        history = self._history_rows()
         return [
             {
                 "component": "VForm",
@@ -178,7 +178,7 @@ class Checkin(_PluginBase):
                                 "props": {"cols": 12, "md": 3},
                                 "content": [{
                                     "component": "VSwitch",
-                                    "props": {"model": "notify", "label": "发送结果通知"},
+                                    "props": {"model": "notify", "label": "失败结果通知（成功必发）"},
                                 }],
                             },
                             {
@@ -267,38 +267,41 @@ class Checkin(_PluginBase):
                             },
                         ],
                     },
-                    {
-                        "component": "VCard",
-                        "props": {
-                            "title": "签到历史",
-                            "subtitle": "最近 50 条记录",
-                            "variant": "tonal",
-                        },
-                        "content": [{
-                            "component": "VCardText",
-                            "content": [{
-                                "component": "VDataTableVirtual",
-                                "props": {
-                                    "headers": [
-                                        {"title": "时间", "key": "date"},
-                                        {"title": "站点", "key": "site_name"},
-                                        {"title": "状态", "key": "status_label"},
-                                        {"title": "说明", "key": "message"},
-                                        {"title": "触发", "key": "trigger_label"},
-                                    ],
-                                    "items": history,
-                                    "height": "20rem",
-                                    "density": "compact",
-                                    "fixed-header": True,
-                                    "hide-no-data": False,
-                                    "hover": True,
-                                },
-                            }],
-                        }],
-                    },
                 ],
             }
         ], self._default_config()
+
+    def get_page(self) -> List[dict]:
+        return [{
+            "component": "VCard",
+            "props": {
+                "title": "签到历史",
+                "subtitle": "最近 50 条记录；打开此页面即可查看最新结果",
+                "variant": "tonal",
+            },
+            "content": [{
+                "component": "VCardText",
+                "content": [{
+                    "component": "VDataTableVirtual",
+                    "props": {
+                        "headers": [
+                            {"title": "时间", "key": "date"},
+                            {"title": "站点", "key": "site_name"},
+                            {"title": "状态", "key": "status_label"},
+                            {"title": "连续天数", "key": "streak_days"},
+                            {"title": "说明", "key": "message"},
+                            {"title": "触发", "key": "trigger_label"},
+                        ],
+                        "items": self._history_rows(),
+                        "height": "32rem",
+                        "density": "compact",
+                        "fixed-header": True,
+                        "hide-no-data": False,
+                        "hover": True,
+                    },
+                }],
+            }],
+        }]
 
     def _history_rows(self) -> List[Dict[str, Any]]:
         status_labels = {
@@ -308,14 +311,26 @@ class Checkin(_PluginBase):
             "busy": "执行中",
         }
         rows = []
-        for record in reversed(list(self.get_data("history") or [])):
+        history = [
+            record for record in (self.get_data("history") or [])
+            if isinstance(record, dict)
+        ]
+        for record in reversed(history):
             if not isinstance(record, dict):
                 continue
+            streak_days = self._positive_int(record.get("streak_days"))
+            if streak_days is None and record.get("status") in SUCCESS_STATUSES:
+                streak_days = self._calculate_streak(record, records=history)
             row = {
                 "date": str(record.get("date") or ""),
                 "site_name": str(record.get("site_name") or SITE_NAMES.get(record.get("site"), "")),
                 "status_label": status_labels.get(
                     str(record.get("status") or ""), str(record.get("status") or "未知")
+                ),
+                "streak_days": (
+                    f"{streak_days} 天"
+                    if streak_days is not None
+                    else "-"
                 ),
                 "message": str(record.get("message") or ""),
                 "trigger_label": "手动" if record.get("trigger") == "manual" else "定时",
@@ -324,10 +339,6 @@ class Checkin(_PluginBase):
             if len(rows) >= 50:
                 break
         return rows
-
-    @staticmethod
-    def get_page() -> List[dict]:
-        return []
 
     def get_api(self) -> List[Dict[str, Any]]:
         return []
@@ -445,14 +456,39 @@ class Checkin(_PluginBase):
                     body,
                     credentials: 'include',
                 });
-                return await response.text();
+                const checkin = await response.text();
+                let info = '';
+                try {
+                    const infoResponse = await fetch(infoUrl, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                        body,
+                        credentials: 'include',
+                    });
+                    info = await infoResponse.text();
+                } catch (_) {
+                    info = '';
+                }
+                return {checkin, info};
             }
             """,
             {
                 "url": SMZDM_API_CHECKIN_URL,
+                "infoUrl": SMZDM_API_INFO_URL,
                 "body": "weixin=1&f=android&v=8.7.8&captcha=",
             },
         )
+        if isinstance(payload, dict) and "checkin" in payload:
+            result = parse_smzdm_response(str(payload.get("checkin") or ""))
+            info = str(payload.get("info") or "")
+            if info:
+                try:
+                    info_result = parse_smzdm_response(info)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    info_result = {}
+                if info_result.get("days"):
+                    result["days"] = info_result["days"]
+            return result
         if isinstance(payload, (dict, list)):
             payload = json.dumps(payload, ensure_ascii=False)
         return parse_smzdm_response(str(payload or ""))
@@ -490,19 +526,66 @@ class Checkin(_PluginBase):
             timeout=60,
         )
 
-    @staticmethod
     def _decorate_result(
+        self,
         site: str,
         result: Dict[str, Any],
         manual: bool,
     ) -> Dict[str, Any]:
-        return {
+        record = {
             "site": site,
             "site_name": SITE_NAMES[site],
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "trigger": "manual" if manual else "scheduled",
             **dict(result or {}),
         }
+        if record.get("status") in SUCCESS_STATUSES:
+            reported_days = self._positive_int(record.get("days"))
+            record["streak_days"] = reported_days or self._calculate_streak(record)
+        return record
+
+    def _calculate_streak(
+        self,
+        current: Dict[str, Any],
+        records: Optional[List[Dict[str, Any]]] = None,
+    ) -> int:
+        try:
+            current_day = datetime.strptime(
+                str(current.get("date") or ""), "%Y-%m-%d %H:%M:%S"
+            ).date()
+        except ValueError:
+            return 1
+        successful_days = {current_day}
+        for record in records if records is not None else (self.get_data("history") or []):
+            if not isinstance(record, dict):
+                continue
+            if record.get("site") != current.get("site"):
+                continue
+            if record.get("status") not in SUCCESS_STATUSES:
+                continue
+            try:
+                day = datetime.strptime(
+                    str(record.get("date") or ""), "%Y-%m-%d %H:%M:%S"
+                ).date()
+            except ValueError:
+                continue
+            if day > current_day:
+                continue
+            successful_days.add(day)
+        streak = 0
+        day = current_day
+        while day in successful_days:
+            streak += 1
+            day = day.fromordinal(day.toordinal() - 1)
+        return streak
+
+    @staticmethod
+    def _positive_int(value: Any) -> Optional[int]:
+        try:
+            number = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
 
     def _append_history(self, record: Dict[str, Any]) -> None:
         with self._history_lock:
@@ -514,7 +597,9 @@ class Checkin(_PluginBase):
             )
 
     def _notify_result(self, record: Dict[str, Any]) -> None:
-        if not self._notify or record.get("status") == "busy":
+        if record.get("status") == "busy":
+            return
+        if record.get("status") not in SUCCESS_STATUSES and not self._notify:
             return
         status_labels = {
             "success": "成功",
@@ -527,7 +612,7 @@ class Checkin(_PluginBase):
         ]
         for key, label in (
             ("username", "账号"),
-            ("days", "连续签到"),
+            ("streak_days", "连续天数"),
             ("points", "积分"),
             ("experience", "经验"),
             ("gold", "金币"),

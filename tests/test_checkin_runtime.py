@@ -188,6 +188,15 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertIn("api.smzdm.com", self.browser_calls[0]["url"])
         self.assertNotIn("secret-one", repr(self.plugin.get_data("history")))
 
+    def test_smzdm_info_response_supplies_continuous_days(self):
+        page = _FakePage({
+            "checkin": '{"error_code":1,"error_msg":"已签到"}',
+            "info": '{"data":{"daily_attendance_number":"27"}}',
+        })
+        result = self.module.Checkin._smzdm_api_handler(page)
+        self.assertEqual(result["status"], "already")
+        self.assertEqual(result["days"], "27")
+
     def test_chiphell_browser_result_extracts_account_summary(self):
         record = self.plugin._run_site("chiphell", manual=False)
         self.assertEqual(record["status"], "success")
@@ -235,21 +244,7 @@ class CheckinRuntimeTest(unittest.TestCase):
 
         walk(form)
         self.assertEqual(models, set(defaults))
-        table_components = []
-
-        def collect_tables(value):
-            if isinstance(value, dict):
-                if value.get("component") == "VDataTableVirtual":
-                    table_components.append(value)
-                for nested in value.values():
-                    collect_tables(nested)
-            elif isinstance(value, list):
-                for nested in value:
-                    collect_tables(nested)
-
-        collect_tables(form)
-        self.assertEqual(len(table_components), 1)
-        self.assertEqual(table_components[0]["props"]["items"], [])
+        self.assertNotIn("VDataTableVirtual", repr(form))
 
     def test_form_includes_recent_history_rows(self):
         self.plugin._test_data["history"] = [{
@@ -260,11 +255,38 @@ class CheckinRuntimeTest(unittest.TestCase):
             "message": "论坛页访问成功，登录态有效",
             "trigger": "manual",
         }]
-        form, _ = self.plugin.get_form()
-        table = form[0]["content"][1]["content"][0]["content"][0]
+        page = self.plugin.get_page()
+        table = page[0]["content"][0]["content"][0]
         self.assertEqual(table["component"], "VDataTableVirtual")
         self.assertEqual(table["props"]["items"][0]["site_name"], "Chiphell")
         self.assertEqual(table["props"]["items"][0]["trigger_label"], "手动")
+
+    def test_success_notification_is_sent_even_when_failure_notifications_are_disabled(self):
+        self.plugin._notify = False
+        record = self.plugin._run_site("chiphell", manual=True)
+        self.assertEqual(record["status"], "success")
+        self.assertEqual(len(self.plugin._test_messages), 1)
+
+    def test_streak_days_are_calculated_from_successful_history(self):
+        self.plugin._test_data["history"] = [
+            {
+                "date": "2026-08-04 09:00:00",
+                "site": "chiphell",
+                "status": "success",
+            },
+            {
+                "date": "2026-08-05 09:00:00",
+                "site": "chiphell",
+                "status": "already",
+            },
+        ]
+        self.plugin._module_now = None
+        record = self.plugin._decorate_result(
+            "chiphell",
+            {"status": "success", "message": "ok"},
+            manual=True,
+        )
+        self.assertEqual(record["streak_days"], 3)
 
 
 if __name__ == "__main__":
