@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime
@@ -27,7 +28,12 @@ DESKTOP_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 )
 SMZDM_CHECKIN_URL = "https://zhiyou.smzdm.com/user/checkin/jsonp_checkin"
+SMZDM_API_CHECKIN_URL = "https://api.smzdm.com/v1/user/checkin"
 CHIPHELL_URL = "https://www.chiphell.com/forum.php"
+SMZDM_MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
+)
 SUCCESS_STATUSES = {"success", "already"}
 
 
@@ -38,7 +44,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.3"
+    plugin_version = "0.1.4"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -143,6 +149,7 @@ class Checkin(_PluginBase):
         return []
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
+        history = self._history_rows()
         return [
             {
                 "component": "VForm",
@@ -259,10 +266,64 @@ class Checkin(_PluginBase):
                                 }],
                             },
                         ],
-                    }
+                    },
+                    {
+                        "component": "VCard",
+                        "props": {
+                            "title": "签到历史",
+                            "subtitle": "最近 50 条记录",
+                            "variant": "tonal",
+                        },
+                        "content": [{
+                            "component": "VCardText",
+                            "content": [{
+                                "component": "VDataTableVirtual",
+                                "props": {
+                                    "headers": [
+                                        {"title": "时间", "key": "date"},
+                                        {"title": "站点", "key": "site_name"},
+                                        {"title": "状态", "key": "status_label"},
+                                        {"title": "说明", "key": "message"},
+                                        {"title": "触发", "key": "trigger_label"},
+                                    ],
+                                    "items": history,
+                                    "height": "20rem",
+                                    "density": "compact",
+                                    "fixed-header": True,
+                                    "hide-no-data": False,
+                                    "hover": True,
+                                },
+                            }],
+                        }],
+                    },
                 ],
             }
         ], self._default_config()
+
+    def _history_rows(self) -> List[Dict[str, Any]]:
+        status_labels = {
+            "success": "成功",
+            "already": "今日已完成",
+            "failed": "失败",
+            "busy": "执行中",
+        }
+        rows = []
+        for record in reversed(list(self.get_data("history") or [])):
+            if not isinstance(record, dict):
+                continue
+            row = {
+                "date": str(record.get("date") or ""),
+                "site_name": str(record.get("site_name") or SITE_NAMES.get(record.get("site"), "")),
+                "status_label": status_labels.get(
+                    str(record.get("status") or ""), str(record.get("status") or "未知")
+                ),
+                "message": str(record.get("message") or ""),
+                "trigger_label": "手动" if record.get("trigger") == "manual" else "定时",
+            }
+            rows.append(row)
+            if len(rows) >= 50:
+                break
+        return rows
 
     @staticmethod
     def get_page() -> List[dict]:
@@ -343,6 +404,15 @@ class Checkin(_PluginBase):
         return record
 
     def _run_smzdm(self, cookie: str) -> Dict[str, Any]:
+        result = self._browser_action(
+            url=SMZDM_API_CHECKIN_URL,
+            cookie=cookie,
+            callback=self._smzdm_api_handler,
+            ua=SMZDM_MOBILE_UA,
+        )
+        if result and result.get("status") in SUCCESS_STATUSES:
+            return result
+
         checkin_url = f"{SMZDM_CHECKIN_URL}?_={int(time.time() * 1000)}"
 
         def page_handler(page) -> Dict[str, Any]:
@@ -352,15 +422,40 @@ class Checkin(_PluginBase):
                 body = page.content()
             return parse_smzdm_response(body)
 
-        result = self._browser_action(
+        fallback = self._browser_action(
             url=checkin_url,
             cookie=cookie,
             callback=page_handler,
         )
+        if fallback:
+            return fallback
         return result or {
             "status": "failed",
             "message": "CloakBrowser 未返回签到响应，请检查浏览器组件和网络",
         }
+
+    @staticmethod
+    def _smzdm_api_handler(page) -> Dict[str, Any]:
+        payload = page.evaluate(
+            """
+            async ({url, body}) => {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                    body,
+                    credentials: 'include',
+                });
+                return await response.text();
+            }
+            """,
+            {
+                "url": SMZDM_API_CHECKIN_URL,
+                "body": "weixin=1&f=android&v=8.7.8&captcha=",
+            },
+        )
+        if isinstance(payload, (dict, list)):
+            payload = json.dumps(payload, ensure_ascii=False)
+        return parse_smzdm_response(str(payload or ""))
 
     def _run_chiphell(self, cookie: str) -> Dict[str, Any]:
         def page_handler(page) -> Dict[str, Any]:
@@ -378,14 +473,19 @@ class Checkin(_PluginBase):
         }
 
     @staticmethod
-    def _browser_action(url: str, cookie: str, callback) -> Optional[Dict[str, Any]]:
+    def _browser_action(
+        url: str,
+        cookie: str,
+        callback,
+        ua: str = DESKTOP_UA,
+    ) -> Optional[Dict[str, Any]]:
         from app.helper.browser import PlaywrightHelper
 
         return PlaywrightHelper().action(
             url=url,
             callback=callback,
             cookies=cookie,
-            ua=DESKTOP_UA,
+            ua=ua,
             headless=True,
             timeout=60,
         )

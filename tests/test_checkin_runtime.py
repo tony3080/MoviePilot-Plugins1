@@ -94,6 +94,9 @@ class _FakePage:
     def content(self):
         return self.response
 
+    def evaluate(self, _script, _argument=None):
+        return self.response
+
 
 def _load_plugin_module():
     app = types.ModuleType("app")
@@ -158,8 +161,8 @@ class CheckinRuntimeTest(unittest.TestCase):
             "chiphell_cookie": "B7Y9_auth=secret-two",
         })
 
-        def browser_action(url, cookie, callback):
-            self.browser_calls.append({"url": url, "cookies": cookie})
+        def browser_action(url, cookie, callback, ua=None):
+            self.browser_calls.append({"url": url, "cookies": cookie, "ua": ua})
             if "smzdm.com" in url:
                 response = (
                     '{"error_code":0,"error_msg":"签到成功",'
@@ -182,6 +185,7 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(len(self.plugin.get_data("history")), 1)
         self.assertEqual(len(self.plugin._test_messages), 1)
         self.assertEqual(self.browser_calls[0]["cookies"], "smzdm_token=secret-one")
+        self.assertIn("api.smzdm.com", self.browser_calls[0]["url"])
         self.assertNotIn("secret-one", repr(self.plugin.get_data("history")))
 
     def test_chiphell_browser_result_extracts_account_summary(self):
@@ -191,6 +195,24 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(record["points"], "888")
         self.assertEqual(record["trigger"], "scheduled")
         self.assertNotIn("secret-two", repr(self.plugin.get_data("history")))
+
+    def test_smzdm_falls_back_to_web_endpoint_when_mobile_api_fails(self):
+        calls = []
+
+        def browser_action(url, cookie, callback, ua=None):
+            calls.append(url)
+            if "api.smzdm.com" in url:
+                response = '{"error_code":"11111","error_msg":"请先登录"}'
+            else:
+                response = '{"error_code":0,"error_msg":"签到成功"}'
+            return callback(_FakePage(response))
+
+        self.plugin._browser_action = browser_action
+        record = self.plugin._run_site("smzdm", manual=True)
+        self.assertEqual(record["status"], "success")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("api.smzdm.com", calls[0])
+        self.assertIn("zhiyou.smzdm.com", calls[1])
 
     def test_native_form_is_nonempty_and_contains_all_models(self):
         self.assertFalse(self.plugin.__class__.__abstractmethods__)
@@ -213,6 +235,36 @@ class CheckinRuntimeTest(unittest.TestCase):
 
         walk(form)
         self.assertEqual(models, set(defaults))
+        table_components = []
+
+        def collect_tables(value):
+            if isinstance(value, dict):
+                if value.get("component") == "VDataTableVirtual":
+                    table_components.append(value)
+                for nested in value.values():
+                    collect_tables(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_tables(nested)
+
+        collect_tables(form)
+        self.assertEqual(len(table_components), 1)
+        self.assertEqual(table_components[0]["props"]["items"], [])
+
+    def test_form_includes_recent_history_rows(self):
+        self.plugin._test_data["history"] = [{
+            "date": "2026-08-06 12:32:57",
+            "site": "chiphell",
+            "site_name": "Chiphell",
+            "status": "success",
+            "message": "论坛页访问成功，登录态有效",
+            "trigger": "manual",
+        }]
+        form, _ = self.plugin.get_form()
+        table = form[0]["content"][1]["content"][0]["content"][0]
+        self.assertEqual(table["component"], "VDataTableVirtual")
+        self.assertEqual(table["props"]["items"][0]["site_name"], "Chiphell")
+        self.assertEqual(table["props"]["items"][0]["trigger_label"], "手动")
 
 
 if __name__ == "__main__":
