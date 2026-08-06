@@ -37,3 +37,6 @@ plugins.v2/rssallinone/*.db-shm
 plugins.v2/rssallinone/*.db-wal
 plugins.v2/rssallinone/qb_completed_notify.sh
 *.egg-info/
+
+# Local-only RSS development handoff
+/plugins.v2/rssallinone/DEVELOPMENT.md
