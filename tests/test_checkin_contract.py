@@ -48,12 +48,16 @@ class CheckinContractTest(unittest.TestCase):
         self.assertIn("PlaywrightHelper().action", source)
         self.assertIn('return "vue", "dist/assets"', source)
         self.assertIn('"func_kwargs": {"site": site}', source)
-        self.assertIn('self.save_data("history"', source)
+        self.assertIn("def _append_history", source)
+        self.assertIn("self.save_data(", source)
+        self.assertIn('"history",', source)
         self.assertNotIn("settings.yaml", source)
         self.assertNotIn("requests.", source)
+        self.assertNotIn("def get_sidebar_nav", source)
+        self.assertNotIn("def get_api", source)
 
     def test_frontend_sources_exist(self) -> None:
-        self.assertTrue((PLUGIN_DIR / "src" / "components" / "Page.vue").is_file())
+        self.assertFalse((PLUGIN_DIR / "src" / "components" / "Page.vue").exists())
         self.assertTrue((PLUGIN_DIR / "src" / "components" / "Config.vue").is_file())
         self.assertTrue((PLUGIN_DIR / "dist" / "assets" / "remoteEntry.js").is_file())
 

@@ -38,7 +38,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.0"
+    plugin_version = "0.1.1"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -146,15 +146,6 @@ class Checkin(_PluginBase):
     def get_render_mode() -> Tuple[str, str]:
         return "vue", "dist/assets"
 
-    @staticmethod
-    def get_sidebar_nav() -> List[Dict[str, Any]]:
-        return [{
-            "name": "签到助手",
-            "icon": "tabler:calendar-check",
-            "path": "/checkin",
-            "nav_key": "checkin",
-        }]
-
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [], self._default_config()
 
@@ -186,63 +177,6 @@ class Checkin(_PluginBase):
                 "func_kwargs": {"site": site},
             })
         return services
-
-    def get_api(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "path": "/run",
-                "endpoint": self.api_run,
-                "methods": ["POST"],
-                "auth": "bear",
-                "summary": "立即执行签到",
-            },
-            {
-                "path": "/history",
-                "endpoint": self.api_history,
-                "methods": ["GET"],
-                "auth": "bear",
-                "summary": "查询签到历史",
-            },
-            {
-                "path": "/history/clear",
-                "endpoint": self.api_clear_history,
-                "methods": ["POST"],
-                "auth": "bear",
-                "summary": "清空签到历史",
-            },
-        ]
-
-    def api_run(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        site = str((payload or {}).get("site") or "all").strip().lower()
-        if site not in {"all", "smzdm", "chiphell"}:
-            return {"success": False, "message": "不支持的签到站点"}
-        records = (
-            self._run_enabled_sites(manual=True)
-            if site == "all"
-            else [self._run_site(site, manual=True)]
-        )
-        success = all(record.get("status") in SUCCESS_STATUSES for record in records)
-        return {
-            "success": success,
-            "message": "签到执行完成" if success else "签到执行完成，存在失败项目",
-            "items": records,
-        }
-
-    def api_history(self) -> Dict[str, Any]:
-        items = list(reversed(self.get_data("history") or []))
-        return {
-            "success": True,
-            "items": items,
-            "total": len(items),
-            "running": {
-                site: lock.locked() for site, lock in self._run_locks.items()
-            },
-        }
-
-    def api_clear_history(self) -> Dict[str, Any]:
-        with self._history_lock:
-            self.save_data("history", [])
-        return {"success": True, "message": "签到历史已清空"}
 
     def _scheduled_run(self, site: str) -> Dict[str, Any]:
         return self._run_site(site, manual=False)

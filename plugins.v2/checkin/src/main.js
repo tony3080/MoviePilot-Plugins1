@@ -1,4 +1,4 @@
 import { createApp } from 'vue'
-import Page from './components/Page.vue'
+import Config from './components/Config.vue'
 
-createApp(Page).mount('#app')
+createApp(Config).mount('#app')
