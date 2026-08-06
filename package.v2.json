@@ -33,7 +33,7 @@
     "name": "签到助手",
     "description": "通过 MoviePilot CloakBrowser 执行什么值得买签到和 Chiphell 登录保活。",
     "labels": "签到,自动化",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/signin.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -41,6 +41,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.1.3": "恢复 MoviePilot 插件基类要求的空 get_api 实现，修复插件无法实例化、配置弹窗读取不到原生表单的问题",
       "v0.1.2": "改用 MoviePilot 原生插件配置表单，点击插件卡片即可配置全部签到选项，并移除不再需要的 Vue 前端构建",
       "v0.1.1": "移除左侧导航、独立详情页面和页面 API，收缩为仅通过插件配置弹窗管理的轻量签到插件",
       "v0.1.0": "首版支持什么值得买签到和 Chiphell 登录保活；统一调用 MoviePilot CloakBrowser，提供独立 Cron、手动执行、通知和历史记录"

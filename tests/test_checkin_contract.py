@@ -53,7 +53,7 @@ class CheckinContractTest(unittest.TestCase):
         self.assertNotIn("settings.yaml", source)
         self.assertNotIn("requests.", source)
         self.assertNotIn("def get_sidebar_nav", source)
-        self.assertNotIn("def get_api", source)
+        self.assertIn("def get_api", source)
         self.assertNotIn("def get_render_mode", source)
 
     def test_native_config_form_contains_all_controls(self) -> None:

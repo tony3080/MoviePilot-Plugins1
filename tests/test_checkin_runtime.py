@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import types
 import unittest
+from abc import ABCMeta, abstractmethod
 from pathlib import Path
 
 
@@ -16,11 +17,35 @@ class _Logger:
         return lambda *args, **kwargs: None
 
 
-class _PluginBase:
+class _PluginBase(metaclass=ABCMeta):
     def __init__(self, *args, **kwargs):
         self._test_data = {}
         self._test_config = {}
         self._test_messages = []
+
+    @abstractmethod
+    def init_plugin(self, config=None):
+        pass
+
+    @abstractmethod
+    def get_state(self):
+        pass
+
+    @abstractmethod
+    def get_api(self):
+        pass
+
+    @abstractmethod
+    def get_form(self):
+        pass
+
+    @abstractmethod
+    def get_page(self):
+        pass
+
+    @staticmethod
+    def get_render_mode():
+        return "vuetify", None
 
     def get_data(self, key):
         return self._test_data.get(key)
@@ -37,6 +62,12 @@ class _PluginBase:
 
 class _NotificationType:
     Plugin = "plugin"
+
+
+class _CronTrigger:
+    @staticmethod
+    def from_crontab(value):
+        return ("cron", value)
 
 
 class _FakeContext:
@@ -75,12 +106,21 @@ def _load_plugin_module():
     app_schemas.__path__ = []
     app_types = types.ModuleType("app.schemas.types")
     app_types.NotificationType = _NotificationType
+    apscheduler = types.ModuleType("apscheduler")
+    apscheduler.__path__ = []
+    apscheduler_triggers = types.ModuleType("apscheduler.triggers")
+    apscheduler_triggers.__path__ = []
+    apscheduler_cron = types.ModuleType("apscheduler.triggers.cron")
+    apscheduler_cron.CronTrigger = _CronTrigger
     modules = {
         "app": app,
         "app.log": app_log,
         "app.plugins": app_plugins,
         "app.schemas": app_schemas,
         "app.schemas.types": app_types,
+        "apscheduler": apscheduler,
+        "apscheduler.triggers": apscheduler_triggers,
+        "apscheduler.triggers.cron": apscheduler_cron,
     }
     originals = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -153,6 +193,7 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertNotIn("secret-two", repr(self.plugin.get_data("history")))
 
     def test_native_form_is_nonempty_and_contains_all_models(self):
+        self.assertFalse(self.plugin.__class__.__abstractmethods__)
         form, defaults = self.plugin.get_form()
         self.assertTrue(form)
         self.assertEqual(form[0]["component"], "VForm")

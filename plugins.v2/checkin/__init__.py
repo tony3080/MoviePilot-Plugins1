@@ -38,7 +38,7 @@ class Checkin(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/signin.png"
     )
-    plugin_version = "0.1.2"
+    plugin_version = "0.1.3"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "checkin_"
@@ -266,6 +266,9 @@ class Checkin(_PluginBase):
 
     @staticmethod
     def get_page() -> List[dict]:
+        return []
+
+    def get_api(self) -> List[Dict[str, Any]]:
         return []
 
     def get_service(self) -> List[Dict[str, Any]]:
