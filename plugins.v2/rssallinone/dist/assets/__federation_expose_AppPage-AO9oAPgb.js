@@ -1622,6 +1622,7 @@ const clearingTasks = ref(false);
 let qbPollTimer = null;
 let rssPollTimer = null;
 let pendingImportPollTimer = null;
+let activeLoadId = 0;
 
 const tabs = [
   { title: '总览', value: 'overview', icon: 'mdi-view-dashboard-outline' },
@@ -2008,42 +2009,55 @@ async function loadRssTasks() {
 }
 
 async function loadActive() {
+  const loadId = ++activeLoadId;
+  const requestedTab = activeTab.value;
+  const requestedVtTab = vtTab.value;
+  const isStale = () => (
+    loadId !== activeLoadId
+    || activeTab.value !== requestedTab
+    || (requestedTab === 'vt' && vtTab.value !== requestedVtTab)
+  );
   loading.value = true;
   errorMessage.value = '';
   successMessage.value = '';
   try {
     await loadOverview();
-    if (['library', 'qb'].includes(activeTab.value)) {
+    if (isStale()) return
+    if (['library', 'qb'].includes(requestedTab)) {
       await loadCategories();
+      if (isStale()) return
     }
-    if (activeTab.value === 'library') {
+    if (requestedTab === 'library') {
       await loadRssTasks();
+      if (isStale()) return
     }
-    if (activeTab.value === 'overview') {
+    if (requestedTab === 'overview') {
       rows.value = [];
       total.value = 0;
       return
     }
-    if (activeTab.value === 'files') {
+    if (requestedTab === 'files') {
       rows.value = [];
       total.value = 0;
       return
     }
 
-    if (activeTab.value === 'vt' && vtTab.value === 'rss_tasks') {
+    if (requestedTab === 'vt' && requestedVtTab === 'rss_tasks') {
       const [response] = await Promise.all([
         loadRssTasks(),
         loadQbDownloaders(),
         loadSites(false),
       ]);
+      if (isStale()) return
       rssTasks.value = response?.items || [];
       rows.value = [];
       total.value = Number(response?.total || 0);
       return
     }
 
-    if (activeTab.value === 'vt' && vtTab.value === 'sites') {
+    if (requestedTab === 'vt' && requestedVtTab === 'sites') {
       await loadSites(true);
+      if (isStale()) return
       rows.value = siteIdentities.value;
       total.value = siteIdentities.value.length;
       return
@@ -2051,7 +2065,7 @@ async function loadActive() {
 
     let path = '';
     let params = { offset: 0, limit: 100 };
-    if (activeTab.value === 'library') {
+    if (requestedTab === 'library') {
       path = 'media';
       params = {
         ...params,
@@ -2059,7 +2073,7 @@ async function loadActive() {
         media_type: mediaType.value,
         rss_task_ids: mediaRssTaskIds.value.join(','),
       };
-    } else if (activeTab.value === 'qb') {
+    } else if (requestedTab === 'qb') {
       path = 'torrents';
       params = {
         ...params,
@@ -2067,9 +2081,9 @@ async function loadActive() {
         view: qbView.value,
         keyword: qbKeyword.value.trim(),
       };
-    } else if (activeTab.value === 'tasks') {
+    } else if (requestedTab === 'tasks') {
       path = 'tasks';
-    } else if (activeTab.value === 'vt' && vtTab.value === 'rss_history') {
+    } else if (requestedTab === 'vt' && requestedVtTab === 'rss_history') {
       path = 'rss/history';
     }
 
@@ -2081,10 +2095,11 @@ async function loadActive() {
     const response = unwrap(
       await props.api.get(`plugin/RssAllInOne/${path}`, { params }),
     );
+    if (isStale()) return
     const items = response?.items || [];
-    if (activeTab.value === 'tasks') {
+    if (requestedTab === 'tasks') {
       rows.value = normalizeTaskRows(items);
-    } else if (activeTab.value === 'library') {
+    } else if (requestedTab === 'library') {
       rows.value = items.map(item => ({
         ...item,
         row_key: item.id,
@@ -2094,7 +2109,7 @@ async function loadActive() {
           : item.details?.inventory?.folder_status || 'missing',
         recognition_state: item.state === 'unidentified' ? 'unidentified' : 'identified',
       }));
-    } else if (activeTab.value === 'qb') {
+    } else if (requestedTab === 'qb') {
       rows.value = items.map(item => {
         const recognition = torrentRecognition(item);
         const mappings = item.details?.file_mappings || [];
@@ -2120,11 +2135,12 @@ async function loadActive() {
     }
     total.value = Number(response?.total || 0);
   } catch (error) {
+    if (isStale()) return
     errorMessage.value = error?.message || '数据加载失败';
     rows.value = [];
     total.value = 0;
   } finally {
-    loading.value = false;
+    if (loadId === activeLoadId) loading.value = false;
   }
 }
 
@@ -2475,7 +2491,11 @@ function rssTestColor(state) {
 }
 
 watch(activeTab, async value => {
+  activeLoadId += 1;
   clearSelection();
+  rows.value = [];
+  total.value = 0;
+  loading.value = true;
   if (value === 'qb' && qbDownloaders.value.length === 0) {
     try {
       await loadQbDownloaders();
@@ -2483,12 +2503,18 @@ watch(activeTab, async value => {
       errorMessage.value = error?.message || '读取 qB 节点失败';
     }
   }
+  if (activeTab.value !== value) return
   await loadActive();
-});
+}, { flush: 'sync' });
 watch(vtTab, () => {
+  if (activeTab.value !== 'vt') return
+  activeLoadId += 1;
   clearSelection();
-  if (activeTab.value === 'vt') loadActive();
-});
+  rows.value = [];
+  total.value = 0;
+  loading.value = true;
+  loadActive();
+}, { flush: 'sync' });
 watch([mediaState, mediaType, mediaRssTaskIds], () => {
   clearSelection();
   if (activeTab.value === 'library') loadActive();
@@ -3471,6 +3497,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a3597c4d"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-131952f3"]]);
 
 export { AppPage as default };

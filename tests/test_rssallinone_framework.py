@@ -340,6 +340,10 @@ class RepositoryContractTest(unittest.TestCase):
             app_page.count(':items-per-page="-1"'),
             app_page.count("hide-default-footer"),
         )
+        self.assertIn("let activeLoadId = 0", app_page)
+        self.assertIn("if (isStale()) return", app_page)
+        self.assertIn("rows.value = []\n  total.value = 0\n  loading.value = true", app_page)
+        self.assertIn("{ flush: 'sync' }", app_page)
 
     def test_chinese_dashboard_task_labels_and_dragon_branding(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
