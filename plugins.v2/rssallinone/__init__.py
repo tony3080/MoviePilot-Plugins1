@@ -1090,6 +1090,26 @@ class RssAllInOne(_PluginBase):
                         ).strip().lower():
                             torrent = raw
                             break
+                    if not torrent and bool(job.get("delete_files")):
+                        message = (
+                            "qB 任务已不存在，无法确认下载文件是否已由 qB 删除；"
+                            "任务已转为待人工复核，插件不会直接删除记录中的源路径"
+                        )
+                        self._store.mark_qb_delete_job_needs_review(
+                            job.get("id"), error=message
+                        )
+                        self._notify_pending_import(
+                            "RSS一条龙 qB 删除待复核",
+                            (
+                                f"{job.get('task_name') or job.get('task_id') or 'RSS任务'}："
+                                f"{job.get('downloader_id')}/{job.get('info_hash')}。{message}"
+                            ),
+                        )
+                        logger.warning(
+                            "RSS一条龙：qB 到期删除转为待人工复核："
+                            f"{job.get('downloader_id')}/{job.get('info_hash')}"
+                        )
+                        continue
                     if torrent and not self._torrent_is_completed(torrent):
                         raise RuntimeError("qB 任务当前尚未完成，延后删除")
                     if torrent and not MoviePilotQbGateway.remove_torrent(
@@ -1564,7 +1584,7 @@ class RssAllInOne(_PluginBase):
                 or source.get("NotificationType")
                 or source.get("event_type")
                 or source.get("type")
-                or "scheduledtasks.completed"
+                or ""
             ),
             "event_time": str(
                 source.get("Timestamp")

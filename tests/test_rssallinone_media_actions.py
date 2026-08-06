@@ -183,6 +183,67 @@ class MediaActionServiceTest(unittest.TestCase):
         self.assertTrue(external_link.exists())
         self.assertIsNone(self.store.get_media_item("hash-three"))
 
+    def test_delete_source_preserves_source_shared_by_another_card(self) -> None:
+        source_dir = self.root / "source"
+        source_dir.mkdir()
+        source = source_dir / "Shared.mkv"
+        source.write_bytes(b"shared")
+        self.add_item("hash-owner-a", [{
+            "source_relative_path": "Shared.mkv",
+            "source": source,
+            "target": self.root / "links" / "A.mkv",
+            "new_rel": "A/Shared.mkv",
+        }])
+        self.add_item("hash-owner-b", [{
+            "source_relative_path": "Shared.mkv",
+            "source": source,
+            "target": self.root / "links" / "B.mkv",
+            "new_rel": "B/Shared.mkv",
+        }])
+
+        result = self.service.execute("delete_source", ["hash-owner-a"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["preserved"], 1)
+        self.assertTrue(source.exists())
+        self.assertIsNone(self.store.get_media_item("hash-owner-a"))
+        self.assertIsNotNone(self.store.get_media_item("hash-owner-b"))
+
+        final = self.service.execute("delete_source", ["hash-owner-b"])
+        self.assertTrue(final["success"])
+        self.assertFalse(source.exists())
+
+    def test_delete_both_preserves_shared_source_but_removes_owned_hardlink(self) -> None:
+        source_dir = self.root / "source"
+        source_dir.mkdir()
+        source = source_dir / "Shared.mkv"
+        source.write_bytes(b"shared")
+        hardlink = self.root / "links" / "Shared.mkv"
+        hardlink.parent.mkdir()
+        os.link(source, hardlink)
+        self.add_item("hash-imported", [{
+            "source_relative_path": "Shared.mkv",
+            "source": source,
+            "target": hardlink,
+            "new_rel": "Shared/Shared.mkv",
+            "details": {"hardlink_owned": True},
+        }], state="imported")
+        self.add_item("hash-other", [{
+            "source_relative_path": "Shared.mkv",
+            "source": source,
+            "target": self.root / "links" / "Other.mkv",
+            "new_rel": "Other/Shared.mkv",
+        }])
+
+        result = self.service.execute("delete_both", ["hash-imported"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["shared_sources"], 1)
+        self.assertFalse(hardlink.exists())
+        self.assertTrue(source.exists())
+        self.assertIsNone(self.store.get_media_item("hash-imported"))
+        self.assertIsNotNone(self.store.get_media_item("hash-other"))
+
     def test_delete_both_removes_completed_workflow_but_keeps_rss_dedup(self) -> None:
         source_dir = self.root / "source"
         source_dir.mkdir()

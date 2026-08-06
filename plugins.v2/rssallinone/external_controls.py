@@ -315,19 +315,34 @@ class ExternalControlBundle:
     def ready(self) -> bool:
         return self.catchup.ready and self.scan.ready
 
-    def snapshot_and_disable(self) -> ExternalSwitchSnapshot:
+    def snapshot(self) -> ExternalSwitchSnapshot:
         if not self.ready:
             raise ExternalControlError("追更或外部扫库配置不完整")
-        snapshot = ExternalSwitchSnapshot(
+        return ExternalSwitchSnapshot(
             catchup_enabled=self.catchup.read()["enabled"],
             scan_enabled=self.scan.read()["enabled"],
         )
-        self.catchup.set_enabled(False)
+
+    def disable(self, snapshot: Optional[ExternalSwitchSnapshot] = None) -> None:
+        if not self.ready:
+            raise ExternalControlError("追更或外部扫库配置不完整")
+        snapshot = snapshot or self.snapshot()
         try:
+            self.catchup.set_enabled(False)
             self.scan.set_enabled(False)
-        except Exception:
-            self.catchup.set_enabled(snapshot.catchup_enabled)
+        except Exception as error:
+            try:
+                self.restore(snapshot)
+            except Exception as restore_error:
+                raise ExternalControlError(
+                    f"关闭追更/扫库失败：{error}；回滚原开关状态也失败：{restore_error}"
+                ) from error
             raise
+
+    def snapshot_and_disable(self) -> ExternalSwitchSnapshot:
+        """Compatibility helper for callers that do not need crash-safe persistence."""
+        snapshot = self.snapshot()
+        self.disable(snapshot)
         return snapshot
 
     def ensure_disabled(self) -> None:

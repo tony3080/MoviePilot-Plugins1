@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import os
+import threading
 import uuid
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -30,6 +31,7 @@ class MediaActionService:
         "delete_both",
     }
     DESTRUCTIVE_ACTIONS = {"delete_source", "delete_hardlinks", "delete_both"}
+    _destructive_lock = threading.RLock()
 
     def __init__(self, store: SQLiteStore):
         self.store = store
@@ -343,12 +345,20 @@ class MediaActionService:
     ) -> Dict[str, Any]:
         if str(item.get("state") or "") == "imported":
             raise MediaActionError("已入库项目请使用“删除硬链接和源文件”")
-        deleted, missing = self._unlink_sources(mappings)
-        self.store.delete_media_item(item.get("id"))
+        with self._destructive_lock:
+            protected = self._shared_source_paths(item, mappings)
+            deleted, missing, preserved = self._unlink_sources(
+                mappings, preserved_paths=protected
+            )
+            self.store.delete_media_item(item.get("id"))
         return {
-            "message": f"已删除源文件 {deleted} 个，缺失 {missing} 个，并移除记录",
+            "message": (
+                f"已删除源文件 {deleted} 个，缺失 {missing} 个，"
+                f"保留共享源文件 {preserved} 个，并移除记录"
+            ),
             "deleted": deleted,
             "missing": missing,
+            "preserved": preserved,
             "state": "deleted",
         }
 
@@ -395,20 +405,26 @@ class MediaActionService:
     ) -> Dict[str, Any]:
         if str(item.get("state") or "") != "imported":
             raise MediaActionError("只有已入库项目可以执行硬链接和源文件双删")
-        self._validated_source_paths(mappings)
-        self._validated_owned_hardlinks(mappings)
-        _updated, links_deleted, links_missing, preserved = self._unlink_hardlinks(mappings)
-        sources_deleted, sources_missing = self._unlink_sources(mappings)
-        cleanup = self.store.delete_completed_media_workflow(item.get("id"))
+        with self._destructive_lock:
+            self._validated_source_paths(mappings)
+            self._validated_owned_hardlinks(mappings)
+            protected = self._shared_source_paths(item, mappings)
+            _updated, links_deleted, links_missing, preserved = self._unlink_hardlinks(mappings)
+            sources_deleted, sources_missing, shared_sources = self._unlink_sources(
+                mappings, preserved_paths=protected
+            )
+            cleanup = self.store.delete_completed_media_workflow(item.get("id"))
         return {
             "message": (
                 f"双删完成：硬链接 {links_deleted}，源文件 {sources_deleted}，"
-                f"缺失 {links_missing + sources_missing}，保留非插件目标 {preserved}"
+                f"缺失 {links_missing + sources_missing}，"
+                f"保留非插件目标 {preserved}，保留共享源文件 {shared_sources}"
             ),
             "hardlinks_deleted": links_deleted,
             "sources_deleted": sources_deleted,
             "missing": links_missing + sources_missing,
             "preserved": preserved,
+            "shared_sources": shared_sources,
             "database_cleanup": cleanup,
             "state": "deleted",
         }
@@ -437,17 +453,46 @@ class MediaActionService:
         return source, target
 
     @staticmethod
-    def _unlink_sources(mappings: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
+    def _unlink_sources(
+        mappings: Sequence[Dict[str, Any]],
+        *,
+        preserved_paths: Iterable[Path] = (),
+    ) -> Tuple[int, int, int]:
         paths = MediaActionService._validated_source_paths(mappings)
+        preserved_keys = {
+            os.path.normcase(str(path.resolve(strict=False)))
+            for path in preserved_paths or ()
+        }
         deleted = 0
         missing = 0
+        preserved = 0
         for path in paths:
+            path_key = os.path.normcase(str(path.resolve(strict=False)))
+            if path_key in preserved_keys:
+                preserved += 1
+                continue
             if not path.exists():
                 missing += 1
                 continue
             path.unlink()
             deleted += 1
-        return deleted, missing
+        return deleted, missing, preserved
+
+    def _shared_source_paths(
+        self,
+        item: Dict[str, Any],
+        mappings: Sequence[Dict[str, Any]],
+    ) -> List[Path]:
+        paths = self._validated_source_paths(mappings)
+        media_id = str(item.get("id") or "").strip()
+        shared = []
+        for path in paths:
+            owners = self.store.find_media_owners_by_source_paths(
+                [str(path)], exclude_media_id=media_id
+            )
+            if owners:
+                shared.append(path)
+        return shared
 
     @staticmethod
     def _unlink_hardlinks(

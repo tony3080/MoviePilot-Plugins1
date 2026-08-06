@@ -50,9 +50,19 @@ class FakeControls:
         self.disabled = 0
         self.restored = 0
 
-    def snapshot_and_disable(self):
-        self.disabled += 1
+    def snapshot(self):
         return external_controls.ExternalSwitchSnapshot(True, True)
+
+    def disable(self, snapshot=None):
+        self.disabled += 1
+
+    def snapshot_and_disable(self):
+        snapshot = self.snapshot()
+        self.disable(snapshot)
+        return snapshot
+
+    def ensure_disabled(self):
+        self.disabled += 1
 
     def restore(self, snapshot):
         self.restored += 1
@@ -203,6 +213,109 @@ class PendingImportTest(unittest.TestCase):
             self.assertTrue(result["accepted"])
             self.assertEqual(controls.restored, 1)
             self.assertIsNone(store.latest_active_import_batch())
+
+    def test_scan_started_callback_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-started",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                FakeScanner(),
+            )
+            coordinator.run("manual")
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.started",
+                "server_id": "srv1",
+                "task_id": "task1",
+            })
+            self.assertFalse(result["accepted"])
+            missing_event = coordinator.handle_scan_callback({
+                "server_id": "srv1",
+                "task_id": "task1",
+            })
+            self.assertFalse(missing_event["accepted"])
+            self.assertEqual(controls.restored, 0)
+            self.assertIsNotNone(store.latest_active_import_batch())
+
+    def test_scan_timeout_finishes_as_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-timeout",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                FakeScanner(),
+            )
+            coordinator.run("manual")
+            batch = store.latest_active_import_batch()
+            batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
+            store.upsert_import_batch(batch)
+            coordinator.run("manual")
+            self.assertIsNone(store.latest_active_import_batch())
+            finished = store.get_import_batch(batch["id"])
+            self.assertEqual(finished["state"], "failed")
+            self.assertEqual(controls.restored, 1)
+
+    def test_switch_snapshot_is_persisted_before_disable_side_effect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+
+            class InspectingControls(FakeControls):
+                def __init__(self, local_store):
+                    super().__init__()
+                    self.local_store = local_store
+                    self.observed = None
+
+                def disable(self, snapshot=None):
+                    batch = self.local_store.latest_active_import_batch()
+                    self.observed = (
+                        batch["id"],
+                        batch["state"],
+                        batch["original_catchup_enabled"],
+                        batch["original_scan_enabled"],
+                    )
+                    raise RuntimeError("模拟关闭开关时进程故障")
+
+            controls = InspectingControls(store)
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-snapshot",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                FakeScanner(),
+            )
+            with self.assertRaises(RuntimeError):
+                coordinator.run("manual")
+            batch_id, state, catchup, scan = controls.observed
+            self.assertEqual((state, catchup, scan), ("switch_snapshot_saved", 1, 1))
+            finished = store.get_import_batch(batch_id)
+            self.assertEqual(finished["state"], "failed")
 
     def test_real_transfer_rolls_back_only_the_new_hardlink(self):
         with tempfile.TemporaryDirectory() as directory:

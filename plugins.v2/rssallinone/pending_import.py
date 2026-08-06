@@ -38,6 +38,10 @@ RISK_WORDS = {
     "限流",
     "禁止访问",
 }
+COMPLETED_SCAN_EVENTS = {
+    "scheduledtask.completed",
+    "scheduledtasks.completed",
+}
 
 
 def _parse_time(value: object) -> Optional[datetime]:
@@ -145,7 +149,11 @@ class PendingImportCoordinator:
             if state == "waiting_scan_callback":
                 return self._supervise_scan_wait(batch)
             if state == "restore_failed":
-                self._restore_and_finish(batch, final_state="completed")
+                details = dict(batch.get("details") or {})
+                final_state = str(
+                    details.get("restore_final_state") or "completed"
+                ).strip()
+                self._restore_and_finish(batch, final_state=final_state)
                 return self.status()
             if state == "paused_risk":
                 resume_at = _parse_time(batch.get("resume_at"))
@@ -155,12 +163,21 @@ class PendingImportCoordinator:
                 batch["resume_at"] = None
                 batch["updated_at"] = utc_now()
                 self.store.upsert_import_batch(batch)
-            if state == "starting" or batch.get("original_catchup_enabled") is None:
-                snapshot = self.controls.snapshot_and_disable()
+            if self._batch_snapshot(batch) is None:
+                self._fail_batch_without_switch_snapshot(batch)
+                return self.status()
+            if state in {"starting", "switch_snapshot_saved"}:
+                snapshot = self._batch_snapshot(batch)
+                if snapshot is None:
+                    self._fail_batch_without_switch_snapshot(batch)
+                    return self.status()
+                try:
+                    self.controls.disable(snapshot)
+                except Exception as error:
+                    self._fail_batch_start(batch, error)
+                    raise
                 batch.update({
                     "state": "running",
-                    "original_catchup_enabled": snapshot.catchup_enabled,
-                    "original_scan_enabled": snapshot.scan_enabled,
                     "details": {
                         **dict(batch.get("details") or {}),
                         "switches_disabled_at": utc_now(),
@@ -174,37 +191,34 @@ class PendingImportCoordinator:
             if self.store.count_media_states(["pending", "importing"]) <= 0:
                 return self.status()
             self.preflight()
+            snapshot = self.controls.snapshot()
+            now = utc_now()
             batch = {
                 "id": uuid.uuid4().hex,
-                "state": "starting",
+                "state": "switch_snapshot_saved",
                 "trigger_source": str(trigger_source or "manual"),
                 "current_media_id": "",
-                "original_catchup_enabled": None,
-                "original_scan_enabled": None,
+                "original_catchup_enabled": snapshot.catchup_enabled,
+                "original_scan_enabled": snapshot.scan_enabled,
                 "succeeded": 0,
                 "failed": 0,
                 "risk_count": 0,
-                "details": {},
-                "created_at": utc_now(),
-                "updated_at": utc_now(),
+                "details": {"switch_snapshot_saved_at": now},
+                "created_at": now,
+                "updated_at": now,
             }
             self.store.upsert_import_batch(batch)
             try:
-                snapshot = self.controls.snapshot_and_disable()
+                self.controls.disable(snapshot)
             except Exception as error:
-                batch.update({
-                    "state": "failed",
-                    "error_message": str(error),
-                    "finished_at": utc_now(),
-                    "updated_at": utc_now(),
-                })
-                self.store.upsert_import_batch(batch)
+                self._fail_batch_start(batch, error)
                 raise
             batch.update({
                 "state": "running",
-                "original_catchup_enabled": snapshot.catchup_enabled,
-                "original_scan_enabled": snapshot.scan_enabled,
-                "details": {"switches_disabled_at": utc_now()},
+                "details": {
+                    **dict(batch.get("details") or {}),
+                    "switches_disabled_at": utc_now(),
+                },
                 "updated_at": utc_now(),
             })
             self.store.upsert_import_batch(batch)
@@ -240,8 +254,8 @@ class PendingImportCoordinator:
         for key, expected in filters.items():
             if expected and str(event.get(key) or "").strip() != str(expected).strip():
                 return {"accepted": False, "message": f"回调 {key} 与配置不匹配"}
-        event_name = str(event.get("event_name") or "").casefold()
-        if "scheduledtasks.completed" not in event_name and "scheduledtask" not in event_name:
+        event_name = str(event.get("event_name") or "").strip().casefold()
+        if event_name not in COMPLETED_SCAN_EVENTS:
             return {"accepted": False, "message": "不是 scheduledtasks.completed 回调"}
         details = dict(batch.get("details") or {})
         details["scan_callback"] = copy.deepcopy(event)
@@ -613,26 +627,31 @@ class PendingImportCoordinator:
             batch["details"] = details
             self.store.upsert_import_batch(batch)
             self.notify("RSS一条龙扫库回调超时", batch["error_message"])
-            self._restore_and_finish(batch, final_state="completed")
+            self._restore_and_finish(batch, final_state="failed")
         return self.status()
 
     def _restore_and_finish(self, batch: Dict[str, Any], *, final_state: str) -> None:
-        snapshot = ExternalSwitchSnapshot(
-            catchup_enabled=bool(batch.get("original_catchup_enabled")),
-            scan_enabled=bool(batch.get("original_scan_enabled")),
-        )
+        snapshot = self._batch_snapshot(batch)
+        if snapshot is None:
+            self._fail_batch_without_switch_snapshot(batch)
+            return
+        final_state = final_state if final_state in {"completed", "failed", "cancelled"} else "failed"
         try:
             self.controls.restore(snapshot)
         except ExternalControlError as error:
+            details = dict(batch.get("details") or {})
+            details["restore_final_state"] = final_state
             batch.update({
                 "state": "restore_failed",
                 "error_message": str(error),
+                "details": details,
                 "updated_at": utc_now(),
             })
             self.store.upsert_import_batch(batch)
             self.notify("RSS一条龙恢复外部开关失败", str(error))
             return
         details = dict(batch.get("details") or {})
+        details.pop("restore_final_state", None)
         details["switches_restored_at"] = utc_now()
         batch.update({
             "state": final_state,
@@ -643,6 +662,43 @@ class PendingImportCoordinator:
             "updated_at": utc_now(),
         })
         self.store.upsert_import_batch(batch)
+
+    @staticmethod
+    def _batch_snapshot(batch: Dict[str, Any]) -> Optional[ExternalSwitchSnapshot]:
+        catchup = batch.get("original_catchup_enabled")
+        scan = batch.get("original_scan_enabled")
+        if catchup is None or scan is None:
+            return None
+        return ExternalSwitchSnapshot(
+            catchup_enabled=bool(catchup),
+            scan_enabled=bool(scan),
+        )
+
+    def _fail_batch_start(self, batch: Dict[str, Any], error: Exception) -> None:
+        details = dict(batch.get("details") or {})
+        details["switch_disable_failed_at"] = utc_now()
+        batch.update({
+            "state": "failed",
+            "error_message": f"关闭追更/扫库失败：{error}",
+            "details": details,
+            "finished_at": utc_now(),
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_import_batch(batch)
+
+    def _fail_batch_without_switch_snapshot(self, batch: Dict[str, Any]) -> None:
+        message = "待入库批次缺少原始开关快照，已停止队列；请人工核对追更和扫库开关"
+        details = dict(batch.get("details") or {})
+        details["switch_snapshot_missing_at"] = utc_now()
+        batch.update({
+            "state": "failed",
+            "error_message": message,
+            "details": details,
+            "finished_at": utc_now(),
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_import_batch(batch)
+        self.notify("RSS一条龙待入库保护停止", message)
 
     def _increment_batch(
         self,

@@ -907,6 +907,30 @@ class PluginLifecycleTest(unittest.TestCase):
                     self.assertEqual(retry_job["state"], "pending")
                     self.assertEqual(retry_job["attempts"], 1)
                     self.assertIn("qB 删除任务返回失败", retry_job["last_error"])
+
+                    plugin._store.schedule_qb_delete(
+                        task_id="movies",
+                        task_name="彩虹岛",
+                        downloader_id="qb-main",
+                        info_hash="missing-with-files",
+                        source_path="/SSD/QB目录/REMUX/CHD/Missing.mkv",
+                        delete_files=True,
+                        due_at="2020-01-01T00:00:00+00:00",
+                    )
+                    module.MoviePilotQbGateway.list_torrents = staticmethod(
+                        lambda _downloader: []
+                    )
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        lambda *_args: self.fail("qB 任务缺失时不应调用删除")
+                    )
+                    plugin._scheduled_qb_deletes()
+                    review_job = next(
+                        item for item in plugin._store.list_qb_delete_jobs()
+                        if item["info_hash"] == "missing-with-files"
+                    )
+                    self.assertEqual(review_job["state"], "needs_review")
+                    self.assertEqual(review_job["attempts"], 1)
+                    self.assertIn("待人工复核", review_job["last_error"])
                 finally:
                     module.MoviePilotQbGateway.list_torrents = original_list
                     module.MoviePilotQbGateway.torrent_dict = original_dict

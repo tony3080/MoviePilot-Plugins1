@@ -1230,6 +1230,21 @@ class SQLiteStore:
                     (str(error or "")[:500], str(retry_at or now), now, identity),
                 )
 
+    def mark_qb_delete_job_needs_review(
+        self, job_id: object, *, error: str
+    ) -> None:
+        identity = str(job_id or "").strip()
+        if not identity:
+            return
+        with self.connection() as connection:
+            connection.execute(
+                """UPDATE qb_delete_jobs
+                   SET state = 'needs_review', attempts = attempts + 1,
+                       last_error = ?, updated_at = ?
+                   WHERE id = ?""",
+                (str(error or "")[:500], utc_now(), identity),
+            )
+
     def delete_qb_delete_job(self, job_id: object) -> bool:
         identity = str(job_id or "").strip()
         if not identity:
