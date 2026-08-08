@@ -262,6 +262,61 @@ class PendingImportTest(unittest.TestCase):
 
             self.assertTrue(result.startswith("failed:CD2 已进入真实传输"))
 
+    def test_disappeared_baseline_transfer_cannot_be_cloud_file_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({}),
+                FakeControls(),
+                FakeScanner(),
+            )
+            watch = {
+                "id": "watch-1",
+                "batch_id": "batch-1",
+                "media_id": "media-1",
+                "state": "waiting_task",
+                "expected_cd2_dest_path": "/cloud/Movie/Movie.mkv",
+                "cd2_key": "",
+                "file_size": 1024 * 1024 * 1024,
+                "transferred_bytes": 0,
+                "details": {
+                    "baseline_keys": ["old-upload"],
+                    "baseline_tasks": {
+                        "old-upload": {
+                            "dest_path": "/cloud/Movie/Movie.mkv",
+                            "size": 1024 * 1024 * 1024,
+                            "transferred_bytes": 512 * 1024 * 1024,
+                            "status": "pause",
+                            "error_message": "",
+                        }
+                    },
+                },
+                "created_at": database.utc_now(),
+                "updated_at": database.utc_now(),
+            }
+
+            result = coordinator._observe_watch(
+                watch,
+                [],
+                {},
+                cloud_results={
+                    pending_import._normalized_path(
+                        watch["expected_cd2_dest_path"]
+                    ): {
+                        "id": "preallocated-cloud-file",
+                        "name": "Movie.mkv",
+                        "full_path": "/cloud/Movie/Movie.mkv",
+                        "size": watch["file_size"],
+                        "is_directory": False,
+                    }
+                },
+            )
+
+            self.assertTrue(result.startswith("failed:CD2 旧上传任务已发生真实传输"))
+            self.assertEqual(watch["state"], "rolling_back")
+
     def test_success_waits_for_scan_callback_before_restoring_switches(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, target, _inventory = self.make_store(directory)

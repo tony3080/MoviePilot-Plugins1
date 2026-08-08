@@ -613,11 +613,14 @@ class PendingImportCoordinator:
             baseline_tasks = dict(details.get("baseline_tasks") or {})
             expected_path = _normalized_path(watch.get("expected_cd2_dest_path"))
             expected_size = int(watch.get("file_size") or 0)
-            candidates = [
+            matching_tasks = [
                 row for row in uploads
                 if _paths_match(row.get("dest_path"), expected_path)
                 and _sizes_match(row.get("size"), expected_size)
-                and (
+            ]
+            candidates = [
+                row for row in matching_tasks
+                if (
                     str(row.get("key") or "") not in baseline
                     or baseline_tasks.get(str(row.get("key") or ""))
                     != _upload_signature(row)
@@ -629,6 +632,33 @@ class PendingImportCoordinator:
                 watch["state"] = "watching"
             elif len(candidates) > 1:
                 return "failed:CD2 出现多个相同完整路径和大小的上传任务"
+            elif len(matching_tasks) == 1:
+                task = matching_tasks[0]
+                watch["cd2_key"] = str(task.get("key") or "")
+                watch["state"] = "watching"
+            elif len(matching_tasks) > 1:
+                return "failed:CD2 出现多个相同完整路径和大小的上传任务"
+            else:
+                interrupted = [
+                    signature
+                    for signature in baseline_tasks.values()
+                    if str(signature.get("status") or "") in {"transfer", "pause"}
+                    and int(signature.get("transferred_bytes") or 0) > 0
+                ]
+                if interrupted:
+                    transferred = max(
+                        int(signature.get("transferred_bytes") or 0)
+                        for signature in interrupted
+                    )
+                    details["baseline_real_transfer"] = interrupted
+                    watch.update({
+                        "state": "rolling_back",
+                        "transferred_bytes": transferred,
+                        "details": details,
+                        "updated_at": utc_now(),
+                    })
+                    self.store.upsert_import_watch(watch)
+                    return f"failed:CD2 旧上传任务已发生真实传输（{transferred} 字节）"
         if not task:
             discovery_deadline = _parse_time(details.get("discovery_deadline"))
             card_deadline = _parse_time(details.get("card_deadline"))
