@@ -829,7 +829,9 @@ return (_ctx, _cache) => {
                                   modelValue: config.value.scan_callback_timeout,
                                   "onUpdate:modelValue": _cache[27] || (_cache[27] = $event => ((config.value.scan_callback_timeout) = $event)),
                                   modelModifiers: { number: true },
-                                  label: "扫库回调等待超时（秒）",
+                                  label: "扫库状态检查间隔（秒）",
+                                  hint: "到达间隔后查询 Emby；仍在扫库则按相同间隔继续等待",
+                                  "persistent-hint": "",
                                   type: "number"
                                 }, null, 8, ["modelValue"])
                               ]),
@@ -858,6 +860,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c6553061"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c22d7879"]]);
 
 export { Config as default };

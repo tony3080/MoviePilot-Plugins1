@@ -280,19 +280,115 @@ class ScanSystemClient:
             raise ExternalControlError("扫库开关保存后验证不一致")
         return verified
 
+    def emby_task_status(
+        self,
+        task_id: str = "",
+        task_name: str = "",
+    ) -> Dict[str, Any]:
+        target = self._emby_target()
+        _status, payload = self.http.request(
+            "GET",
+            f"{target['host']}/emby/ScheduledTasks?"
+            f"{urlencode({'api_key': target['api_key']})}",
+        )
+        if isinstance(payload, dict):
+            tasks = payload.get("Items") or payload.get("items") or []
+        else:
+            tasks = payload
+        if not isinstance(tasks, list):
+            raise ExternalControlError("Emby 计划任务返回格式无效")
+
+        normalized_id = str(task_id or "").strip().casefold()
+        normalized_name = str(task_name or "").strip().casefold()
+        selected = None
+        if normalized_id:
+            selected = next(
+                (
+                    task for task in tasks
+                    if str(task.get("Id") or task.get("id") or "").strip().casefold()
+                    == normalized_id
+                ),
+                None,
+            )
+        if not selected and normalized_name:
+            selected = next(
+                (
+                    task for task in tasks
+                    if str(task.get("Name") or task.get("name") or "").strip().casefold()
+                    == normalized_name
+                ),
+                None,
+            )
+        if not selected:
+            refresh_tasks = [
+                task for task in tasks
+                if str(task.get("Key") or task.get("key") or "").strip().casefold()
+                == "refreshlibrary"
+            ]
+            if len(refresh_tasks) == 1:
+                selected = refresh_tasks[0]
+        if not selected:
+            raise ExternalControlError("Emby 中找不到媒体库扫库任务")
+
+        last_result = selected.get("LastExecutionResult") or {}
+        if not isinstance(last_result, dict):
+            last_result = {}
+        state = str(selected.get("State") or selected.get("state") or "").strip()
+        return {
+            "host": target["host"],
+            "node_name": target["node_name"],
+            "server_id": target["server_id"],
+            "task_id": str(selected.get("Id") or selected.get("id") or "").strip(),
+            "task_name": str(selected.get("Name") or selected.get("name") or "").strip(),
+            "task_key": str(selected.get("Key") or selected.get("key") or "").strip(),
+            "state": state,
+            "is_running": state.casefold() in {"running", "cancelling"},
+            "progress": selected.get("CurrentProgressPercentage"),
+            "last_status": str(
+                last_result.get("Status") or last_result.get("status") or ""
+            ).strip(),
+            "last_started_at": str(
+                last_result.get("StartTimeUtc")
+                or last_result.get("startTimeUtc")
+                or ""
+            ).strip(),
+            "last_finished_at": str(
+                last_result.get("EndTimeUtc")
+                or last_result.get("endTimeUtc")
+                or ""
+            ).strip(),
+        }
+
     def request_emby_refresh(self) -> Dict[str, str]:
+        target = self._emby_target()
+        task = {}
+        try:
+            task = self.emby_task_status()
+        except Exception:
+            pass
+        self.http.request(
+            "POST",
+            f"{target['host']}/emby/Library/Refresh?"
+            f"{urlencode({'api_key': target['api_key']})}",
+            accepted=(200, 202, 204),
+        )
+        return {
+            "host": target["host"],
+            "node_name": target["node_name"],
+            "server_id": target["server_id"],
+            "task_id": str(task.get("task_id") or ""),
+            "task_name": str(task.get("task_name") or ""),
+        }
+
+    def _emby_target(self) -> Dict[str, str]:
         node = self.read()["node"]
         host = str(node.get("host") or "").rstrip("/")
         api_key = str(node.get("api_key") or "").strip()
         if not host or not api_key:
             raise ExternalControlError("扫库节点缺少 Emby host 或 api_key")
-        self.http.request(
-            "POST",
-            f"{host}/emby/Library/Refresh?{urlencode({'api_key': api_key})}",
-            accepted=(200, 202, 204),
-        )
         return {
             "host": host,
+            "api_key": api_key,
             "node_name": str(node.get("name") or self.target_name),
             "server_id": str(node.get("server_id") or node.get("serverId") or ""),
         }

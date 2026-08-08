@@ -463,7 +463,9 @@ onMounted(() => {
                 <VCol cols="12" md="4">
                   <VTextField
                     v-model.number="config.scan_callback_timeout"
-                    label="扫库回调等待超时（秒）"
+                    label="扫库状态检查间隔（秒）"
+                    hint="到达间隔后查询 Emby；仍在扫库则按相同间隔继续等待"
+                    persistent-hint
                     type="number"
                   />
                 </VCol>

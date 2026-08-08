@@ -72,10 +72,35 @@ class FakeControls:
 class FakeScanner:
     def __init__(self):
         self.refreshes = 0
+        self.status_calls = 0
+        self.task_status = {
+            "host": "http://emby",
+            "node_name": "Emby01",
+            "server_id": "srv1",
+            "task_id": "task1",
+            "task_name": "Scan media library",
+            "task_key": "RefreshLibrary",
+            "state": "Idle",
+            "is_running": False,
+            "progress": None,
+            "last_status": "",
+            "last_started_at": "",
+            "last_finished_at": "",
+        }
 
     def request_emby_refresh(self):
         self.refreshes += 1
-        return {"host": "http://emby", "node_name": "Emby01", "server_id": "srv1"}
+        return {
+            "host": "http://emby",
+            "node_name": "Emby01",
+            "server_id": "srv1",
+            "task_id": "task1",
+            "task_name": "Scan media library",
+        }
+
+    def emby_task_status(self, _task_id="", _task_name=""):
+        self.status_calls += 1
+        return dict(self.task_status)
 
 
 class FakeCd2:
@@ -633,6 +658,49 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(controls.restored, 0)
             self.assertIsNotNone(store.latest_active_import_batch())
 
+    def test_discovered_emby_task_id_overrides_stale_config_for_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+
+            class DiscoveredTaskScanner(FakeScanner):
+                def request_emby_refresh(self):
+                    self.refreshes += 1
+                    return {
+                        "host": "http://emby",
+                        "node_name": "Emby01",
+                        "server_id": "srv1",
+                        "task_id": "actual-task-id",
+                        "task_name": "Scan media library",
+                    }
+
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-discovered-task",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                DiscoveredTaskScanner(),
+            )
+            self.assertEqual(coordinator.config.callback_task_id, "task1")
+            coordinator.run("manual")
+
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+                "server_id": "srv1",
+                "task_id": "actual-task-id",
+            })
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(controls.restored, 1)
+            self.assertIsNone(store.latest_active_import_batch())
+
     def test_scan_timeout_finishes_as_failed(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, _target, _inventory = self.make_store(directory)
@@ -659,6 +727,95 @@ class PendingImportTest(unittest.TestCase):
             self.assertIsNone(store.latest_active_import_batch())
             finished = store.get_import_batch(batch["id"])
             self.assertEqual(finished["state"], "failed")
+            self.assertEqual(controls.restored, 1)
+
+    def test_running_emby_scan_extends_callback_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            scanner.task_status.update({
+                "state": "Running",
+                "is_running": True,
+                "progress": 48.5,
+            })
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-running-scan",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+            coordinator.run("manual")
+            batch = store.latest_active_import_batch()
+            batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
+            store.upsert_import_batch(batch)
+
+            coordinator.run("manual")
+
+            extended = store.latest_active_import_batch()
+            self.assertIsNotNone(extended)
+            self.assertEqual(extended["state"], "waiting_scan_callback")
+            self.assertGreater(
+                pending_import._parse_time(extended["scan_callback_deadline"]),
+                pending_import.datetime.now(pending_import.timezone.utc),
+            )
+            self.assertEqual(
+                extended["details"]["last_scan_task_status"]["progress"],
+                48.5,
+            )
+            self.assertEqual(scanner.status_calls, 1)
+            self.assertEqual(controls.restored, 0)
+
+    def test_api_confirmed_scan_completion_replaces_missing_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-api-complete",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+            coordinator.run("manual")
+            batch = store.latest_active_import_batch()
+            requested_at = pending_import._parse_time(batch["refresh_requested_at"])
+            scanner.task_status.update({
+                "state": "Idle",
+                "is_running": False,
+                "last_status": "Completed",
+                "last_started_at": (
+                    requested_at + pending_import.timedelta(seconds=1)
+                ).isoformat(),
+                "last_finished_at": (
+                    requested_at + pending_import.timedelta(minutes=20)
+                ).isoformat(),
+            })
+            batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
+            store.upsert_import_batch(batch)
+
+            coordinator.run("manual")
+
+            self.assertIsNone(store.latest_active_import_batch())
+            finished = store.get_import_batch(batch["id"])
+            self.assertEqual(finished["state"], "completed")
+            self.assertIn("scan_completed_via_api", finished["details"])
             self.assertEqual(controls.restored, 1)
 
     def test_switch_snapshot_is_persisted_before_disable_side_effect(self):
@@ -803,6 +960,19 @@ class FakeExternalHttp:
         if "/emby/Library/Refresh?" in url:
             self.refreshes += 1
             return 204, None
+        if "/emby/ScheduledTasks?" in url:
+            return 200, [{
+                "Id": "actual-task",
+                "Name": "Scan media library",
+                "Key": "RefreshLibrary",
+                "State": "Running",
+                "CurrentProgressPercentage": 25,
+                "LastExecutionResult": {
+                    "Status": "Completed",
+                    "StartTimeUtc": "2026-08-08T00:00:00Z",
+                    "EndTimeUtc": "2026-08-08T00:30:00Z",
+                },
+            }]
         raise AssertionError(f"unexpected request: {method} {url}")
 
 
@@ -819,8 +989,12 @@ class ExternalControlTest(unittest.TestCase):
         self.assertFalse(catchup.set_enabled(False))
         self.assertTrue(http.catchup_saved_object["Other"]["preserved"])
         self.assertFalse(scanner.set_enabled(False))
+        status = scanner.emby_task_status("stale-configured-task-id")
+        self.assertEqual(status["task_id"], "actual-task")
+        self.assertTrue(status["is_running"])
         target = scanner.request_emby_refresh()
         self.assertEqual(target["node_name"], "Emby01")
+        self.assertEqual(target["task_id"], "actual-task")
         self.assertEqual(http.refreshes, 1)
 
 

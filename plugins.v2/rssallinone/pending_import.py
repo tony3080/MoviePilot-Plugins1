@@ -288,14 +288,31 @@ class PendingImportCoordinator:
         event_time = _parse_time(event.get("event_time")) or datetime.now(timezone.utc)
         if requested_at and event_time < requested_at:
             return {"accepted": False, "message": "回调早于本轮媒体库刷新请求"}
-        filters = {
-            "server_id": self.config.callback_server_id,
-            "task_id": self.config.callback_task_id,
-            "task_name": self.config.callback_task_name,
-        }
-        for key, expected in filters.items():
-            if expected and str(event.get(key) or "").strip() != str(expected).strip():
-                return {"accepted": False, "message": f"回调 {key} 与配置不匹配"}
+        refresh_target = dict(
+            (batch.get("details") or {}).get("refresh_target") or {}
+        )
+        expected_server_id = str(
+            refresh_target.get("server_id") or self.config.callback_server_id or ""
+        ).strip()
+        if (
+            expected_server_id
+            and str(event.get("server_id") or "").strip() != expected_server_id
+        ):
+            return {"accepted": False, "message": "回调 server_id 与配置不匹配"}
+        expected_task_id = str(
+            refresh_target.get("task_id") or self.config.callback_task_id or ""
+        ).strip()
+        expected_task_name = str(
+            refresh_target.get("task_name") or self.config.callback_task_name or ""
+        ).strip()
+        if expected_task_id:
+            if str(event.get("task_id") or "").strip() != expected_task_id:
+                return {"accepted": False, "message": "回调 task_id 与扫库任务不匹配"}
+        elif (
+            expected_task_name
+            and str(event.get("task_name") or "").strip() != expected_task_name
+        ):
+            return {"accepted": False, "message": "回调 task_name 与扫库任务不匹配"}
         event_name = str(event.get("event_name") or "").strip().casefold()
         if event_name not in COMPLETED_SCAN_EVENTS:
             return {"accepted": False, "message": "不是 scheduledtasks.completed 回调"}
@@ -886,14 +903,93 @@ class PendingImportCoordinator:
 
     def _supervise_scan_wait(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         deadline = _parse_time(batch.get("scan_callback_deadline"))
-        if deadline and datetime.now(timezone.utc) >= deadline:
-            batch["error_message"] = "等待 Emby scheduledtasks.completed 回调超时"
-            details = dict(batch.get("details") or {})
-            details["scan_callback_timeout_at"] = utc_now()
-            batch["details"] = details
+        now = datetime.now(timezone.utc)
+        if not deadline or now < deadline:
+            return self.status()
+
+        details = dict(batch.get("details") or {})
+        refresh_target = dict(details.get("refresh_target") or {})
+        interval = max(300, int(self.config.scan_callback_timeout or 7200))
+        try:
+            task = self.scanner.emby_task_status(
+                str(refresh_target.get("task_id") or self.config.callback_task_id),
+                str(refresh_target.get("task_name") or self.config.callback_task_name),
+            )
+        except Exception as error:
+            next_deadline = now + timedelta(seconds=interval)
+            details["scan_status_check_error"] = str(error)
+            details["scan_status_check_error_at"] = utc_now()
+            details["scan_status_check_count"] = int(
+                details.get("scan_status_check_count") or 0
+            ) + 1
+            batch.update({
+                "error_message": "",
+                "scan_callback_deadline": next_deadline.isoformat(timespec="seconds"),
+                "details": details,
+                "updated_at": utc_now(),
+            })
             self.store.upsert_import_batch(batch)
-            self.notify("RSS一条龙扫库回调超时", batch["error_message"])
-            self._restore_and_finish(batch, final_state="failed")
+            self.notify(
+                "RSS一条龙扫库状态检查失败",
+                f"暂时无法查询 Emby 扫库状态，已继续等待：{error}",
+            )
+            return self.status()
+
+        details.pop("scan_status_check_error", None)
+        details.pop("scan_status_check_error_at", None)
+        details["last_scan_task_status"] = copy.deepcopy(task)
+        details["last_scan_status_checked_at"] = utc_now()
+        details["scan_status_check_count"] = int(
+            details.get("scan_status_check_count") or 0
+        ) + 1
+        if task.get("is_running"):
+            next_deadline = now + timedelta(seconds=interval)
+            details["scan_wait_extended_at"] = utc_now()
+            batch.update({
+                "error_message": "",
+                "scan_callback_deadline": next_deadline.isoformat(timespec="seconds"),
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_import_batch(batch)
+            return self.status()
+
+        requested_at = _parse_time(batch.get("refresh_requested_at"))
+        last_started_at = _parse_time(task.get("last_started_at"))
+        last_finished_at = _parse_time(task.get("last_finished_at"))
+        last_status = str(task.get("last_status") or "").strip().casefold()
+        completed_statuses = {"completed", "success", "succeeded"}
+        if (
+            requested_at
+            and last_started_at
+            and last_finished_at
+            and last_started_at >= requested_at
+            and last_status in completed_statuses
+        ):
+            details["scan_completed_via_api"] = copy.deepcopy(task)
+            details["scan_completed_at"] = utc_now()
+            batch.update({
+                "error_message": "",
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_import_batch(batch)
+            self.notify(
+                "RSS一条龙扫库完成",
+                "未收到 Emby 回调，但 API 已确认本轮媒体库扫描完成",
+            )
+            self._restore_and_finish(batch, final_state="completed")
+            return self.status()
+
+        batch["error_message"] = (
+            "等待 Emby 回调超时，API 显示扫库任务未运行，"
+            f"最近状态为 {task.get('last_status') or task.get('state') or '未知'}"
+        )
+        details["scan_callback_timeout_at"] = utc_now()
+        batch["details"] = details
+        self.store.upsert_import_batch(batch)
+        self.notify("RSS一条龙扫库回调超时", batch["error_message"])
+        self._restore_and_finish(batch, final_state="failed")
         return self.status()
 
     def _restore_and_finish(self, batch: Dict[str, Any], *, final_state: str) -> None:
