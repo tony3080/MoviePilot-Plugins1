@@ -91,6 +91,17 @@ class FakeCd2:
         self.calls += 1
         return [] if self.calls == 1 else [dict(self.upload)]
 
+    def find_file(self, _path, *, force_refresh=False):
+        return None
+
+    def find_files(self, paths, *, force_refresh=False):
+        return {
+            pending_import._normalized_path(path): self.find_file(
+                path, force_refresh=force_refresh
+            )
+            for path in paths
+        }
+
     def pause(self, keys):
         self.paused.extend(keys)
 
@@ -213,6 +224,253 @@ class PendingImportTest(unittest.TestCase):
             self.assertTrue(result["accepted"])
             self.assertEqual(controls.restored, 1)
             self.assertIsNone(store.latest_active_import_batch())
+
+    def test_completed_upload_missing_from_task_list_uses_cloud_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+
+            class InstantCloudCd2(FakeCd2):
+                def __init__(self):
+                    super().__init__({})
+                    self.file_calls = 0
+
+                def list_uploads(self):
+                    return []
+
+                def find_file(self, path, *, force_refresh=False):
+                    self.file_calls += 1
+                    if self.file_calls == 1:
+                        return None
+                    return {
+                        "id": "cloud-file-1",
+                        "name": "Movie.mkv",
+                        "full_path": str(path),
+                        "size": 1024,
+                        "is_directory": False,
+                        "create_time": "2026-08-08T00:00:00+00:00",
+                        "write_time": "2026-08-08T00:00:00+00:00",
+                    }
+
+            controls = FakeControls()
+            scanner = FakeScanner()
+            cd2 = InstantCloudCd2()
+            coordinator = self.coordinator(
+                store, Path(directory) / "staging", cd2, controls, scanner
+            )
+            coordinator.config.cloud_verify_delay = 0
+
+            coordinator.run("manual")
+
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+            self.assertTrue(target.exists())
+            self.assertEqual(cd2.file_calls, 2)
+            watches = store.list_import_watches(media_id="media-1")
+            self.assertEqual(watches[0]["state"], "done")
+            self.assertEqual(
+                watches[0]["details"]["completion_source"], "cloud_file"
+            )
+
+    def test_preexisting_exact_cloud_file_is_only_accepted_at_discovery_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, source, target, _inventory = self.make_store(directory)
+            existing = {
+                "id": "old-cloud-file",
+                "name": "Movie.mkv",
+                "full_path": "/cloud/Movie/Movie.mkv",
+                "size": 1024,
+                "is_directory": False,
+                "create_time": "2026-08-01T00:00:00+00:00",
+                "write_time": "2026-08-01T00:00:00+00:00",
+            }
+
+            class ExistingCloudCd2(FakeCd2):
+                def __init__(self):
+                    super().__init__({})
+
+                def list_uploads(self):
+                    return []
+
+                def find_file(self, _path, *, force_refresh=False):
+                    return dict(existing)
+
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                ExistingCloudCd2(),
+                FakeControls(),
+                FakeScanner(),
+            )
+            coordinator.config.cloud_verify_delay = 0
+            coordinator.config.discovery_timeout = 0
+
+            coordinator.run("manual")
+
+            item = store.get_media_item("media-1")
+            self.assertEqual(item["state"], "imported")
+            self.assertTrue(source.exists())
+            self.assertTrue(target.exists())
+            watches = store.list_import_watches(media_id="media-1")
+            self.assertEqual(
+                watches[0]["details"]["completion_source"], "cloud_existing"
+            )
+
+    def test_preexisting_cloud_file_with_wrong_size_is_not_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+
+            class WrongSizeCloudCd2(FakeCd2):
+                def __init__(self):
+                    super().__init__({})
+
+                def list_uploads(self):
+                    return []
+
+                def find_file(self, path, *, force_refresh=False):
+                    return {
+                        "id": "wrong-size-file",
+                        "name": "Movie.mkv",
+                        "full_path": str(path),
+                        "size": 512,
+                        "is_directory": False,
+                        "create_time": "2026-08-01T00:00:00+00:00",
+                        "write_time": "2026-08-01T00:00:00+00:00",
+                    }
+
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                WrongSizeCloudCd2(),
+                FakeControls(),
+                FakeScanner(),
+            )
+            coordinator.config.cloud_verify_delay = 0
+            coordinator.config.discovery_timeout = 0
+
+            coordinator.run("manual")
+
+            self.assertEqual(store.get_media_item("media-1")["state"], "identified")
+            self.assertFalse(target.exists())
+
+    def test_same_filename_in_different_cloud_folder_is_not_matched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+
+            class WrongFolderCd2(FakeCd2):
+                def __init__(self):
+                    super().__init__({})
+                    self.file_calls = 0
+
+                def list_uploads(self):
+                    return []
+
+                def find_file(self, _path, *, force_refresh=False):
+                    self.file_calls += 1
+                    if self.file_calls == 1:
+                        return None
+                    return {
+                        "id": "wrong-folder-file",
+                        "name": "Movie.mkv",
+                        "full_path": "/cloud/Other/Movie.mkv",
+                        "size": 1024,
+                        "is_directory": False,
+                        "create_time": "2026-08-08T00:00:00+00:00",
+                        "write_time": "2026-08-08T00:00:00+00:00",
+                    }
+
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                WrongFolderCd2(),
+                FakeControls(),
+                FakeScanner(),
+            )
+            coordinator.config.cloud_verify_delay = 0
+            coordinator.config.discovery_timeout = 0
+
+            coordinator.run("manual")
+
+            self.assertEqual(store.get_media_item("media-1")["state"], "identified")
+            self.assertFalse(target.exists())
+
+    def test_upload_task_accepts_mount_prefix_path_variation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+            cd2 = FakeCd2({
+                "key": "upload-relative-path",
+                "dest_path": "Movie/Movie.mkv",
+                "size": 1024,
+                "transferred_bytes": 0,
+                "status": "Finish",
+                "error_message": "",
+            })
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                cd2,
+                FakeControls(),
+                FakeScanner(),
+            )
+
+            coordinator.run("manual")
+
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+            self.assertTrue(target.exists())
+
+    def test_captured_upload_task_can_finish_and_disappear_between_polls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+
+            class DisappearingTaskCd2(FakeCd2):
+                def __init__(self):
+                    super().__init__({})
+                    self.upload_calls = 0
+                    self.file_calls = 0
+
+                def list_uploads(self):
+                    self.upload_calls += 1
+                    if self.upload_calls == 2:
+                        return [{
+                            "key": "brief-upload",
+                            "dest_path": "/cloud/Movie/Movie.mkv",
+                            "size": 1024,
+                            "transferred_bytes": 0,
+                            "status": "Preprocessing",
+                            "error_message": "",
+                        }]
+                    return []
+
+                def find_file(self, path, *, force_refresh=False):
+                    self.file_calls += 1
+                    if self.file_calls < 3:
+                        return None
+                    return {
+                        "id": "completed-after-task",
+                        "name": "Movie.mkv",
+                        "full_path": str(path),
+                        "size": 1024,
+                        "is_directory": False,
+                        "create_time": "2026-08-08T00:00:00+00:00",
+                        "write_time": "2026-08-08T00:00:00+00:00",
+                    }
+
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                DisappearingTaskCd2(),
+                FakeControls(),
+                FakeScanner(),
+            )
+            coordinator.config.cloud_verify_delay = 0
+
+            coordinator.run("manual")
+
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+            self.assertTrue(target.exists())
+            watches = store.list_import_watches(media_id="media-1")
+            self.assertEqual(
+                watches[0]["details"]["completion_source"],
+                "cloud_file_after_task",
+            )
 
     def test_scan_started_callback_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

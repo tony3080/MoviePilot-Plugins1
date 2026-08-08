@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from urllib.parse import unquote
 
 from .clouddrive_client import CloudDriveClient
 from .database import SQLiteStore, utc_now
@@ -58,11 +59,50 @@ def _parse_time(value: object) -> Optional[datetime]:
 
 
 def _normalized_path(value: object) -> str:
-    text = str(value or "").strip().replace("\\", "/")
+    text = unquote(str(value or "").strip()).replace("\\", "/")
     if not text:
         return ""
     normalized = str(PurePosixPath(text))
     return normalized.casefold()
+
+
+def _paths_match(left: object, right: object) -> bool:
+    first = _normalized_path(left)
+    second = _normalized_path(right)
+    if not first or not second:
+        return False
+    if first == second:
+        return True
+    first_parts = tuple(part for part in first.split("/") if part)
+    second_parts = tuple(part for part in second.split("/") if part)
+    shorter, longer = sorted((first_parts, second_parts), key=len)
+    return len(shorter) >= 2 and tuple(longer[-len(shorter):]) == tuple(shorter)
+
+
+def _sizes_match(reported: object, expected: object) -> bool:
+    reported_size = int(reported or 0)
+    expected_size = int(expected or 0)
+    return reported_size == expected_size or (reported_size == 0 and expected_size > 0)
+
+
+def _upload_signature(upload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "dest_path": _normalized_path(upload.get("dest_path")),
+        "size": int(upload.get("size") or 0),
+        "transferred_bytes": int(upload.get("transferred_bytes") or 0),
+        "status": str(upload.get("status") or "").strip().casefold(),
+        "error_message": str(upload.get("error_message") or ""),
+    }
+
+
+def _cloud_file_signature(cloud_file: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(cloud_file.get("id") or ""),
+        "full_path": _normalized_path(cloud_file.get("full_path")),
+        "size": int(cloud_file.get("size") or 0),
+        "create_time": str(cloud_file.get("create_time") or ""),
+        "write_time": str(cloud_file.get("write_time") or ""),
+    }
 
 
 @dataclass
@@ -73,6 +113,7 @@ class PendingImportConfig:
     discovery_timeout: int = 180
     card_timeout: int = 7200
     poll_interval: int = 10
+    cloud_verify_delay: int = 20
     transfer_grace: int = 20
     risk_cooldown: int = 1800
     risk_retry_limit: int = 3
@@ -299,7 +340,8 @@ class PendingImportCoordinator:
     def _process_card(self, batch: Dict[str, Any], item: Dict[str, Any]) -> str:
         media_id = str(item.get("id") or "")
         self._increment_batch(batch, current_media_id=media_id)
-        baseline_keys = {row.get("key") for row in self.cd2.list_uploads() if row.get("key")}
+        baseline_uploads = self.cd2.list_uploads()
+        cloud_baselines = self._cloud_baselines(item)
         try:
             prepared = MediaActionService(self.store).prepare_monitored_import(media_id)
             created = list(prepared.get("created_mappings") or [])
@@ -307,7 +349,13 @@ class PendingImportCoordinator:
                 MediaActionService(self.store).finalize_monitored_import(media_id)
                 self._increment_batch(batch, succeeded=1, current_media_id="")
                 return "success"
-            watches = self._create_watches(batch, media_id, created, baseline_keys)
+            watches = self._create_watches(
+                batch,
+                media_id,
+                created,
+                baseline_uploads,
+                cloud_baselines,
+            )
             outcome = self._monitor_card(batch, media_id, watches)
             if outcome == "success":
                 MediaActionService(self.store).finalize_monitored_import(media_id)
@@ -342,11 +390,22 @@ class PendingImportCoordinator:
         batch: Dict[str, Any],
         media_id: str,
         mappings: Iterable[Dict[str, Any]],
-        baseline_keys: set,
+        baseline_uploads: Iterable[Dict[str, Any]],
+        cloud_baselines: Dict[str, Optional[Dict[str, Any]]],
     ) -> List[Dict[str, Any]]:
         result = []
+        now = datetime.now(timezone.utc)
         for mapping in mappings:
             local_path = str(mapping.get("local_hardlink_path") or "")
+            expected_path = self._cd2_dest_path(local_path)
+            expected_size = int(mapping.get("file_size") or 0)
+            matching_baseline_tasks = {
+                str(row.get("key") or ""): _upload_signature(row)
+                for row in baseline_uploads
+                if row.get("key")
+                and _paths_match(row.get("dest_path"), expected_path)
+                and _sizes_match(row.get("size"), expected_size)
+            }
             watch = {
                 "id": uuid.uuid4().hex,
                 "batch_id": batch["id"],
@@ -354,19 +413,26 @@ class PendingImportCoordinator:
                 "file_index": int(mapping.get("file_index") or 0),
                 "state": "waiting_task",
                 "local_hardlink_path": local_path,
-                "expected_cd2_dest_path": self._cd2_dest_path(local_path),
+                "expected_cd2_dest_path": expected_path,
                 "expected_mp_library_path": str(mapping.get("inventory_path") or ""),
                 "cd2_key": "",
-                "file_size": int(mapping.get("file_size") or 0),
+                "file_size": expected_size,
                 "transferred_bytes": 0,
                 "details": {
-                    "baseline_keys": sorted(baseline_keys),
+                    "baseline_keys": sorted(matching_baseline_tasks),
+                    "baseline_tasks": matching_baseline_tasks,
+                    "cloud_baseline": cloud_baselines.get(
+                        _normalized_path(expected_path)
+                    ),
+                    "cloud_verify_after": (
+                        now + timedelta(seconds=max(0, self.config.cloud_verify_delay))
+                    ).isoformat(timespec="seconds"),
                     "discovery_deadline": (
-                        datetime.now(timezone.utc)
+                        now
                         + timedelta(seconds=self.config.discovery_timeout)
                     ).isoformat(timespec="seconds"),
                     "card_deadline": (
-                        datetime.now(timezone.utc)
+                        now
                         + timedelta(seconds=self.config.card_timeout)
                     ).isoformat(timespec="seconds"),
                 },
@@ -376,6 +442,23 @@ class PendingImportCoordinator:
             self.store.upsert_import_watch(watch)
             result.append(watch)
         return result
+
+    def _cloud_baselines(
+        self, item: Dict[str, Any]
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        expected_paths = []
+        mappings = self.store.list_file_mappings(
+            item.get("downloader_id"), item.get("info_hash")
+        )
+        for mapping in mappings:
+            if bool(mapping.get("inventory_exists")):
+                continue
+            local_path = str(mapping.get("local_hardlink_path") or "").strip()
+            if not local_path:
+                continue
+            expected_path = self._cd2_dest_path(local_path)
+            expected_paths.append(expected_path)
+        return self.cd2.find_files(expected_paths, force_refresh=True)
 
     def _cd2_dest_path(self, local_path: str) -> str:
         local = Path(str(local_path)).expanduser().resolve(strict=False)
@@ -405,17 +488,49 @@ class PendingImportCoordinator:
         while not self.stop_event.is_set():
             uploads = self.cd2.list_uploads()
             by_key = {str(row.get("key") or ""): row for row in uploads if row.get("key")}
+            current_watches = self.store.list_import_watches(
+                batch_id=batch["id"], media_id=media_id
+            )
+            now = datetime.now(timezone.utc)
+            due_paths = []
+            for watch in current_watches:
+                if str(watch.get("state") or "") == "done":
+                    continue
+                key = str(watch.get("cd2_key") or "")
+                if key and key in by_key:
+                    continue
+                verify_after = _parse_time(
+                    (watch.get("details") or {}).get("cloud_verify_after")
+                )
+                if verify_after and now >= verify_after:
+                    due_paths.append(watch.get("expected_cd2_dest_path"))
+            cloud_results: Dict[str, Optional[Dict[str, Any]]] = {}
+            cloud_error = ""
+            if due_paths:
+                try:
+                    cloud_results = self.cd2.find_files(
+                        due_paths, force_refresh=True
+                    )
+                except Exception as error:
+                    cloud_results = {
+                        _normalized_path(path): None for path in due_paths
+                    }
+                    cloud_error = str(error)
             changed = False
             terminal = True
             failure = ""
             risk = False
-            for watch in self.store.list_import_watches(
-                batch_id=batch["id"], media_id=media_id
-            ):
+            for watch in current_watches:
                 if str(watch.get("state") or "") == "done":
                     continue
                 terminal = False
-                result = self._observe_watch(watch, uploads, by_key)
+                result = self._observe_watch(
+                    watch,
+                    uploads,
+                    by_key,
+                    cloud_results=cloud_results,
+                    cloud_error=cloud_error,
+                )
                 changed = changed or result in {"done", "failed", "risk"}
                 if result == "risk":
                     risk = True
@@ -442,6 +557,9 @@ class PendingImportCoordinator:
         watch: Dict[str, Any],
         uploads: List[Dict[str, Any]],
         by_key: Dict[str, Dict[str, Any]],
+        *,
+        cloud_results: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+        cloud_error: str = "",
     ) -> str:
         now = datetime.now(timezone.utc)
         details = dict(watch.get("details") or {})
@@ -451,13 +569,18 @@ class PendingImportCoordinator:
             task = by_key.get(key)
         else:
             baseline = set(details.get("baseline_keys") or [])
+            baseline_tasks = dict(details.get("baseline_tasks") or {})
             expected_path = _normalized_path(watch.get("expected_cd2_dest_path"))
             expected_size = int(watch.get("file_size") or 0)
             candidates = [
                 row for row in uploads
-                if str(row.get("key") or "") not in baseline
-                and _normalized_path(row.get("dest_path")) == expected_path
-                and int(row.get("size") or 0) == expected_size
+                if _paths_match(row.get("dest_path"), expected_path)
+                and _sizes_match(row.get("size"), expected_size)
+                and (
+                    str(row.get("key") or "") not in baseline
+                    or baseline_tasks.get(str(row.get("key") or ""))
+                    != _upload_signature(row)
+                )
             ]
             if len(candidates) == 1:
                 task = candidates[0]
@@ -470,8 +593,58 @@ class PendingImportCoordinator:
             card_deadline = _parse_time(details.get("card_deadline"))
             if card_deadline and now >= card_deadline:
                 return "failed:CD2 单卡监控超过最终超时"
+            missing_task_deadline = None
+            if key:
+                missing_since = _parse_time(details.get("task_missing_since"))
+                if not missing_since:
+                    missing_since = now
+                    details["task_missing_since"] = now.isoformat(timespec="seconds")
+                missing_task_deadline = missing_since + timedelta(
+                    seconds=self.config.discovery_timeout
+                )
+            cloud_path_key = _normalized_path(
+                watch.get("expected_cd2_dest_path")
+            )
+            if cloud_results is not None and cloud_path_key in cloud_results:
+                if cloud_error:
+                    details["last_cloud_check_at"] = utc_now()
+                    details["last_cloud_error"] = cloud_error
+                else:
+                    cloud_file = cloud_results.get(cloud_path_key)
+                    details["last_cloud_check_at"] = utc_now()
+                    details["last_cloud_file"] = cloud_file
+                    details.pop("last_cloud_error", None)
+                    completion_source = self._cloud_file_completion_source(
+                        watch, cloud_file
+                    )
+                    if key and completion_source:
+                        completion_source = "cloud_file_after_task"
+                    if (
+                        completion_source
+                        and (
+                            completion_source != "cloud_existing"
+                            or not discovery_deadline
+                            or now >= discovery_deadline
+                        )
+                    ):
+                        details["completion_source"] = completion_source
+                        watch.update({
+                            "state": "done",
+                            "details": details,
+                            "updated_at": utc_now(),
+                        })
+                        self.store.upsert_import_watch(watch)
+                        return "done"
+                details["cloud_verify_after"] = (
+                    now + timedelta(seconds=max(10, self.config.poll_interval))
+                ).isoformat(timespec="seconds")
             if not key and discovery_deadline and now >= discovery_deadline:
-                return "failed:CD2 未在限定时间内发现上传任务"
+                suffix = ""
+                if details.get("last_cloud_error"):
+                    suffix = f"；云端文件校验失败：{details['last_cloud_error']}"
+                return f"failed:CD2 未发现本次上传任务或新生成的目标文件{suffix}"
+            if key and missing_task_deadline and now >= missing_task_deadline:
+                return "failed:CD2 上传任务已消失且目标文件未出现"
             watch["updated_at"] = utc_now()
             self.store.upsert_import_watch(watch)
             return "waiting"
@@ -482,6 +655,7 @@ class PendingImportCoordinator:
         details["last_status"] = status
         details["last_error"] = error_message
         details["last_seen_at"] = utc_now()
+        details.pop("task_missing_since", None)
         if self._is_risk(error_message):
             watch.update({"state": "risk_control", "details": details, "updated_at": utc_now()})
             self.store.upsert_import_watch(watch)
@@ -520,6 +694,26 @@ class PendingImportCoordinator:
         watch.update({"state": "watching", "details": details, "updated_at": utc_now()})
         self.store.upsert_import_watch(watch)
         return "watching"
+
+    @staticmethod
+    def _cloud_file_completion_source(
+        watch: Dict[str, Any], cloud_file: Optional[Dict[str, Any]]
+    ) -> str:
+        if not cloud_file or bool(cloud_file.get("is_directory")):
+            return ""
+        if not _paths_match(
+            cloud_file.get("full_path"), watch.get("expected_cd2_dest_path")
+        ):
+            return ""
+        if int(cloud_file.get("size") or 0) != int(watch.get("file_size") or 0):
+            return ""
+        details = dict(watch.get("details") or {})
+        baseline = details.get("cloud_baseline")
+        if not baseline:
+            return "cloud_file"
+        if _cloud_file_signature(cloud_file) != _cloud_file_signature(baseline):
+            return "cloud_file"
+        return "cloud_existing"
 
     @staticmethod
     def _is_risk(message: object) -> bool:
