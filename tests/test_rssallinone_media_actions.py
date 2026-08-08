@@ -46,11 +46,18 @@ class MediaActionServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def add_item(self, media_id: str, mappings: list[dict], state: str = "identified"):
+    def add_item(
+        self,
+        media_id: str,
+        mappings: list[dict],
+        state: str = "identified",
+        media_type: str = "tv",
+        category: str = "国产剧",
+    ):
         self.store.upsert_media_item({
             "id": media_id,
             "state": state,
-            "media_type": "tv",
+            "media_type": media_type,
             "title": "测试剧",
             "source_name": "Test.Show.S01",
             "source_path": str(self.root / "source"),
@@ -58,7 +65,7 @@ class MediaActionServiceTest(unittest.TestCase):
             "info_hash": media_id,
             "tmdb_id": 42,
             "season": 1,
-            "category": "国产剧",
+            "category": category,
             "target_name": "测试剧 (2026) {tmdbid=42}",
             "details": {},
         })
@@ -292,6 +299,139 @@ class MediaActionServiceTest(unittest.TestCase):
             self.store.find_rss_source_keys("task-a", ["source-cleanup"]),
             {"source-cleanup"},
         )
+
+    def test_delete_tv_hardlinks_cleans_empty_season_and_show_directories(self) -> None:
+        source_root = self.root / "downloads"
+        source_dir = source_root / "Show"
+        source_dir.mkdir(parents=True)
+        source = source_dir / "E01.mkv"
+        source.write_bytes(b"episode")
+        link_root = self.root / "links"
+        category_root = link_root / "国产剧"
+        target = category_root / "Show" / "Season 1" / "Show S01E01.mkv"
+        target.parent.mkdir(parents=True)
+        os.link(source, target)
+        self.add_item("hash-tv-clean", [{
+            "source_relative_path": "Show/E01.mkv",
+            "source": source,
+            "target": target,
+            "new_rel": "Show/Season 1/Show S01E01.mkv",
+            "details": {"hardlink_owned": True},
+        }], state="imported")
+        library_layout = layout.LibraryLayout.from_config("", [{
+            "name": "test",
+            "prefix": str(source_root),
+            "link_roots": {"series": str(link_root)},
+            "enabled": True,
+        }])
+
+        result = media_actions.MediaActionService(
+            self.store, library_layout
+        ).execute("delete_hardlinks", ["hash-tv-clean"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["directories_cleaned"], 2)
+        self.assertFalse((category_root / "Show").exists())
+        self.assertTrue(category_root.is_dir())
+
+    def test_delete_movie_hardlink_cleans_only_media_directory(self) -> None:
+        source_root = self.root / "downloads"
+        source_dir = source_root / "Movie"
+        source_dir.mkdir(parents=True)
+        source = source_dir / "Movie.mkv"
+        source.write_bytes(b"movie")
+        link_root = self.root / "links"
+        category_root = link_root / "外语电影"
+        media_dir = category_root / "Movie (2026) {tmdbid=42}"
+        target = media_dir / "Movie.mkv"
+        target.parent.mkdir(parents=True)
+        os.link(source, target)
+        self.add_item("hash-movie-clean", [{
+            "source_relative_path": "Movie/Movie.mkv",
+            "source": source,
+            "target": target,
+            "new_rel": "Movie (2026) {tmdbid=42}/Movie.mkv",
+            "details": {"hardlink_owned": True},
+        }], state="imported", media_type="movie", category="外语电影")
+        library_layout = layout.LibraryLayout.from_config("", [{
+            "name": "test",
+            "prefix": str(source_root),
+            "link_roots": {"movie": str(link_root)},
+            "enabled": True,
+        }])
+
+        result = media_actions.MediaActionService(
+            self.store, library_layout
+        ).execute("delete_hardlinks", ["hash-movie-clean"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["directories_cleaned"], 1)
+        self.assertFalse(media_dir.exists())
+        self.assertTrue(category_root.is_dir())
+
+    def test_hardlink_cleanup_stops_when_directory_contains_another_file(self) -> None:
+        source_root = self.root / "downloads"
+        source_dir = source_root / "Show"
+        source_dir.mkdir(parents=True)
+        source = source_dir / "E01.mkv"
+        source.write_bytes(b"episode")
+        link_root = self.root / "links"
+        category_root = link_root / "国产剧"
+        season_dir = category_root / "Show" / "Season 1"
+        target = season_dir / "Show S01E01.mkv"
+        season_dir.mkdir(parents=True)
+        os.link(source, target)
+        (season_dir / ".keep").write_text("keep", encoding="utf-8")
+        self.add_item("hash-tv-nonempty", [{
+            "source_relative_path": "Show/E01.mkv",
+            "source": source,
+            "target": target,
+            "new_rel": "Show/Season 1/Show S01E01.mkv",
+            "details": {"hardlink_owned": True},
+        }], state="imported")
+        library_layout = layout.LibraryLayout.from_config("", [{
+            "name": "test",
+            "prefix": str(source_root),
+            "link_roots": {"series": str(link_root)},
+            "enabled": True,
+        }])
+
+        result = media_actions.MediaActionService(
+            self.store, library_layout
+        ).execute("delete_hardlinks", ["hash-tv-nonempty"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["directories_cleaned"], 0)
+        self.assertTrue(season_dir.is_dir())
+        self.assertTrue((season_dir / ".keep").is_file())
+
+    def test_delete_source_cleans_one_empty_parent_below_source_root(self) -> None:
+        source_root = self.root / "downloads"
+        source_dir = source_root / "Movie"
+        source_dir.mkdir(parents=True)
+        source = source_dir / "Movie.mkv"
+        source.write_bytes(b"movie")
+        self.add_item("hash-source-clean", [{
+            "source_relative_path": "Movie/Movie.mkv",
+            "source": source,
+            "target": self.root / "links" / "Movie.mkv",
+            "new_rel": "Movie/Movie.mkv",
+        }])
+        library_layout = layout.LibraryLayout.from_config("", [{
+            "name": "test",
+            "prefix": str(source_root),
+            "link_roots": {"series": str(self.root / "links")},
+            "enabled": True,
+        }])
+
+        result = media_actions.MediaActionService(
+            self.store, library_layout
+        ).execute("delete_source", ["hash-source-clean"])
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["results"][0]["directories_cleaned"], 1)
+        self.assertFalse(source_dir.exists())
+        self.assertTrue(source_root.is_dir())
 
     def test_destructive_action_refuses_missing_persisted_mappings(self) -> None:
         self.store.upsert_media_item({

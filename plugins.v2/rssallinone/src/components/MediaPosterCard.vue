@@ -148,7 +148,7 @@ function usableSourceUrl(value) {
             <button v-bind="tooltipProps" type="button" class="corner-badge source" @click="openLink(sourceUrl)">P</button>
           </template>
         </VTooltip>
-        <VTooltip v-if="tmdbUrl && !isImported" text="打开 TMDB">
+        <VTooltip v-if="tmdbUrl" text="打开 TMDB">
           <template #activator="{ props: tooltipProps }">
             <button v-bind="tooltipProps" type="button" class="corner-badge tmdb" @click="openLink(tmdbUrl)">T</button>
           </template>

@@ -862,6 +862,39 @@ async function refreshItem(item) {
   }
 }
 
+async function refreshSelectedInventory() {
+  if (!selectedItems.value.length || batchAction.value) return
+  batchAction.value = 'refresh_inventory'
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/inventory/refresh-batch', {
+        media_ids: selectedItems.value.map(item => item.id),
+      }),
+    )
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || '批量库存复查失败')
+    }
+    if (response.partial) {
+      const failures = (response.results || [])
+        .filter(item => !item.success)
+        .slice(0, 3)
+        .map(item => item.message)
+        .join('；')
+      errorMessage.value = `${response.message}${failures ? `：${failures}` : ''}`
+    } else {
+      successMessage.value = response.message || '库存复查完成'
+    }
+    clearSelection()
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '批量库存复查失败'
+  } finally {
+    batchAction.value = ''
+  }
+}
+
 async function saveManualIdentify(payload) {
   const key = itemKey(identifyItem.value || payload)
   itemBusyKey.value = key
@@ -1291,6 +1324,15 @@ onBeforeUnmount(() => {
             >删源</VBtn>
           </div>
           <div v-else class="selection-actions">
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="info"
+              prepend-icon="mdi-database-refresh-outline"
+              :disabled="Boolean(batchAction)"
+              :loading="batchAction === 'refresh_inventory'"
+              @click="refreshSelectedInventory"
+            >对比库存</VBtn>
             <VBtn
               size="small"
               variant="tonal"

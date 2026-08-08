@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.15"
+    plugin_version = "0.13.16"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -314,6 +314,12 @@ class RssAllInOne(_PluginBase):
                 auth="none",
             ),
             self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
+            self._api(
+                "/media/inventory/refresh-batch",
+                self.api_media_inventory_refresh_batch,
+                "POST",
+                "批量复查已入库库存",
+            ),
             self._api("/files/browse", self.api_files_browse, "GET", "浏览本地文件夹"),
             self._api("/files/recognize", self.api_files_recognize, "POST", "识别单个本地文件或文件夹"),
             self._api("/files/recognize-batch", self.api_files_recognize_batch, "POST", "批量识别当前目录"),
@@ -726,7 +732,9 @@ class RssAllInOne(_PluginBase):
         if not self._media_action_lock.acquire(blocking=False):
             return {"success": False, "message": "已有入库管理操作正在执行"}
         try:
-            result = MediaActionService(self._require_store()).execute(action, media_ids)
+            result = MediaActionService(
+                self._require_store(), self._library_layout
+            ).execute(action, media_ids)
             if result["success"]:
                 result["message"] = f"操作完成：成功 {result['succeeded']} 项"
             elif result["partial"]:
@@ -876,6 +884,61 @@ class RssAllInOne(_PluginBase):
         except Exception as error:
             logger.error(f"RSS一条龙：刷新入库管理记录失败：{error}", exc_info=True)
             return {"success": False, "message": str(error)}
+
+    def api_media_inventory_refresh_batch(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        media_ids = (payload or {}).get("media_ids") or []
+        if isinstance(media_ids, str):
+            media_ids = [media_ids]
+        identities = []
+        for value in media_ids:
+            identity = str(value or "").strip()
+            if identity and identity not in identities:
+                identities.append(identity)
+        if not identities:
+            return {"success": False, "message": "请至少选择一个已入库项目"}
+        if not self._media_action_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有入库管理操作正在执行"}
+        try:
+            service = MediaInventoryRefreshService(
+                self._require_store(), self._library_layout
+            )
+            results = []
+            for media_id in identities:
+                try:
+                    result = service.refresh(media_id)
+                    results.append({"media_id": media_id, "success": True, **result})
+                except Exception as error:
+                    results.append({
+                        "media_id": media_id,
+                        "success": False,
+                        "message": str(error),
+                    })
+            succeeded = sum(1 for item in results if item["success"])
+            failed = len(results) - succeeded
+            return {
+                "success": failed == 0,
+                "partial": 0 < succeeded < len(results),
+                "total": len(results),
+                "succeeded": succeeded,
+                "failed": failed,
+                "results": results,
+                "message": (
+                    f"库存复查完成：成功 {succeeded} 项"
+                    if not failed
+                    else (
+                        f"库存复查部分完成：成功 {succeeded} 项，失败 {failed} 项"
+                        if succeeded
+                        else f"库存复查失败：{failed} 项均未完成"
+                    )
+                ),
+            }
+        except Exception as error:
+            logger.error(f"RSS一条龙：批量库存复查失败：{error}", exc_info=True)
+            return {"success": False, "message": str(error)}
+        finally:
+            self._media_action_lock.release()
 
     def api_files_browse(self, path: str = "/") -> Dict[str, Any]:
         try:

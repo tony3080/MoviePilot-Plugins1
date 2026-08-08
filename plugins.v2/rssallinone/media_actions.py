@@ -8,7 +8,7 @@ import threading
 import uuid
 from pathlib import Path
 from pathlib import PurePosixPath
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
 from .domain import can_transition
@@ -33,8 +33,13 @@ class MediaActionService:
     DESTRUCTIVE_ACTIONS = {"delete_source", "delete_hardlinks", "delete_both"}
     _destructive_lock = threading.RLock()
 
-    def __init__(self, store: SQLiteStore):
+    def __init__(
+        self,
+        store: SQLiteStore,
+        library_layout: Optional[LibraryLayout] = None,
+    ):
         self.store = store
+        self.library_layout = library_layout
 
     def execute(self, action: object, media_ids: Iterable[object]) -> Dict[str, Any]:
         normalized_action = str(action or "").strip().casefold()
@@ -347,18 +352,21 @@ class MediaActionService:
             raise MediaActionError("已入库项目请使用“删除硬链接和源文件”")
         with self._destructive_lock:
             protected = self._shared_source_paths(item, mappings)
-            deleted, missing, preserved = self._unlink_sources(
-                mappings, preserved_paths=protected
+            deleted, missing, preserved, cleaned = self._unlink_sources(
+                mappings,
+                preserved_paths=protected,
+                stop_roots=self._source_cleanup_roots(mappings),
             )
             self.store.delete_media_item(item.get("id"))
         return {
             "message": (
                 f"已删除源文件 {deleted} 个，缺失 {missing} 个，"
-                f"保留共享源文件 {preserved} 个，并移除记录"
+                f"保留共享源文件 {preserved} 个，清理空目录 {cleaned} 个，并移除记录"
             ),
             "deleted": deleted,
             "missing": missing,
             "preserved": preserved,
+            "directories_cleaned": cleaned,
             "state": "deleted",
         }
 
@@ -367,36 +375,43 @@ class MediaActionService:
     ) -> Dict[str, Any]:
         if str(item.get("state") or "") != "imported":
             raise MediaActionError("只有已入库项目可以删除硬链接")
-        updated, deleted, missing, preserved = self._unlink_hardlinks(mappings)
-        self.store.replace_file_mappings(
-            item.get("downloader_id"), item.get("info_hash"), updated
-        )
-        rolled_back = copy.deepcopy(item)
-        details = dict(rolled_back.get("details") or {})
-        details["rollback"] = {
-            "reason": "只删除硬链接",
-            "deleted_count": deleted,
-            "missing_count": missing,
-            "preserved_count": preserved,
-            "completed_at": utc_now(),
-        }
-        rolled_back.update({
-            "state": "rolled_back",
-            "rolled_back": True,
-            "failure_code": "",
-            "failure_message": "",
-            "details": details,
-            "updated_at": utc_now(),
-        })
-        self.store.upsert_media_item(rolled_back)
+        with self._destructive_lock:
+            updated, deleted, missing, preserved, cleaned = self._unlink_hardlinks(
+                mappings,
+                stop_roots=self._hardlink_cleanup_roots(item, mappings),
+                max_levels=self._hardlink_cleanup_levels(item),
+            )
+            self.store.replace_file_mappings(
+                item.get("downloader_id"), item.get("info_hash"), updated
+            )
+            rolled_back = copy.deepcopy(item)
+            details = dict(rolled_back.get("details") or {})
+            details["rollback"] = {
+                "reason": "只删除硬链接",
+                "deleted_count": deleted,
+                "missing_count": missing,
+                "preserved_count": preserved,
+                "completed_at": utc_now(),
+            }
+            rolled_back.update({
+                "state": "rolled_back",
+                "rolled_back": True,
+                "failure_code": "",
+                "failure_message": "",
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_media_item(rolled_back)
         return {
             "message": (
                 f"已删除插件创建的硬链接 {deleted} 个，"
-                f"缺失 {missing} 个，保留非插件目标 {preserved} 个"
+                f"缺失 {missing} 个，保留非插件目标 {preserved} 个，"
+                f"清理空目录 {cleaned} 个"
             ),
             "deleted": deleted,
             "missing": missing,
             "preserved": preserved,
+            "directories_cleaned": cleaned,
             "state": "rolled_back",
         }
 
@@ -409,22 +424,37 @@ class MediaActionService:
             self._validated_source_paths(mappings)
             self._validated_owned_hardlinks(mappings)
             protected = self._shared_source_paths(item, mappings)
-            _updated, links_deleted, links_missing, preserved = self._unlink_hardlinks(mappings)
-            sources_deleted, sources_missing, shared_sources = self._unlink_sources(
-                mappings, preserved_paths=protected
+            _updated, links_deleted, links_missing, preserved, link_dirs = (
+                self._unlink_hardlinks(
+                    mappings,
+                    stop_roots=self._hardlink_cleanup_roots(item, mappings),
+                    max_levels=self._hardlink_cleanup_levels(item),
+                )
+            )
+            (
+                sources_deleted,
+                sources_missing,
+                shared_sources,
+                source_dirs,
+            ) = self._unlink_sources(
+                mappings,
+                preserved_paths=protected,
+                stop_roots=self._source_cleanup_roots(mappings),
             )
             cleanup = self.store.delete_completed_media_workflow(item.get("id"))
         return {
             "message": (
                 f"双删完成：硬链接 {links_deleted}，源文件 {sources_deleted}，"
                 f"缺失 {links_missing + sources_missing}，"
-                f"保留非插件目标 {preserved}，保留共享源文件 {shared_sources}"
+                f"保留非插件目标 {preserved}，保留共享源文件 {shared_sources}，"
+                f"清理空目录 {link_dirs + source_dirs} 个"
             ),
             "hardlinks_deleted": links_deleted,
             "sources_deleted": sources_deleted,
             "missing": links_missing + sources_missing,
             "preserved": preserved,
             "shared_sources": shared_sources,
+            "directories_cleaned": link_dirs + source_dirs,
             "database_cleanup": cleanup,
             "state": "deleted",
         }
@@ -452,13 +482,15 @@ class MediaActionService:
             raise MediaActionError(f"源文件不存在：{source_text}")
         return source, target
 
-    @staticmethod
+    @classmethod
     def _unlink_sources(
+        cls,
         mappings: Sequence[Dict[str, Any]],
         *,
         preserved_paths: Iterable[Path] = (),
-    ) -> Tuple[int, int, int]:
-        paths = MediaActionService._validated_source_paths(mappings)
+        stop_roots: Iterable[Path] = (),
+    ) -> Tuple[int, int, int, int]:
+        paths = cls._validated_source_paths(mappings)
         preserved_keys = {
             os.path.normcase(str(path.resolve(strict=False)))
             for path in preserved_paths or ()
@@ -466,6 +498,7 @@ class MediaActionService:
         deleted = 0
         missing = 0
         preserved = 0
+        deleted_paths: List[Path] = []
         for path in paths:
             path_key = os.path.normcase(str(path.resolve(strict=False)))
             if path_key in preserved_keys:
@@ -476,7 +509,11 @@ class MediaActionService:
                 continue
             path.unlink()
             deleted += 1
-        return deleted, missing, preserved
+            deleted_paths.append(path)
+        cleaned = cls._cleanup_empty_parents(
+            deleted_paths, stop_roots, max_levels=1
+        )
+        return deleted, missing, preserved, cleaned
 
     def _shared_source_paths(
         self,
@@ -494,15 +531,20 @@ class MediaActionService:
                 shared.append(path)
         return shared
 
-    @staticmethod
+    @classmethod
     def _unlink_hardlinks(
+        cls,
         mappings: Sequence[Dict[str, Any]],
-    ) -> Tuple[List[Dict[str, Any]], int, int, int]:
+        *,
+        stop_roots: Iterable[Path] = (),
+        max_levels: int = 3,
+    ) -> Tuple[List[Dict[str, Any]], int, int, int, int]:
         updated = copy.deepcopy(list(mappings))
         deleted = 0
         missing = 0
         preserved = 0
-        MediaActionService._validated_owned_hardlinks(mappings)
+        deleted_paths: List[Path] = []
+        cls._validated_owned_hardlinks(mappings)
         for mapping in updated:
             details = dict(mapping.get("details") or {})
             if not details.get("hardlink_owned"):
@@ -515,6 +557,7 @@ class MediaActionService:
             if target.exists():
                 target.unlink()
                 deleted += 1
+                deleted_paths.append(target)
             else:
                 missing += 1
             details.update({
@@ -522,7 +565,88 @@ class MediaActionService:
                 "hardlink_deleted_at": utc_now(),
             })
             mapping.update({"state": "rolled_back", "details": details})
-        return updated, deleted, missing, preserved
+        cleaned = cls._cleanup_empty_parents(
+            deleted_paths, stop_roots, max_levels=max_levels
+        )
+        return updated, deleted, missing, preserved, cleaned
+
+    def _source_cleanup_roots(
+        self, mappings: Sequence[Dict[str, Any]]
+    ) -> List[Path]:
+        if not self.library_layout:
+            return []
+        roots: List[Path] = []
+        for mapping in mappings:
+            source = str(mapping.get("current_source_path") or "").strip()
+            route = self.library_layout.select_route(source)
+            if route:
+                roots.append(Path(route.prefix).expanduser())
+        return self._unique_paths(roots)
+
+    def _hardlink_cleanup_roots(
+        self,
+        item: Dict[str, Any],
+        mappings: Sequence[Dict[str, Any]],
+    ) -> List[Path]:
+        if not self.library_layout:
+            return []
+        roots: List[Path] = []
+        for mapping in mappings:
+            source = str(mapping.get("current_source_path") or "").strip()
+            root, _error = self.library_layout.link_base(
+                source,
+                item.get("category") or "",
+                item.get("media_type") or "",
+            )
+            if root:
+                roots.append(Path(root).expanduser())
+        return self._unique_paths(roots)
+
+    @staticmethod
+    def _hardlink_cleanup_levels(item: Dict[str, Any]) -> int:
+        return 1 if str(item.get("media_type") or "").casefold() == "movie" else 3
+
+    @classmethod
+    def _cleanup_empty_parents(
+        cls,
+        deleted_paths: Iterable[Path],
+        stop_roots: Iterable[Path],
+        *,
+        max_levels: int,
+    ) -> int:
+        if max_levels <= 0:
+            return 0
+        roots = [path.resolve(strict=False) for path in cls._unique_paths(stop_roots)]
+        if not roots:
+            return 0
+        parents = {
+            path.resolve(strict=False).parent
+            for path in deleted_paths or ()
+        }
+        cleaned = 0
+        for start in sorted(parents, key=lambda value: len(value.parts), reverse=True):
+            matching = [
+                root for root in roots
+                if start == root or root in start.parents
+            ]
+            if not matching:
+                continue
+            stop_root = max(matching, key=lambda value: len(value.parts))
+            directory = start
+            levels = 0
+            while directory != stop_root and levels < max_levels:
+                if directory == directory.parent or len(directory.parts) <= 1:
+                    break
+                try:
+                    if not directory.is_dir() or next(directory.iterdir(), None) is not None:
+                        break
+                    directory.rmdir()
+                except OSError:
+                    break
+                cleaned += 1
+                levels += 1
+                directory = directory.parent
+        return cleaned
 
     @staticmethod
     def _validated_source_paths(mappings: Sequence[Dict[str, Any]]) -> List[Path]:

@@ -732,6 +732,7 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/qb/delete", api_paths)
                 self.assertIn("/media/action", api_paths)
                 self.assertIn("/media/refresh", api_paths)
+                self.assertIn("/media/inventory/refresh-batch", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
                 self.assertIn("/tasks/clear", api_paths)
                 self.assertIn("/external/catchup/control", api_paths)
