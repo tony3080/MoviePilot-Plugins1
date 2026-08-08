@@ -165,6 +165,7 @@ class PendingImportCoordinator:
         self.stop_event = stop_event
         self.logger = logger
         self.notify = notify or (lambda _title, _text: None)
+        self._resolved_cd2_dest_root = ""
 
     def status(self) -> Dict[str, Any]:
         batch = self.store.latest_active_import_batch()
@@ -475,9 +476,48 @@ class PendingImportCoordinator:
             raise RuntimeError(f"硬链接路径未命中源路径路由根目录：{local}；候选：{roots}")
         _depth, relative = max(matches, key=lambda item: item[0])
         return str(
-            PurePosixPath(self.config.cd2_dest_root)
+            PurePosixPath(self._destination_root())
             / PurePosixPath(*relative.parts)
         )
+
+    def _destination_root(self) -> str:
+        if self._resolved_cd2_dest_root:
+            return self._resolved_cd2_dest_root
+        configured = str(self.config.cd2_dest_root or "").strip()
+        resolved = configured
+        resolver = getattr(self.cd2, "resolve_destination_root", None)
+        if callable(resolver):
+            try:
+                resolved = str(resolver(configured) or configured).strip()
+            except Exception as error:
+                self.logger.warning(f"RSS一条龙：CD2 目标根目录自动校正失败：{error}")
+        self._resolved_cd2_dest_root = resolved or configured
+        if _normalized_path(self._resolved_cd2_dest_root) != _normalized_path(configured):
+            self.logger.warning(
+                "RSS一条龙：CD2 目标根目录已从挂载路径校正为 "
+                f"{self._resolved_cd2_dest_root}"
+            )
+        return self._resolved_cd2_dest_root
+
+    def _refresh_watch_destination_paths(self, batch_id: str, media_id: str) -> None:
+        for watch in self.store.list_import_watches(
+            batch_id=batch_id, media_id=media_id
+        ):
+            local_path = str(watch.get("local_hardlink_path") or "").strip()
+            if not local_path:
+                continue
+            expected_path = self._cd2_dest_path(local_path)
+            previous_path = str(watch.get("expected_cd2_dest_path") or "")
+            if _normalized_path(expected_path) == _normalized_path(previous_path):
+                continue
+            details = dict(watch.get("details") or {})
+            details["destination_path_adjusted_from"] = previous_path
+            watch.update({
+                "expected_cd2_dest_path": expected_path,
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_import_watch(watch)
 
     def _monitor_card(
         self,
@@ -485,6 +525,7 @@ class PendingImportCoordinator:
         media_id: str,
         watches: List[Dict[str, Any]],
     ) -> str:
+        self._refresh_watch_destination_paths(batch["id"], media_id)
         while not self.stop_event.is_set():
             uploads = self.cd2.list_uploads()
             by_key = {str(row.get("key") or ""): row for row in uploads if row.get("key")}
@@ -664,7 +705,7 @@ class PendingImportCoordinator:
             watch.update({"state": "done", "details": details, "updated_at": utc_now()})
             self.store.upsert_import_watch(watch)
             return "done"
-        if status == "transfer":
+        if status in {"transfer", "pause"}:
             first_transfer = _parse_time(details.get("first_transfer_at"))
             previous = int(details.get("last_transfer_bytes") or 0)
             if not first_transfer:
@@ -678,7 +719,8 @@ class PendingImportCoordinator:
                 min(64 * 1024 * 1024, max(1, int(watch.get("file_size") or 0)) // 100),
             )
             grace_elapsed = (now - first_transfer).total_seconds() >= self.config.transfer_grace
-            if transferred >= threshold or (
+            paused_transfer = status == "pause" and transferred > 0 and grace_elapsed
+            if transferred >= threshold or paused_transfer or (
                 grace_elapsed and int(details.get("growth_samples") or 0) >= 2 and transferred > 0
             ):
                 watch.update({"state": "rolling_back", "details": details, "updated_at": utc_now()})

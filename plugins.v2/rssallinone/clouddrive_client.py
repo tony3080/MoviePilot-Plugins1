@@ -88,6 +88,50 @@ class CloudDriveClient:
             raise CloudDriveError(f"读取 CloudDrive2 上传列表失败：{error}") from error
         return items
 
+    def list_cloud_roots(self) -> List[str]:
+        """Return the API-visible root path of every configured CD2 provider."""
+        grpc, pb2, pb2_grpc = self._runtime()
+        try:
+            with grpc.insecure_channel(self.address) as channel:
+                stub = pb2_grpc.CloudDriveFileSrvStub(channel)
+                response = stub.GetAllCloudApis(
+                    pb2.google_dot_protobuf_dot_empty__pb2.Empty(),
+                    metadata=self.metadata,
+                    timeout=self.timeout,
+                )
+        except Exception as error:
+            raise CloudDriveError(f"读取 CloudDrive2 云盘根目录失败：{error}") from error
+        roots = [
+            _normalized_cd2_path(getattr(row, "path", ""))
+            for row in getattr(response, "apis", [])
+        ]
+        return list(dict.fromkeys(root for root in roots if root not in {"", ".", "/"}))
+
+    def resolve_destination_root(self, configured_root: object) -> str:
+        """Translate a mounted CD2 path to the root used by the gRPC API."""
+        configured = _normalized_cd2_path(configured_root)
+        configured_parts = _raw_path_parts(configured)
+        configured_keys = tuple(part.casefold() for part in configured_parts)
+        if not configured_keys:
+            return configured
+        matches = []
+        for root in self.list_cloud_roots():
+            root_parts = _path_parts(root)
+            if not root_parts or len(root_parts) > len(configured_keys):
+                continue
+            for index in range(len(configured_keys) - len(root_parts) + 1):
+                if configured_keys[index:index + len(root_parts)] != root_parts:
+                    continue
+                remainder = configured_parts[index + len(root_parts):]
+                resolved = PurePosixPath(root)
+                if remainder:
+                    resolved = resolved / PurePosixPath(*remainder)
+                matches.append((len(root_parts), -index, str(resolved)))
+                break
+        if not matches:
+            return configured
+        return max(matches, key=lambda item: (item[0], item[1]))[2]
+
     def find_file(
         self, path: object, *, force_refresh: bool = False
     ) -> Dict[str, Any] | None:
@@ -201,6 +245,18 @@ def _normalized_cd2_path(value: object) -> str:
 
 def _cd2_path_key(value: object) -> str:
     return _normalized_cd2_path(value).casefold()
+
+
+def _path_parts(value: object) -> tuple[str, ...]:
+    return tuple(part.casefold() for part in _raw_path_parts(value))
+
+
+def _raw_path_parts(value: object) -> tuple[str, ...]:
+    return tuple(
+        part
+        for part in PurePosixPath(_normalized_cd2_path(value)).parts
+        if part not in {"", "/"}
+    )
 
 
 def _is_not_found(grpc: Any, error: Exception) -> bool:

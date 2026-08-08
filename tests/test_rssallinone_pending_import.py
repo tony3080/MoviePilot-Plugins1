@@ -189,6 +189,79 @@ class PendingImportTest(unittest.TestCase):
                 "/cloud/library/国产剧/Show/Episode.mkv",
             )
 
+    def test_cd2_destination_root_uses_api_path_resolved_by_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "series"
+            target = root / "Show" / "Episode.mkv"
+            target.parent.mkdir(parents=True)
+            target.touch()
+
+            class ResolvingCd2:
+                def resolve_destination_root(self, configured):
+                    self.configured = configured
+                    return "/115/library"
+
+            cd2 = ResolvingCd2()
+            coordinator = pending_import.PendingImportCoordinator(
+                store=object(),
+                config=pending_import.PendingImportConfig(
+                    plugin_staging_root=str(root),
+                    cd2_dest_root="/SSD/CloudDrive/115/library",
+                    callback_server_id="srv1",
+                    callback_task_id="task1",
+                ),
+                cd2=cd2,
+                controls=object(),
+                scanner=object(),
+                stop_event=threading.Event(),
+                logger=FakeLogger(),
+            )
+
+            self.assertEqual(
+                coordinator._cd2_dest_path(str(target)),
+                "/115/library/Show/Episode.mkv",
+            )
+            self.assertEqual(cd2.configured, "/SSD/CloudDrive/115/library")
+
+    def test_paused_upload_with_transferred_bytes_is_real_transfer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({}),
+                FakeControls(),
+                FakeScanner(),
+            )
+            coordinator.config.transfer_grace = 0
+            watch = {
+                "id": "watch-1",
+                "batch_id": "batch-1",
+                "media_id": "media-1",
+                "state": "watching",
+                "expected_cd2_dest_path": "/cloud/Movie/Movie.mkv",
+                "cd2_key": "upload-1",
+                "file_size": 1024 * 1024 * 1024,
+                "transferred_bytes": 0,
+                "details": {},
+                "created_at": database.utc_now(),
+                "updated_at": database.utc_now(),
+            }
+            task = {
+                "key": "upload-1",
+                "dest_path": "/cloud/Movie/Movie.mkv",
+                "size": watch["file_size"],
+                "transferred_bytes": 1024,
+                "status": "Pause",
+                "error_message": "",
+            }
+
+            result = coordinator._observe_watch(
+                watch, [task], {"upload-1": task}
+            )
+
+            self.assertTrue(result.startswith("failed:CD2 已进入真实传输"))
+
     def test_success_waits_for_scan_callback_before_restoring_switches(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, target, _inventory = self.make_store(directory)

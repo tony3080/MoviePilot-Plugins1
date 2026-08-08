@@ -269,8 +269,8 @@ onMounted(() => {
             <VTextField
               v-model="config.cd2_dest_root"
               label="CD2 上传任务目标根目录 *"
-              placeholder="/云盘/影视库"
-              hint="用于和 CD2 上传任务的完整 destPath 精确匹配"
+              placeholder="/115/影视库"
+              hint="优先填 CD2 gRPC 中的云盘路径；填写本机挂载路径时会自动校正"
               persistent-hint
             />
           </VCol>

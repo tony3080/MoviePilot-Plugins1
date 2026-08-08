@@ -32,6 +32,7 @@ class FakePb2:
     ListSubFileRequest = Request
     FindFileByPathRequest = Request
     UploadFileInfo = types.SimpleNamespace(Status=UploadStatus)
+    google_dot_protobuf_dot_empty__pb2 = types.SimpleNamespace(Empty=Request)
 
 
 class FakeChannel:
@@ -84,6 +85,20 @@ def upload_row(index):
 
 
 class CloudDriveClientTest(unittest.TestCase):
+    def test_mounted_destination_root_is_resolved_to_cd2_api_root(self):
+        class Stub:
+            def GetAllCloudApis(self, _request, **_kwargs):
+                return types.SimpleNamespace(apis=[
+                    types.SimpleNamespace(path="/115"),
+                    types.SimpleNamespace(path="/116"),
+                ])
+
+        resolved = RuntimeClient(Stub()).resolve_destination_root(
+            "/SSD/CloudDrive/115/MediaLibrary"
+        )
+
+        self.assertEqual(resolved, "/115/MediaLibrary")
+
     def test_upload_list_reads_all_pages(self):
         class Stub:
             def __init__(self):

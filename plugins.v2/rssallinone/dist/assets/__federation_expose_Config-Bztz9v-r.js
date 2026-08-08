@@ -447,8 +447,8 @@ return (_ctx, _cache) => {
                       modelValue: config.value.cd2_dest_root,
                       "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.cd2_dest_root) = $event)),
                       label: "CD2 上传任务目标根目录 *",
-                      placeholder: "/云盘/影视库",
-                      hint: "用于和 CD2 上传任务的完整 destPath 精确匹配",
+                      placeholder: "/115/影视库",
+                      hint: "优先填 CD2 gRPC 中的云盘路径；填写本机挂载路径时会自动校正",
                       "persistent-hint": ""
                     }, null, 8, ["modelValue"])
                   ]),
@@ -858,6 +858,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-720f6b5d"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c6553061"]]);
 
 export { Config as default };
