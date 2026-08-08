@@ -497,6 +497,37 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
         self.assertIn("杜比视界", prepared_titles[0])
         self.assertNotIn("DoVi", prepared_titles[0])
 
+    def test_refresh_customization_drops_subtitle_only_tokens(self) -> None:
+        customization_module = types.ModuleType("app.core.meta.customization")
+        words_module = types.ModuleType("app.core.meta.words")
+
+        class FakeCustomizationMatcher:
+            @staticmethod
+            def match(title):
+                self.assertEqual(title, "Movie.2026")
+                return "REMUX@U版@简体@字幕"
+
+        class FakeWordsMatcher:
+            @staticmethod
+            def prepare(title):
+                return title, []
+
+        customization_module.CustomizationMatcher = FakeCustomizationMatcher
+        words_module.WordsMatcher = FakeWordsMatcher
+        modules = {
+            "app.core.meta.customization": customization_module,
+            "app.core.meta.words": words_module,
+        }
+        meta = types.SimpleNamespace(customization="繁体@REMUX")
+
+        with mock.patch.dict(sys.modules, modules):
+            customization = qb_sync.MoviePilotQbGateway.refresh_customization(
+                meta, "Movie.2026"
+            )
+
+        self.assertEqual(customization, "REMUX@U版")
+        self.assertEqual(meta.customization, "REMUX@U版")
+
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
     def test_manual_override_preserves_specials_and_category(self) -> None:
@@ -759,6 +790,187 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             "https://pt.example/details.php?id=42&authkey=***",
         )
 
+    def test_library_refresh_uses_saved_local_files_after_qb_deletion(self) -> None:
+        class Meta:
+            begin_season = None
+
+            @staticmethod
+            def to_dict():
+                return {"title": "Local.Movie.2026"}
+
+        class Media:
+            title = "Local Movie"
+            year = "2026"
+            tmdb_id = 42
+            season = None
+            category = "外语电影"
+
+        class Gateway:
+            recognized_titles = []
+
+            @staticmethod
+            def recognize(title):
+                Gateway.recognized_titles.append(title)
+                return Meta(), Media()
+
+            @staticmethod
+            def list_torrents(_downloader):
+                raise AssertionError("library refresh must not query qB")
+
+            @staticmethod
+            def plan_inventory_files(_media, files, **_kwargs):
+                self.assertEqual(files[0]["name"], "Local.Movie.2026.mkv")
+                return {
+                    "expected_files": [{
+                        "file_index": 0,
+                        "source_name": "Local.Movie.2026.mkv",
+                        "relative_path": (
+                            "Local Movie (2026) {tmdbid=42}/Local Movie.mkv"
+                        ),
+                        "inventory_relative_path": (
+                            "Local Movie (2026) {tmdbid=42}/Local Movie.strm"
+                        ),
+                        "size": files[0]["size"],
+                    }],
+                    "expected_directory": "Local Movie (2026) {tmdbid=42}",
+                    "inventory_target_name": (
+                        "Local Movie (2026) {tmdbid=42}/Local Movie.strm"
+                    ),
+                    "total_files": 1,
+                    "plan_errors": [],
+                }
+
+            @staticmethod
+            def media_payload(_media):
+                return {"title": "Local Movie", "tmdb_id": 42}
+
+            @staticmethod
+            def meta_payload(meta):
+                return meta.to_dict()
+
+            @staticmethod
+            def media_type(_media):
+                return "movie"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "Local.Movie.2026.mkv"
+            source.write_bytes(b"video")
+            library_root = root / "library"
+            inventory_file = (
+                library_root
+                / "外语电影"
+                / "Local Movie (2026) {tmdbid=42}"
+                / "Local Movie.strm"
+            )
+            inventory_file.parent.mkdir(parents=True)
+            inventory_file.write_text("cloud://movie", encoding="utf-8")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            store.upsert_media_item({
+                "id": "qb:qb-main:abc123",
+                "state": "identified",
+                "source_name": "Old.QB.Name",
+                "source_path": str(source),
+                "downloader_id": "qb-main",
+                "info_hash": "abc123",
+                "details": {
+                    "manual_override": {},
+                    "rss_source": {"task_id": "rss-task"},
+                    "source_identity": {"kind": "qb_download"},
+                },
+            })
+            store.replace_file_mappings("qb-main", "abc123", [{
+                "media_id": "qb:qb-main:abc123",
+                "file_index": 0,
+                "source_relative_path": source.name,
+                "current_source_path": str(source),
+            }])
+            service = qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+                inventory_checker=inventory.LocalInventoryChecker([]),
+                library_layout=layout.LibraryLayout.from_config(
+                    str(library_root),
+                    [{
+                        "name": "source",
+                        "prefix": str(root),
+                        "link_roots": {"movie": str(root / "links")},
+                        "enabled": True,
+                    }],
+                ),
+            )
+
+            refreshed = service.refresh_media_from_saved_files(
+                "qb:qb-main:abc123"
+            )
+
+            self.assertEqual(Gateway.recognized_titles, [source.name])
+            self.assertEqual(refreshed["state"], "existing")
+            self.assertEqual(refreshed["source_name"], source.name)
+            self.assertEqual(refreshed["details"]["inventory"]["exists_count"], 1)
+            self.assertEqual(
+                refreshed["details"]["rss_source"]["task_id"], "rss-task"
+            )
+
+    def test_database_lists_cards_by_source_filename_and_keeps_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            for info_hash, source_name in (
+                ("hash-b", "Zulu.Movie.mkv"),
+                ("hash-a", "alpha.Movie.mkv"),
+            ):
+                store.upsert_media_item({
+                    "id": f"qb:qb-main:{info_hash}",
+                    "state": "identified",
+                    "title": "Same Movie",
+                    "source_name": source_name,
+                    "source_path": f"/downloads/{info_hash}/{source_name}",
+                    "downloader_id": "qb-main",
+                    "info_hash": info_hash,
+                    "tmdb_id": 42,
+                    "details": {"customization": "same-label"},
+                })
+                store.upsert_torrent_snapshot({
+                    "downloader_id": "qb-main",
+                    "info_hash": info_hash,
+                    "name": source_name,
+                    "state": "pausedDL",
+                    "category": "movie",
+                    "content_path": f"/downloads/{info_hash}/{source_name}",
+                    "progress": 0.5,
+                    "size": 1,
+                    "media_id": None,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": "missing",
+                    "media_title": "Same Movie",
+                    "media_type": "movie",
+                    "media_year": "2026",
+                    "tmdb_id": 42,
+                    "season": None,
+                    "poster": "",
+                    "recognition_error": "",
+                    "recognized_at": database.utc_now(),
+                    "last_seen_at": database.utc_now(),
+                    "missing_since": None,
+                    "details": {},
+                    "updated_at": database.utc_now(),
+                })
+
+            self.assertEqual(
+                [item["source_name"] for item in store.list_media()["items"]],
+                ["alpha.Movie.mkv", "Zulu.Movie.mkv"],
+            )
+            self.assertEqual(
+                [item["name"] for item in store.list_torrents()["items"]],
+                ["alpha.Movie.mkv", "Zulu.Movie.mkv"],
+            )
+            self.assertEqual(store.list_media()["total"], 2)
+            self.assertEqual(store.list_torrents()["total"], 2)
+
     def test_realtime_hardlink_preserves_qb_source_and_moves_card_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -860,11 +1072,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
 
                 @staticmethod
                 def list_torrent_files(_downloader, _info_hash):
-                    return [{
-                        "name": "Movie/Movie.2026.mkv",
-                        "size": source.stat().st_size,
-                        "index": 0,
-                    }]
+                    raise AssertionError("completed sync must prefer local files")
 
                 @staticmethod
                 def plan_inventory_files(_media, _files, **_kwargs):

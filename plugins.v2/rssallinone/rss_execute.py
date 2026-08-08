@@ -106,7 +106,7 @@ class MoviePilotRssGateway:
             user_agent=str(getattr(site, "ua", "") or user_agent),
             referer=str(getattr(site, "url", "") or ""),
             proxies=proxies,
-            timeout=max(5, int(getattr(site, "timeout", 20) or 20)),
+            timeout=25,
         )
 
     @staticmethod

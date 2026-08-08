@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.12"
+    plugin_version = "0.13.13"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -505,6 +505,21 @@ class RssAllInOne(_PluginBase):
                     "message": "已按指定信息重新识别",
                     "item": result.get("item"),
                 }
+            if media_item:
+                item = self._qb_sync_service().refresh_media_from_saved_files(
+                    media_id,
+                    manual_override={
+                        "media_type": media_type,
+                        "tmdb_id": tmdb_id,
+                        "season": season,
+                        "category": category,
+                    },
+                )
+                return {
+                    "success": True,
+                    "message": "已按指定信息重新识别",
+                    "item": item,
+                }
             item = self._qb_sync_service().refresh_item(
                 data.get("downloader_id"),
                 data.get("info_hash"),
@@ -849,8 +864,8 @@ class RssAllInOne(_PluginBase):
                     "mode": "recognize_and_inventory",
                     "item": result.get("item"),
                 }
-            refreshed = self._qb_sync_service().refresh_item(
-                item.get("downloader_id"), item.get("info_hash")
+            refreshed = self._qb_sync_service().refresh_media_from_saved_files(
+                media_id
             )
             return {
                 "success": True,

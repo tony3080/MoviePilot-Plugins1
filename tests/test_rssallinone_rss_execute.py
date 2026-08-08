@@ -324,6 +324,27 @@ class SiteLabelParsingTest(unittest.TestCase):
             (True, True),
         )
 
+    def test_site_label_text_ignores_entities_and_whitespace(self):
+        block = '<span class="optiontag">国&nbsp; 配</span>'
+        self.assertEqual(
+            rss_site_labels.parse_hdsky_labels(block, ["国语", "国配"]),
+            (True, False),
+        )
+
+    def test_ubits_rebuilds_canonical_detail_url_from_torrent_id(self):
+        access = types.SimpleNamespace(
+            site_url="https://ubits.club/",
+            referer="https://ubits.club/",
+        )
+        self.assertEqual(
+            rss_site_labels._ubits_detail_url(
+                access,
+                "https://rss.example/redirect?passkey=secret",
+                "42",
+            ),
+            "https://ubits.club/details.php?id=42",
+        )
+
     def test_chd_multiple_results_require_exact_rss_torrent_id(self):
         page = """
           <tr><td><a href="details.php?id=41">A</a><div class="tag-gy">国语</div></td></tr>

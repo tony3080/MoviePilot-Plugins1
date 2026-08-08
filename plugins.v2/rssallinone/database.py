@@ -485,7 +485,8 @@ class SQLiteStore:
             ).fetchone()[0]
             rows = connection.execute(
                 f"""SELECT * FROM media_items {where}
-                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY source_name COLLATE NOCASE ASC, id ASC
+                    LIMIT ? OFFSET ?""",
                 [*params, safe_limit, safe_offset],
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
@@ -638,7 +639,10 @@ class SQLiteStore:
             ).fetchone()[0]
             rows = connection.execute(
                 f"""SELECT * FROM torrent_snapshots {where}
-                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY name COLLATE NOCASE ASC,
+                             downloader_id COLLATE NOCASE ASC,
+                             info_hash ASC
+                    LIMIT ? OFFSET ?""",
                 [*params, safe_limit, safe_offset],
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)

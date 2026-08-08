@@ -34,6 +34,21 @@ file_manager = load_module("file_manager")
 
 
 class LocalFileManagerTest(unittest.TestCase):
+    def test_same_filename_in_different_paths_has_distinct_source_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "Disney" / "Movie.mkv"
+            second = root / "Netflix" / "Movie.mkv"
+            first.parent.mkdir()
+            second.parent.mkdir()
+            first.write_bytes(b"disney")
+            second.write_bytes(b"netflix")
+
+            first_id, _ = file_manager._source_identity(first)
+            second_id, _ = file_manager._source_identity(second)
+
+            self.assertNotEqual(first_id, second_id)
+
     def test_browse_returns_directories_and_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

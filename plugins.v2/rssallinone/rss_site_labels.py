@@ -8,7 +8,7 @@ import threading
 import time
 from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from .rss_feed import mask_url
 
@@ -123,7 +123,7 @@ class SiteLabelService:
 
         try:
             if site_kind == "ubits":
-                request_url = str(detail_url or "").strip()
+                request_url = _ubits_detail_url(access, detail_url, torrent_id)
                 if not request_url:
                     raise SiteLabelError("UBits RSS 条目缺少详情页链接")
                 page = self._request(request_url, access)
@@ -372,17 +372,49 @@ def _has_class(element: Dict[str, Any], expected: str) -> bool:
 
 
 def _contains_any(value: object, candidates: Iterable[str]) -> bool:
-    text = str(value or "").casefold()
-    return any(str(item or "").strip().casefold() in text for item in candidates if str(item or "").strip())
+    text = _normalized_label_text(value)
+    return any(
+        _normalized_label_text(item) in text
+        for item in candidates
+        if _normalized_label_text(item)
+    )
 
 
 def _keywords(value: object) -> List[str]:
     items = re.split(r"[,，]", str(value or ""))
-    return [item.strip() for item in items if item.strip()] or ["国语", "国配"]
+    return [item.strip() for item in items if item.strip()] or [
+        "国语", "国配", "國語", "國配",
+    ]
 
 
 def _plain_text(fragment: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", " ", str(fragment or "")))
+
+
+def _normalized_label_text(value: object) -> str:
+    return re.sub(r"\s+", "", html.unescape(str(value or ""))).casefold()
+
+
+def _ubits_detail_url(access: Any, detail_url: object, torrent_id: object) -> str:
+    supplied = str(detail_url or "").strip()
+    parsed = urlparse(supplied)
+    query_id = str((parse_qs(parsed.query).get("id") or [""])[0]).strip()
+    wanted_id = str(torrent_id or query_id).strip()
+    if not wanted_id:
+        match = re.search(r"details\.php\?[^#]*?\bid=(\d+)", supplied, flags=re.I)
+        wanted_id = match.group(1) if match else ""
+    base_url = str(
+        getattr(access, "site_url", "")
+        or getattr(access, "referer", "")
+        or supplied
+        or ""
+    ).strip()
+    if wanted_id and base_url:
+        base = urlparse(base_url)
+        if base.scheme and base.netloc:
+            base_url = f"{base.scheme}://{base.netloc}/"
+        return urljoin(base_url.rstrip("/") + "/", f"details.php?id={wanted_id}")
+    return supplied
 
 
 def _site_request_key(access: Any, url: str) -> str:

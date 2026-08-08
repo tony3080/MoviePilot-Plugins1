@@ -40,6 +40,18 @@ NAMING_META_FIELDS = (
     "video_encode",
     "audio_encode",
 )
+CUSTOMIZATION_EXCLUDED_TOKENS = {
+    "中字",
+    "字幕",
+    "简体",
+    "繁体",
+    "简中",
+    "繁中",
+    "内封",
+    "双语",
+    "中英字幕",
+    "简繁字幕",
+}
 
 
 @dataclass(frozen=True)
@@ -661,8 +673,7 @@ class MoviePilotQbGateway:
         except Exception:
             detected = ""
         merged = MoviePilotQbGateway.merge_customizations(detected, existing)
-        if merged:
-            setattr(meta, "customization", merged)
+        setattr(meta, "customization", merged)
         return merged
 
     @staticmethod
@@ -675,7 +686,11 @@ class MoviePilotQbGateway:
                 for token in str(part or "").split("@"):
                     text = token.strip()
                     identity = text.casefold()
-                    if text and identity not in identities:
+                    if (
+                        text
+                        and identity not in CUSTOMIZATION_EXCLUDED_TOKENS
+                        and identity not in identities
+                    ):
                         identities.add(identity)
                         tokens.append(text)
         return "@".join(tokens)
@@ -844,6 +859,197 @@ class QbSyncService:
             "transitioned_to_library": bool(media),
             "media_id": media.get("id") if media else None,
         }
+
+    def refresh_media_from_saved_files(
+        self,
+        media_id: object,
+        manual_override: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Refresh a library card from persisted local files without querying qB."""
+
+        identity = str(media_id or "").strip()
+        item = self.store.get_media_item(identity)
+        if not item:
+            raise LookupError("媒体记录不存在")
+        if str(item.get("state") or "") == "imported":
+            raise ValueError("已入库卡片只能执行库存复查")
+
+        downloader_id = str(item.get("downloader_id") or "").strip()
+        info_hash = str(item.get("info_hash") or "").strip().lower()
+        saved_mappings = self.store.list_file_mappings(downloader_id, info_hash)
+        local_files = _saved_local_torrent_files(item, saved_mappings)
+        if not local_files:
+            raise RuntimeError("已保存的本地媒体文件不存在，无法重新识别")
+
+        details = copy.deepcopy(item.get("details") or {})
+        stored_override = details.get("manual_override") or {}
+        override = _normalize_manual_override(
+            stored_override if manual_override is None else manual_override
+        )
+        recognition_title = _saved_local_recognition_title(item, local_files)
+        if override.get("media_type") and override.get("tmdb_id"):
+            meta, media = self.gateway.recognize_manual(
+                recognition_title,
+                override["media_type"],
+                override["tmdb_id"],
+                override.get("season"),
+            )
+        else:
+            meta, media = self.gateway.recognize(recognition_title)
+
+        now = utc_now()
+        media_type = ""
+        media_title = ""
+        tmdb_id = override.get("tmdb_id") or None
+        season = override.get("season")
+        category = str(override.get("category") or "").strip()
+        target_name = ""
+        failure_code = ""
+        failure_message = ""
+        refreshed_mappings: List[Dict[str, Any]] = []
+        inventory_plan: Dict[str, Any] = {}
+        path_plan: Dict[str, Any] = {}
+        inventory_details: Dict[str, Any] = {}
+        state = "unidentified"
+
+        if media:
+            media_type = self.gateway.media_type(media)
+            media_title = str(getattr(media, "title", "") or "")
+            tmdb_id = getattr(media, "tmdb_id", None)
+            season = getattr(media, "season", None)
+            if season is None:
+                season = getattr(meta, "begin_season", None)
+            automatic_category = str(getattr(media, "category", "") or "")
+            category = str(override.get("category") or automatic_category).strip()
+            details["automatic_category"] = automatic_category
+            details["media"] = self.gateway.media_payload(media)
+            details["meta"] = self.gateway.meta_payload(meta)
+            if _valid_tmdb_id(tmdb_id):
+                inventory_plan = self.gateway.plan_inventory_files(
+                    media,
+                    local_files,
+                    torrent_meta=meta,
+                )
+                path_plan = self.library_layout.plan(
+                    source_path=str(item.get("source_path") or ""),
+                    category=category,
+                    expected_files=inventory_plan.get("expected_files") or [],
+                    media_type=media_type,
+                )
+                folder = self.inventory_checker.locate_root(
+                    path_plan.get("inventory_base") or "",
+                    tmdb_id,
+                    inventory_plan.get("expected_directory") or "",
+                )
+                inventory_title = str(folder.title or "").strip()
+                if (
+                    folder.status == "exists"
+                    and inventory_title
+                    and inventory_title.casefold() != media_title.casefold()
+                ):
+                    inventory_plan = self.gateway.plan_inventory_files(
+                        media,
+                        local_files,
+                        title_override=inventory_title,
+                        torrent_meta=meta,
+                    )
+                    path_plan = self.library_layout.plan(
+                        source_path=str(item.get("source_path") or ""),
+                        category=category,
+                        expected_files=inventory_plan.get("expected_files") or [],
+                        media_type=media_type,
+                    )
+                inventory_state, inventory_details = self.inventory_checker.check_root(
+                    path_plan.get("inventory_base") or "",
+                    inventory_plan.get("expected_files") or [],
+                    tmdb_id=tmdb_id,
+                    expected_directory=inventory_plan.get("expected_directory") or "",
+                    media_title=inventory_title or media_title,
+                    folder=folder,
+                    plan_errors=inventory_plan.get("plan_errors") or [],
+                    total_files=inventory_plan.get("total_files"),
+                )
+                inventory_details["category"] = path_plan.get("category") or category
+                inventory_details["group"] = path_plan.get("group") or ""
+                inventory_details["layout_errors"] = path_plan.get("errors") or []
+                refreshed_mappings = build_source_target_mappings(
+                    downloader_id=downloader_id,
+                    info_hash=info_hash,
+                    media_id=identity,
+                    torrent={"content_path": str(item.get("source_path") or "")},
+                    expected_files=inventory_plan.get("expected_files") or [],
+                    path_plan=path_plan,
+                    inventory_details=inventory_details,
+                )
+                refreshed_mappings = _restore_saved_source_paths(
+                    refreshed_mappings,
+                    saved_mappings,
+                    local_files,
+                )
+                state = "existing" if inventory_state == "exists" else "identified"
+                if path_plan.get("inventory_files"):
+                    target_name = str(
+                        path_plan["inventory_files"][0].get("path") or ""
+                    )
+                if not target_name:
+                    target_name = str(
+                        inventory_plan.get("inventory_target_name") or ""
+                    )
+            else:
+                failure_code = "missing_tmdb_id"
+                failure_message = "MoviePilot 未返回有效 TMDB ID"
+        else:
+            details["media"] = {}
+            details["meta"] = self.gateway.meta_payload(meta)
+            failure_code = "recognition_failed"
+            failure_message = "MoviePilot 未识别到可靠媒体信息"
+
+        details.update({
+            "recognition_signature": hashlib.sha256(
+                f"{recognition_title}\n{item.get('source_path') or ''}".encode("utf-8")
+            ).hexdigest(),
+            "inventory_plan": inventory_plan,
+            "path_plan": path_plan,
+            "inventory": inventory_details,
+            "file_mappings": refreshed_mappings,
+            "manual_override": override,
+        })
+        previous_state = str(item.get("state") or "")
+        if previous_state == "pending_import" and state in {"identified", "existing"}:
+            state = previous_state
+        previous_failure = str(item.get("failure_code") or "")
+        if not failure_code and previous_failure not in {
+            "recognition_failed",
+            "missing_tmdb_id",
+        }:
+            failure_code = previous_failure
+            failure_message = str(item.get("failure_message") or "")
+        self.store.upsert_media_item({
+            **item,
+            "state": state,
+            "media_type": media_type,
+            "title": media_title or recognition_title,
+            "source_name": recognition_title,
+            "tmdb_id": tmdb_id,
+            "season": season,
+            "category": category,
+            "target_name": target_name,
+            "failure_code": failure_code,
+            "failure_message": failure_message,
+            "details": details,
+            "updated_at": now,
+        })
+        if media and _valid_tmdb_id(tmdb_id):
+            persisted = self.store.replace_file_mappings(
+                downloader_id,
+                info_hash,
+                refreshed_mappings,
+            )
+            details["file_mappings"] = persisted
+            refreshed_item = self.store.get_media_item(identity) or {}
+            refreshed_item["details"] = details
+            self.store.upsert_media_item(refreshed_item)
+        return self.store.get_media_item(identity) or {}
 
     def run(
         self,
@@ -1061,9 +1267,7 @@ class QbSyncService:
         info_hash = str(raw.get("hash") or "").strip().lower()
         title = str(raw.get("title") or raw.get("name") or "").strip()
         content_path = str(raw.get("content_path") or raw.get("path") or "")
-        signature = hashlib.sha256(
-            f"{title}\n{content_path}".encode("utf-8")
-        ).hexdigest()
+        torrent_completed = _torrent_completed(raw)
         existing = self.store.get_torrent_snapshot(downloader.name, info_hash) or {}
         existing_details = existing.get("details") or {}
         rss_history = self.store.latest_rss_history_for_torrent(
@@ -1079,7 +1283,6 @@ class QbSyncService:
             rss_history.get("task_id") or "",
         )
         import_enabled = bool(task_rule and task_rule.import_enabled)
-        torrent_completed = _torrent_completed(raw)
         source_url_masked = _source_url_for_torrent(
             rss_history,
             raw,
@@ -1111,6 +1314,18 @@ class QbSyncService:
                 qb_delete=qb_delete,
             )
             return "recognized"
+        local_torrent_files = (
+            _discover_local_torrent_files(content_path)
+            if torrent_completed
+            else []
+        )
+        recognition_title = (
+            _local_recognition_title(content_path, local_torrent_files)
+            or title
+        )
+        signature = hashlib.sha256(
+            f"{recognition_title}\n{content_path}".encode("utf-8")
+        ).hexdigest()
         stored_override = existing_details.get("manual_override") or {}
         override = _normalize_manual_override(
             stored_override if manual_override is None else manual_override
@@ -1128,29 +1343,29 @@ class QbSyncService:
         if recognition_needed:
             if override.get("media_type") and override.get("tmdb_id"):
                 meta, media = self.gateway.recognize_manual(
-                    title,
+                    recognition_title,
                     override["media_type"],
                     override["tmdb_id"],
                     override.get("season"),
                 )
             else:
-                meta, media = self.gateway.recognize(title)
+                meta, media = self.gateway.recognize(recognition_title)
         else:
             media = self.gateway.restore_media(media_payload)
             if media:
                 meta = self.gateway.restore_meta(
-                    title, existing_details.get("meta") or {}
+                    recognition_title, existing_details.get("meta") or {}
                 )
             else:
                 if override.get("media_type") and override.get("tmdb_id"):
                     meta, media = self.gateway.recognize_manual(
-                        title,
+                        recognition_title,
                         override["media_type"],
                         override["tmdb_id"],
                         override.get("season"),
                     )
                 else:
-                    meta, media = self.gateway.recognize(title)
+                    meta, media = self.gateway.recognize(recognition_title)
 
         recognition_error = ""
         inventory_state = "unknown"
@@ -1189,7 +1404,7 @@ class QbSyncService:
                 outcome = "unrecognized"
             else:
                 try:
-                    torrent_files = self.gateway.list_torrent_files(
+                    torrent_files = local_torrent_files or self.gateway.list_torrent_files(
                         downloader.name, info_hash
                     )
                     inventory_plan = self.gateway.plan_inventory_files(
@@ -1362,7 +1577,7 @@ class QbSyncService:
                 "state": media_state,
                 "media_type": media_type,
                 "title": media_title or title,
-                "source_name": title,
+                "source_name": recognition_title,
                 "source_path": media_source_path,
                 "downloader_id": downloader.name,
                 "info_hash": info_hash,
@@ -1797,6 +2012,158 @@ def resolve_current_source_path(
     if content.suffix and len(source.parts) == 1:
         return content.parent.joinpath(source).as_posix()
     return content.joinpath(source).as_posix()
+
+
+def _discover_local_torrent_files(content_path: object) -> List[Dict[str, Any]]:
+    """Read a completed download directly from the filesystem when available."""
+
+    raw = str(content_path or "").strip()
+    if not raw:
+        return []
+    source = Path(raw).expanduser()
+    try:
+        source = source.resolve(strict=True)
+    except OSError:
+        return []
+    try:
+        paths = [source] if source.is_file() else sorted(
+            (item for item in source.rglob("*") if item.is_file()),
+            key=lambda item: item.as_posix().casefold(),
+        )
+    except OSError:
+        return []
+    result = []
+    for index, path in enumerate(paths):
+        try:
+            relative = (
+                path.name
+                if source.is_file()
+                else path.relative_to(source.parent).as_posix()
+            )
+            size = path.stat().st_size
+        except OSError:
+            continue
+        result.append({
+            "index": index,
+            "name": relative,
+            "size": size,
+            "priority": 1,
+            "current_source_path": str(path),
+        })
+    return result
+
+
+def _local_recognition_title(
+    content_path: object,
+    files: Sequence[Dict[str, Any]],
+) -> str:
+    if not files:
+        return ""
+    raw = str(content_path or "").strip()
+    if raw:
+        name = Path(raw).name.strip()
+        if name:
+            return name
+    if files:
+        return Path(str(files[0].get("name") or "")).name
+    return ""
+
+
+def _saved_local_torrent_files(
+    item: Dict[str, Any],
+    mappings: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    result = []
+    for fallback_index, mapping in enumerate(mappings or []):
+        raw_path = str(mapping.get("current_source_path") or "").strip()
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        try:
+            path = path.resolve(strict=True)
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        try:
+            file_index = int(mapping.get("file_index", fallback_index))
+        except (TypeError, ValueError):
+            file_index = fallback_index
+        result.append({
+            "index": file_index,
+            "name": str(mapping.get("source_relative_path") or path.name),
+            "size": size,
+            "priority": 1,
+            "current_source_path": str(path),
+        })
+    if result:
+        return sorted(result, key=lambda value: int(value["index"]))
+    return _discover_local_torrent_files(item.get("source_path") or "")
+
+
+def _saved_local_recognition_title(
+    item: Dict[str, Any],
+    files: Sequence[Dict[str, Any]],
+) -> str:
+    source_path = str(item.get("source_path") or "").strip()
+    if source_path:
+        source = Path(source_path).expanduser()
+        try:
+            if source.resolve(strict=True).is_dir():
+                return source.name
+        except OSError:
+            pass
+    actual_paths = [
+        Path(str(file.get("current_source_path") or ""))
+        for file in files
+        if str(file.get("current_source_path") or "").strip()
+    ]
+    if len(actual_paths) > 1:
+        try:
+            common = Path(os.path.commonpath([str(path.parent) for path in actual_paths]))
+            if common.name:
+                return common.name
+        except ValueError:
+            pass
+    if actual_paths:
+        return actual_paths[0].name
+    return str(item.get("source_name") or item.get("title") or "").strip()
+
+
+def _restore_saved_source_paths(
+    refreshed: Sequence[Dict[str, Any]],
+    saved: Sequence[Dict[str, Any]],
+    local_files: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    saved_by_index = {
+        int(item.get("file_index", index)): item
+        for index, item in enumerate(saved or [])
+    }
+    local_by_index = {
+        int(item.get("index", index)): item
+        for index, item in enumerate(local_files or [])
+    }
+    result = []
+    for index, mapping in enumerate(refreshed or []):
+        try:
+            file_index = int(mapping.get("file_index", index))
+        except (TypeError, ValueError):
+            file_index = index
+        previous = saved_by_index.get(file_index) or {}
+        local = local_by_index.get(file_index) or {}
+        updated = copy.deepcopy(mapping)
+        updated["current_source_path"] = str(
+            local.get("current_source_path")
+            or previous.get("current_source_path")
+            or updated.get("current_source_path")
+            or ""
+        )
+        previous_details = dict(previous.get("details") or {})
+        previous_details.update(updated.get("details") or {})
+        updated["details"] = previous_details
+        result.append(updated)
+    return result
 
 
 def _index_planned_files(
