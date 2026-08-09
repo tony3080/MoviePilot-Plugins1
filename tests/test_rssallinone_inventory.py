@@ -1415,6 +1415,134 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 history["payload"].get("completion_processed")
             ))
 
+    def test_manual_refresh_reopens_stale_completed_history(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "STALECOMPLETE",
+                    "title": "Stale.Complete.2026",
+                    "state": "paused",
+                    "category": "movie",
+                    "content_path": "/downloads/stale-complete.mkv",
+                    "progress": 0.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, import_enabled=True)
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-stalecomplete",
+                "content_key": "qb-main:stalecomplete",
+                "title": "Stale.Complete.2026",
+                "status": "processed",
+                "reason": "下载完成，已转入入库管理",
+                "payload": {
+                    "downloader": "qb-main",
+                    "info_hash": "stalecomplete",
+                    "completion_processed": True,
+                    "completion_processed_at": database.utc_now(),
+                    "imported_to_library": True,
+                    "qb_delete": {"job_id": "qb-main:stalecomplete"},
+                },
+            })
+            store.upsert_media_item({
+                "id": "qb:qb-main:stalecomplete",
+                "state": "imported",
+                "media_type": "movie",
+                "title": "Stale Complete",
+                "source_name": "Stale.Complete.2026",
+                "source_path": "/downloads/stale-complete.mkv",
+                "downloader_id": "qb-main",
+                "info_hash": "stalecomplete",
+                "tmdb_id": 1,
+                "season": None,
+                "category": "movie",
+                "target_name": "Stale Complete.strm",
+                "failure_code": "",
+                "failure_message": "",
+                "details": {},
+            })
+            store.schedule_qb_delete(
+                task_id="rss-task",
+                task_name="RSS Task",
+                downloader_id="qb-main",
+                info_hash="stalecomplete",
+                source_path="/downloads/stale-complete.mkv",
+                delete_files=False,
+                due_at="2030-01-01T00:00:00+00:00",
+            )
+
+            qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+            ).refresh_item("qb-main", "stalecomplete")
+
+            self.assertIsNone(store.get_torrent_snapshot(
+                "qb-main", "stalecomplete"
+            ))
+            protected_media = store.get_media_item(
+                "qb:qb-main:stalecomplete"
+            )
+            self.assertEqual(protected_media["state"], "imported")
+            protected_history = store.latest_rss_history_for_torrent(
+                "qb-main", "stalecomplete"
+            )
+            self.assertTrue(
+                protected_history["payload"]["completion_processed"]
+            )
+
+            protected_media["state"] = "identified"
+            store.upsert_media_item(protected_media)
+            qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+            ).refresh_item("qb-main", "stalecomplete")
+
+            self.assertIsNotNone(store.get_torrent_snapshot(
+                "qb-main", "stalecomplete"
+            ))
+            self.assertIsNone(store.get_media_item(
+                "qb:qb-main:stalecomplete"
+            ))
+            self.assertFalse(any(
+                item["info_hash"] == "stalecomplete"
+                for item in store.list_qb_delete_jobs()
+            ))
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "stalecomplete"
+            )
+            self.assertEqual(history["status"], "queued")
+            self.assertIn("恢复到 QB 管理", history["reason"])
+            self.assertNotIn("completion_processed", history["payload"])
+            self.assertNotIn("imported_to_library", history["payload"])
+            self.assertNotIn("qb_delete", history["payload"])
+
     def test_initial_rss_recognition_waits_for_completion_callback(self) -> None:
         class Gateway:
             @staticmethod

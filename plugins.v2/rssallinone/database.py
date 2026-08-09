@@ -1678,6 +1678,40 @@ class SQLiteStore:
             "updated_at": utc_now(),
         })
 
+    def reopen_rss_torrent(
+        self,
+        history: Dict[str, Any],
+        *,
+        downloader_id: object,
+        info_hash: object,
+    ) -> None:
+        """Undo a stale completion transition when qB is explicitly incomplete."""
+
+        if not history:
+            return
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        payload = dict(history.get("payload") or {})
+        for key in (
+            "completion_processed",
+            "completion_processed_at",
+            "imported_to_library",
+            "qb_delete",
+        ):
+            payload.pop(key, None)
+        payload.update({
+            "downloader": downloader,
+            "info_hash": normalized_hash,
+        })
+        self.upsert_rss_history({
+            **history,
+            "status": "queued",
+            "reason": "qB 当前仍未完成，已恢复到 QB 管理",
+            "payload": payload,
+            "updated_at": utc_now(),
+        })
+        self.delete_qb_delete_jobs_for_torrent(downloader, normalized_hash)
+
     def upsert_rss_history(self, record: Dict[str, Any]) -> None:
         now = str(record.get("updated_at") or utc_now())
         values = (

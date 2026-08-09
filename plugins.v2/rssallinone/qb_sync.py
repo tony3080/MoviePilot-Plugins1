@@ -1278,18 +1278,31 @@ class QbSyncService:
         rss_history = self.store.latest_rss_history_for_torrent(
             downloader.name, info_hash
         ) or {}
+        media_id = f"qb:{downloader.name}:{info_hash}"
+        persisted_media = self.store.get_media_item(media_id) or {}
+        persisted_media_state = str(persisted_media.get("state") or "")
         completion_already_processed = bool(
             (rss_history.get("payload") or {}).get("completion_processed")
         )
-        torrent_completed = bool(
-            completion_already_processed
-            or completion_confirmed
-            or (
-                allow_completion_transition
-                and _torrent_completed(raw)
-            )
-        )
-        media_id = f"qb:{downloader.name}:{info_hash}"
+        live_completed = _torrent_completed(raw)
+        if completion_confirmed:
+            torrent_completed = True
+        elif allow_completion_transition:
+            torrent_completed = live_completed
+            if completion_already_processed and not live_completed:
+                if persisted_media_state in {"importing", "imported"}:
+                    torrent_completed = True
+                else:
+                    self.store.reopen_rss_torrent(
+                        rss_history,
+                        downloader_id=downloader.name,
+                        info_hash=info_hash,
+                    )
+                    rss_history = self.store.latest_rss_history_for_torrent(
+                        downloader.name, info_hash
+                    ) or rss_history
+        else:
+            torrent_completed = completion_already_processed
         task_scope = scope or RssTaskQbScope.from_tasks(
             self.store.list_all_rss_tasks()
         )
