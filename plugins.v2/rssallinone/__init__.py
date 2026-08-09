@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.20"
+    plugin_version = "0.13.21"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -591,6 +591,12 @@ class RssAllInOne(_PluginBase):
                     )
                     if not removed:
                         raise RuntimeError("qB 删除任务返回失败")
+                    if not self._confirm_qb_torrent_absent(
+                        downloader_id, info_hash
+                    ):
+                        raise RuntimeError(
+                            "qB 删除接口已返回成功，但任务仍然存在；插件卡片已保留"
+                        )
                     if not store.delete_torrent_snapshot(downloader_id, info_hash):
                         raise RuntimeError("qB 任务已删除，但插件卡片清理失败，请刷新识别")
                     store.archive_rss_history_for_torrent(downloader_id, info_hash)
@@ -1272,6 +1278,12 @@ class RssAllInOne(_PluginBase):
                         bool(job.get("delete_files")),
                     ):
                         raise RuntimeError("qB 删除任务返回失败")
+                    if torrent and not self._confirm_qb_torrent_absent(
+                        job.get("downloader_id"), job.get("info_hash")
+                    ):
+                        raise RuntimeError(
+                            "qB 删除接口已返回成功，但任务仍然存在"
+                        )
                     self._store.finish_qb_delete_job(
                         job.get("id"), success=True
                     )
@@ -1330,6 +1342,31 @@ class RssAllInOne(_PluginBase):
             "completed", "uploading", "stalledup", "pausedup",
             "queuedup", "checkingup", "forcedup",
         }
+
+    def _confirm_qb_torrent_absent(
+        self,
+        downloader_id: object,
+        info_hash: object,
+        *,
+        attempts: int = 4,
+    ) -> bool:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            return False
+        attempts = max(1, int(attempts or 1))
+        for attempt in range(attempts):
+            found = False
+            for item in MoviePilotQbGateway.list_torrents(downloader):
+                raw = MoviePilotQbGateway.torrent_dict(item)
+                if str(raw.get("hash") or "").strip().lower() == normalized_hash:
+                    found = True
+                    break
+            if not found:
+                return True
+            if attempt + 1 < attempts:
+                self._stop_event.wait(0.5)
+        return False
 
     def _start_rss_run(self, *, task_id: str, source: str) -> Dict[str, Any]:
         store = self._require_store()

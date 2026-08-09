@@ -897,16 +897,54 @@ class PluginLifecycleTest(unittest.TestCase):
                     "last_seen_at": database.utc_now(),
                     "updated_at": database.utc_now(),
                 })
+                plugin._store.upsert_torrent_snapshot({
+                    "downloader_id": "qb-main",
+                    "info_hash": "manual-delete-still-there",
+                    "name": "删除后仍存在",
+                    "state": "pausedDL",
+                    "category": "movie",
+                    "content_path": "/downloads/删除后仍存在.mkv",
+                    "progress": 0.5,
+                    "size": 1024,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": "missing",
+                    "media_title": "删除后仍存在",
+                    "media_type": "movie",
+                    "media_year": "2026",
+                    "poster": "",
+                    "recognition_error": "",
+                    "last_seen_at": database.utc_now(),
+                    "updated_at": database.utc_now(),
+                })
                 manual_removed = []
                 original_remove = module.MoviePilotQbGateway.remove_torrent
+                original_list = module.MoviePilotQbGateway.list_torrents
                 try:
-                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
-                        lambda downloader, info_hash, delete_files: (
-                            manual_removed.append(
-                                (downloader, info_hash, delete_files)
-                            )
-                            or info_hash == "manual-delete-ok"
+                    remaining_hashes = {
+                        "manual-delete-ok",
+                        "manual-delete-fail",
+                        "manual-delete-still-there",
+                    }
+
+                    def remove_manual(downloader, info_hash, delete_files):
+                        manual_removed.append(
+                            (downloader, info_hash, delete_files)
                         )
+                        if info_hash == "manual-delete-ok":
+                            remaining_hashes.discard(info_hash)
+                            return True
+                        return info_hash == "manual-delete-still-there"
+
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        remove_manual
+                    )
+                    module.MoviePilotQbGateway.list_torrents = staticmethod(
+                        lambda _downloader: [
+                            {"hash": info_hash}
+                            for info_hash in remaining_hashes
+                        ]
                     )
                     manual_delete = plugin.api_qb_delete({
                         "items": [
@@ -918,17 +956,22 @@ class PluginLifecycleTest(unittest.TestCase):
                                 "downloader_id": "qb-main",
                                 "info_hash": "manual-delete-fail",
                             },
+                            {
+                                "downloader_id": "qb-main",
+                                "info_hash": "manual-delete-still-there",
+                            },
                         ],
                     })
                     self.assertFalse(manual_delete["success"])
                     self.assertTrue(manual_delete["partial"])
                     self.assertEqual(manual_delete["succeeded"], 1)
-                    self.assertEqual(manual_delete["failed"], 1)
+                    self.assertEqual(manual_delete["failed"], 2)
                     self.assertEqual(
                         manual_removed,
                         [
                             ("qb-main", "manual-delete-ok", False),
                             ("qb-main", "manual-delete-fail", False),
+                            ("qb-main", "manual-delete-still-there", False),
                         ],
                     )
                     self.assertIsNone(plugin._store.get_torrent_snapshot(
@@ -937,6 +980,14 @@ class PluginLifecycleTest(unittest.TestCase):
                     self.assertIsNotNone(plugin._store.get_torrent_snapshot(
                         "qb-main", "manual-delete-fail"
                     ))
+                    self.assertIsNotNone(plugin._store.get_torrent_snapshot(
+                        "qb-main", "manual-delete-still-there"
+                    ))
+                    self.assertTrue(any(
+                        item.get("info_hash") == "manual-delete-still-there"
+                        and "任务仍然存在" in str(item.get("message") or "")
+                        for item in manual_delete["results"]
+                    ))
                     outside = plugin.api_qb_delete({
                         "items": [{
                             "downloader_id": "qb-main",
@@ -944,9 +995,10 @@ class PluginLifecycleTest(unittest.TestCase):
                         }],
                     })
                     self.assertFalse(outside["success"])
-                    self.assertEqual(len(manual_removed), 2)
+                    self.assertEqual(len(manual_removed), 3)
                 finally:
                     module.MoviePilotQbGateway.remove_torrent = original_remove
+                    module.MoviePilotQbGateway.list_torrents = original_list
 
                 plugin._store.schedule_qb_delete(
                     task_id="movies",
@@ -971,18 +1023,26 @@ class PluginLifecycleTest(unittest.TestCase):
                 original_dict = module.MoviePilotQbGateway.torrent_dict
                 original_remove = module.MoviePilotQbGateway.remove_torrent
                 try:
+                    scheduled_hashes = {"delete-me"}
                     module.MoviePilotQbGateway.list_torrents = staticmethod(
-                        lambda _downloader: [{
-                            "hash": "delete-me",
-                            "progress": 1.0,
-                            "state": "pausedUP",
-                        }]
+                        lambda _downloader: [
+                            {
+                                "hash": info_hash,
+                                "progress": 1.0,
+                                "state": "pausedUP",
+                            }
+                            for info_hash in scheduled_hashes
+                        ]
                     )
                     module.MoviePilotQbGateway.torrent_dict = staticmethod(dict)
+
+                    def remove_scheduled(downloader, info_hash, delete_files):
+                        removed.append((downloader, info_hash, delete_files))
+                        scheduled_hashes.discard(info_hash)
+                        return True
+
                     module.MoviePilotQbGateway.remove_torrent = staticmethod(
-                        lambda downloader, info_hash, delete_files: removed.append(
-                            (downloader, info_hash, delete_files)
-                        ) or True
+                        remove_scheduled
                     )
                     plugin._scheduled_qb_deletes()
                     self.assertEqual(
