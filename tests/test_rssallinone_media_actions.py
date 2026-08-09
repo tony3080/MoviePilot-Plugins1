@@ -113,6 +113,7 @@ class MediaActionServiceTest(unittest.TestCase):
                 current_media_id="done",
             ),
         )
+
         self.assertIn(
             "CD2 监控",
             self.service.pending_batch_action_error(
@@ -163,6 +164,84 @@ class MediaActionServiceTest(unittest.TestCase):
             ),
             "",
         )
+
+    def test_realtime_task_cannot_queue_before_link_source_is_ready(self) -> None:
+        source = self.root / "CHD" / "Movie.mkv"
+        target = self.root / "library" / "Movie.mkv"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"movie")
+        self.add_item("realtime-failed", [{
+            "source_relative_path": "Movie.mkv",
+            "source": source,
+            "new_rel": "Movie/Movie.mkv",
+            "target": target,
+        }])
+        item = self.store.get_media_item("realtime-failed")
+        item["details"] = {
+            "import_control": {"realtime_hardlink_enabled": True},
+            "realtime_hardlink": {
+                "state": "failed",
+                "error": "link failed",
+            },
+            "source_identity": {
+                "kind": "qb_download",
+                "source_path": str(source.parent),
+            },
+        }
+        self.store.upsert_media_item(item)
+
+        result = self.service.execute("queue_import", ["realtime-failed"])
+
+        self.assertFalse(result["success"])
+        self.assertIn("实时硬链接尚未成功", result["results"][0]["message"])
+        self.assertEqual(
+            self.store.get_media_item("realtime-failed")["state"],
+            "identified",
+        )
+
+    def test_realtime_import_deletion_preserves_qb_original(self) -> None:
+        qb_source = self.root / "CHD" / "Movie" / "Movie.mkv"
+        realtime_source = self.root / "CHDlink" / "Movie" / "Movie.mkv"
+        library_link = self.root / "library" / "Movie" / "Movie.mkv"
+        qb_source.parent.mkdir(parents=True)
+        realtime_source.parent.mkdir(parents=True)
+        library_link.parent.mkdir(parents=True)
+        qb_source.write_bytes(b"movie")
+        os.link(qb_source, realtime_source)
+        os.link(realtime_source, library_link)
+        self.add_item(
+            "realtime-imported",
+            [{
+                "source_relative_path": "Movie/Movie.mkv",
+                "source": realtime_source,
+                "new_rel": "Movie/Movie.mkv",
+                "target": library_link,
+                "details": {"hardlink_owned": True},
+            }],
+            state="imported",
+            media_type="movie",
+        )
+        item = self.store.get_media_item("realtime-imported")
+        item["source_path"] = str(realtime_source.parent)
+        item["details"] = {
+            "import_control": {"realtime_hardlink_enabled": True},
+            "realtime_hardlink": {"state": "linked"},
+            "source_identity": {
+                "kind": "realtime_hardlink",
+                "source_path": str(realtime_source.parent),
+                "qb_source_path": str(qb_source.parent),
+                "deletion_scope": "persisted_file_mappings_only",
+            },
+        }
+        self.store.upsert_media_item(item)
+
+        result = self.service.execute("delete_both", ["realtime-imported"])
+
+        self.assertTrue(result["success"])
+        self.assertTrue(qb_source.is_file())
+        self.assertFalse(realtime_source.exists())
+        self.assertFalse(library_link.exists())
+        self.assertIsNone(self.store.get_media_item("realtime-imported"))
 
     def test_import_creates_only_missing_hardlinks_and_rolls_back_cleanly(self) -> None:
         source_dir = self.root / "source"

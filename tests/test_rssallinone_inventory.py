@@ -1145,6 +1145,14 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 (link_root / "Movie").resolve(),
             )
             self.assertEqual(
+                media["details"]["source_identity"]["kind"],
+                "realtime_hardlink",
+            )
+            self.assertEqual(
+                Path(media["details"]["source_identity"]["qb_source_path"]).resolve(),
+                source.parent.resolve(),
+            )
+            self.assertEqual(
                 media["details"]["rss_source"]["detail_url_masked"],
                 "https://pt.example/details.php?id=42",
             )
@@ -1157,6 +1165,137 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 Path(mapping["details"]["qb_source_path"]).resolve(),
                 source.resolve(),
             )
+
+    def test_completed_realtime_task_backfills_without_import_card(self) -> None:
+        class Meta:
+            begin_season = None
+
+        class Media:
+            title = "CHD Backfill"
+            year = "2026"
+            tmdb_id = 43
+            season = None
+            category = "外语电影"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "CHD"
+            link_root = root / "CHDlink"
+            source = source_root / "Backfill" / "Backfill.2026.mkv"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"movie-data")
+
+            class Gateway:
+                @staticmethod
+                def list_downloaders():
+                    return [qb_sync.DownloaderView(
+                        name="qb-main",
+                        type="qbittorrent",
+                        enabled=True,
+                        default=True,
+                        ready=True,
+                    )]
+
+                @staticmethod
+                def list_torrents(_downloader):
+                    return [{
+                        "hash": "CHDBACKFILL",
+                        "title": "Backfill.2026.REMUX-CHD",
+                        "state": "uploading",
+                        "category": "chd",
+                        "content_path": str(source.parent),
+                        "progress": 1.0,
+                        "size": source.stat().st_size,
+                    }]
+
+                @staticmethod
+                def torrent_dict(item):
+                    return dict(item)
+
+                @staticmethod
+                def recognize(_title):
+                    return None, None
+
+                @staticmethod
+                def list_torrent_files(_downloader, _info_hash):
+                    raise AssertionError("completed sync must prefer local files")
+
+                @staticmethod
+                def plan_inventory_files(_media, _files, **_kwargs):
+                    return {
+                        "expected_files": [{
+                            "file_index": 0,
+                            "source_name": "Backfill/Backfill.2026.mkv",
+                            "new_rel": "CHD Backfill (2026) {tmdbid=43}/CHD Backfill.mkv",
+                            "relative_path": "CHD Backfill (2026) {tmdbid=43}/CHD Backfill.mkv",
+                            "inventory_relative_path": "CHD Backfill (2026) {tmdbid=43}/CHD Backfill.strm",
+                            "size": source.stat().st_size,
+                        }],
+                        "expected_directory": "CHD Backfill (2026) {tmdbid=43}",
+                        "total_files": 1,
+                        "plan_errors": [],
+                    }
+
+                @staticmethod
+                def media_payload(_media):
+                    return {"title": "CHD Backfill", "tmdb_id": 43}
+
+                @staticmethod
+                def meta_payload(_meta):
+                    return {}
+
+                @staticmethod
+                def poster(_media):
+                    return ""
+
+                @staticmethod
+                def media_type(_media):
+                    return "movie"
+
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_id="chd-task",
+                task_name="彩虹岛",
+                category="chd",
+                import_enabled=False,
+                realtime_hardlink_enabled=True,
+                realtime_source_root=str(source_root),
+                realtime_link_root=str(link_root),
+            )
+            store.upsert_rss_history({
+                "task_id": "chd-task",
+                "source_key": "source-chd-backfill",
+                "content_key": "qb-main:chdbackfill",
+                "title": "Backfill.2026.REMUX-CHD",
+                "status": "processed",
+                "reason": "下载完成，任务未启用入库",
+                "payload": {
+                    "info_hash": "chdbackfill",
+                    "completion_processed": True,
+                    "imported_to_library": False,
+                },
+            })
+            store.create_background_task("chd-backfill", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "chd-backfill"
+            )
+
+            linked_file = link_root / "Backfill" / "Backfill.2026.mkv"
+            self.assertTrue(linked_file.samefile(source))
+            self.assertEqual(store.list_media()["total"], 0)
+            self.assertEqual(result["completed_skipped"], 0)
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "chdbackfill"
+            )
+            self.assertEqual(
+                history["payload"]["realtime_hardlink"]["state"],
+                "linked",
+            )
+            self.assertFalse(history["payload"]["imported_to_library"])
+            self.assertIn("已创建实时硬链接", history["reason"])
 
     def test_completed_torrent_with_import_disabled_stays_out_of_library(self) -> None:
         class Gateway:

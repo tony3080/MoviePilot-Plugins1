@@ -52,6 +52,9 @@ CUSTOMIZATION_EXCLUDED_TOKENS = {
     "中英字幕",
     "简繁字幕",
 }
+REALTIME_MEDIA_EXTENSIONS = {
+    ".avi", ".iso", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".rmvb", ".ts",
+}
 
 
 @dataclass(frozen=True)
@@ -1163,9 +1166,16 @@ class QbSyncService:
                         history = self.store.latest_rss_history_for_torrent(
                             downloader.name, info_hash
                         ) or {}
-                        if bool((history.get("payload") or {}).get(
-                            "completion_processed"
-                        )):
+                        history_payload = history.get("payload") or {}
+                        rule = scope.rule_for(
+                            downloader.name,
+                            raw.get("category") or "",
+                            history.get("task_id") or "",
+                        )
+                        if (
+                            bool(history_payload.get("completion_processed"))
+                            and not _completion_requires_processing(rule, history)
+                        ):
                             self.store.delete_torrent_snapshot(
                                 downloader.name, info_hash
                             )
@@ -1312,6 +1322,9 @@ class QbSyncService:
             rss_history.get("task_id") or "",
         )
         import_enabled = bool(task_rule and task_rule.import_enabled)
+        completion_requires_processing = _completion_requires_processing(
+            task_rule, rss_history
+        )
         source_url_masked = _source_url_for_torrent(
             rss_history,
             raw,
@@ -1328,7 +1341,11 @@ class QbSyncService:
             if schedule_delete
             else {}
         )
-        if torrent_completed and not import_enabled:
+        if (
+            torrent_completed
+            and not import_enabled
+            and not completion_requires_processing
+        ):
             existing_media = self.store.get_media_item(media_id) or {}
             if str(existing_media.get("state") or "") not in {
                 "importing", "imported"
@@ -1574,32 +1591,62 @@ class QbSyncService:
         media_source_path = content_path
         realtime_hardlink: Dict[str, Any] = {}
         realtime_error = ""
-        if (
-            create_candidate
+        completion_payload = rss_history.get("payload") or {}
+        previous_realtime = completion_payload.get("realtime_hardlink") or {}
+        realtime_already_linked = (
+            isinstance(previous_realtime, dict)
+            and str(previous_realtime.get("state") or "") == "linked"
+        )
+        realtime_candidate = bool(
+            torrent_completed
             and task_rule
             and task_rule.realtime_hardlink_enabled
             and not imported_record
+            and (
+                not realtime_already_linked
+                or (
+                    create_candidate
+                    and not bool(completion_payload.get("imported_to_library"))
+                )
+            )
+        )
+        if (
+            realtime_candidate
+            and task_rule
         ):
             try:
+                realtime_mappings = file_mappings or build_realtime_source_mappings(
+                    downloader_id=downloader.name,
+                    info_hash=info_hash,
+                    media_id=media_id,
+                    files=local_torrent_files,
+                )
                 file_mappings, media_source_path, realtime_hardlink = (
                     create_realtime_hardlinks(
                         content_path=content_path,
-                        file_mappings=file_mappings,
+                        file_mappings=realtime_mappings,
                         source_root=task_rule.realtime_source_root,
                         link_root=task_rule.realtime_link_root,
                     )
                 )
                 details["file_mappings"] = file_mappings
                 details["realtime_hardlink"] = realtime_hardlink
+                details["source_identity"] = {
+                    "kind": "realtime_hardlink",
+                    "source_path": media_source_path,
+                    "qb_source_path": content_path,
+                    "deletion_scope": "persisted_file_mappings_only",
+                }
             except Exception as error:
                 realtime_error = str(error)
-                details["realtime_hardlink"] = {
+                realtime_hardlink = {
                     "enabled": True,
                     "source_root": task_rule.realtime_source_root,
                     "link_root": task_rule.realtime_link_root,
                     "state": "failed",
                     "error": realtime_error,
                 }
+                details["realtime_hardlink"] = realtime_hardlink
         if create_candidate and not imported_record:
             self.store.upsert_media_item({
                 "id": media_id,
@@ -1630,13 +1677,19 @@ class QbSyncService:
             })
         elif not imported_record:
             self.store.delete_media_item(media_id)
-        if (
+        should_persist_mappings = bool(
             create_candidate
             and not imported_record
-            and media
-            and _valid_tmdb_id(tmdb_id)
-            and mapping_refresh_succeeded
-        ):
+            and (
+                (
+                    media
+                    and _valid_tmdb_id(tmdb_id)
+                    and mapping_refresh_succeeded
+                )
+                or str(realtime_hardlink.get("state") or "") == "linked"
+            )
+        )
+        if should_persist_mappings:
             self.store.replace_file_mappings(
                 downloader.name,
                 info_hash,
@@ -1819,6 +1872,26 @@ def _torrent_completed(torrent: Dict[str, Any]) -> bool:
     }
 
 
+def _completion_requires_processing(
+    task_rule: Optional[RssTaskQbRule],
+    history: Dict[str, Any],
+) -> bool:
+    """Return whether a completed RSS item still needs a configured transition."""
+
+    if not task_rule:
+        return False
+    payload = history.get("payload") or {}
+    if task_rule.import_enabled and not bool(payload.get("imported_to_library")):
+        return True
+    if task_rule.realtime_hardlink_enabled:
+        realtime = payload.get("realtime_hardlink") or {}
+        return not (
+            isinstance(realtime, dict)
+            and str(realtime.get("state") or "") == "linked"
+        )
+    return False
+
+
 def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
@@ -1888,6 +1961,45 @@ def build_source_target_mappings(
                 "matched_inventory_path": str(checked.get("matched_path") or ""),
                 "recognition": expected.get("recognition") or {},
             },
+        })
+    return mappings
+
+
+def build_realtime_source_mappings(
+    *,
+    downloader_id: str,
+    info_hash: str,
+    media_id: str,
+    files: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Build source-only mappings when MP recognition cannot plan an import."""
+
+    mappings: List[Dict[str, Any]] = []
+    for fallback_index, item in enumerate(files or []):
+        source_text = str(item.get("current_source_path") or "").strip()
+        if not source_text:
+            continue
+        source = Path(source_text).expanduser()
+        if source.suffix.casefold() not in REALTIME_MEDIA_EXTENSIONS:
+            continue
+        try:
+            file_index = int(item.get("index", fallback_index))
+        except (TypeError, ValueError):
+            file_index = fallback_index
+        mappings.append({
+            "downloader_id": str(downloader_id or ""),
+            "info_hash": str(info_hash or "").lower(),
+            "file_index": file_index,
+            "media_id": str(media_id or ""),
+            "source_relative_path": str(item.get("name") or source.name),
+            "current_source_path": source_text,
+            "new_rel": "",
+            "local_hardlink_path": "",
+            "inventory_path": "",
+            "inventory_exists": False,
+            "file_size": max(0, int(item.get("size") or 0)),
+            "state": "planned",
+            "details": {},
         })
     return mappings
 

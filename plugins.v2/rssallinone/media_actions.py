@@ -231,6 +231,7 @@ class MediaActionService:
             raise MediaActionError("只有已识别或已回退项目可以转为待入库")
         if not can_transition(state, "pending"):
             raise MediaActionError(f"不允许从 {state} 转为 pending")
+        self._require_realtime_source(item)
         updated = copy.deepcopy(item)
         details = dict(updated.get("details") or {})
         details["pending_import"] = {
@@ -258,6 +259,7 @@ class MediaActionService:
             raise MediaActionError(f"状态 {original_state or '<empty>'} 不能入库")
         if not can_transition(original_state, "importing"):
             raise MediaActionError(f"不允许从 {original_state} 转为 importing")
+        self._require_realtime_source(item)
 
         mappings = self._mappings(item)
         missing = [mapping for mapping in mappings if not mapping.get("inventory_exists")]
@@ -376,6 +378,22 @@ class MediaActionService:
                 and (mapping.get("details") or {}).get("hardlink_created_in_operation")
             ],
         }
+
+    @staticmethod
+    def _require_realtime_source(item: Dict[str, Any]) -> None:
+        details = item.get("details") or {}
+        control = details.get("import_control") or {}
+        if not bool(control.get("realtime_hardlink_enabled")):
+            return
+        realtime = details.get("realtime_hardlink") or {}
+        source_identity = details.get("source_identity") or {}
+        if (
+            str(realtime.get("state") or "") != "linked"
+            or str(source_identity.get("kind") or "") != "realtime_hardlink"
+        ):
+            raise MediaActionError(
+                "实时硬链接尚未成功，不能使用 qB 下载原文件入库"
+            )
 
     def _delete_source(
         self, item: Dict[str, Any], mappings: Sequence[Dict[str, Any]]

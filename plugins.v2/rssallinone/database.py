@@ -1670,10 +1670,26 @@ class SQLiteStore:
             payload["realtime_hardlink"] = realtime_hardlink
         if qb_delete:
             payload["qb_delete"] = qb_delete
+        realtime_state = str(
+            (payload.get("realtime_hardlink") or {}).get("state") or ""
+        )
+        realtime_error = str(
+            (payload.get("realtime_hardlink") or {}).get("error") or ""
+        ).strip()
+        if realtime_state == "linked":
+            reason = "下载完成，已创建实时硬链接"
+            if imported:
+                reason += "并转入入库管理"
+        elif realtime_state == "failed":
+            reason = "下载完成，实时硬链接失败"
+            if realtime_error:
+                reason += f"：{realtime_error}"
+        else:
+            reason = "下载完成，已转入入库管理" if imported else "下载完成，任务未启用入库"
         self.upsert_rss_history({
             **history,
             "status": "processed",
-            "reason": "下载完成，已转入入库管理" if imported else "下载完成，任务未启用入库",
+            "reason": reason,
             "payload": payload,
             "updated_at": utc_now(),
         })
