@@ -48,7 +48,9 @@ class MediaActionService:
             return ""
         if normalized_action == "import":
             return "待入库批次运行期间不能手动直接入库"
-        if normalized_action not in {"delete_hardlinks", "delete_both"}:
+        if normalized_action not in {
+            "delete_source", "delete_hardlinks", "delete_both"
+        }:
             return "待入库批次运行期间只能清理已完成入库的卡片"
 
         current = str(current_media_id or "").strip()

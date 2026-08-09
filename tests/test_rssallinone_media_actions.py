@@ -130,11 +130,11 @@ class MediaActionServiceTest(unittest.TestCase):
                 "import", [imported]
             ),
         )
-        self.assertIn(
-            "只能清理",
+        self.assertEqual(
             self.service.pending_batch_action_error(
                 "delete_source", [imported]
             ),
+            "",
         )
         self.assertEqual(
             self.service.pending_batch_action_error(

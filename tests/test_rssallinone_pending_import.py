@@ -428,6 +428,81 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(finished["state"], "completed")
             self.assertIn("switch_restore_skipped_at", finished["details"])
 
+    def test_identifierless_scan_callback_confirms_completed_task_via_emby_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-identifierless-callback",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+
+            coordinator.run("cron")
+            batch = store.latest_active_import_batch()
+            requested_at = pending_import._parse_time(batch["refresh_requested_at"])
+            scanner.task_status.update({
+                "state": "Idle",
+                "is_running": False,
+                "last_status": "Completed",
+                "last_started_at": (
+                    requested_at + pending_import.timedelta(seconds=1)
+                ).isoformat(),
+                "last_finished_at": (
+                    requested_at + pending_import.timedelta(minutes=1)
+                ).isoformat(),
+            })
+
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+            })
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(scanner.status_calls, 1)
+            self.assertIsNone(store.latest_active_import_batch())
+            finished = store.get_import_batch(batch["id"])
+            self.assertIn("scan_callback_api_confirmation", finished["details"])
+
+    def test_identifierless_callback_does_not_finish_unconfirmed_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-unconfirmed-callback",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+
+            coordinator.run("cron")
+
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+            })
+
+            self.assertFalse(result["accepted"])
+            self.assertEqual(scanner.status_calls, 1)
+            self.assertIsNotNone(store.latest_active_import_batch())
+
     def test_completed_upload_missing_from_task_list_uses_cloud_file(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, target, _inventory = self.make_store(directory)

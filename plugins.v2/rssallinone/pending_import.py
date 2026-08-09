@@ -314,6 +314,9 @@ class PendingImportCoordinator:
         batch = self.store.latest_active_import_batch()
         if not batch or str(batch.get("state") or "") != "waiting_scan_callback":
             return {"accepted": False, "message": "当前没有等待扫库回调的批次"}
+        event_name = str(event.get("event_name") or "").strip().casefold()
+        if event_name not in COMPLETED_SCAN_EVENTS:
+            return {"accepted": False, "message": "不是 scheduledtasks.completed 回调"}
         requested_at = _parse_time(batch.get("refresh_requested_at"))
         event_time = _parse_time(event.get("event_time")) or datetime.now(timezone.utc)
         if requested_at and event_time < requested_at:
@@ -324,9 +327,11 @@ class PendingImportCoordinator:
         expected_server_id = str(
             refresh_target.get("server_id") or self.config.callback_server_id or ""
         ).strip()
+        callback_server_id = str(event.get("server_id") or "").strip()
         if (
             expected_server_id
-            and str(event.get("server_id") or "").strip() != expected_server_id
+            and callback_server_id
+            and callback_server_id != expected_server_id
         ):
             return {"accepted": False, "message": "回调 server_id 与配置不匹配"}
         expected_task_id = str(
@@ -335,19 +340,41 @@ class PendingImportCoordinator:
         expected_task_name = str(
             refresh_target.get("task_name") or self.config.callback_task_name or ""
         ).strip()
-        if expected_task_id:
-            if str(event.get("task_id") or "").strip() != expected_task_id:
+        callback_task_id = str(event.get("task_id") or "").strip()
+        callback_task_name = str(event.get("task_name") or "").strip()
+        callback_has_identity = bool(callback_task_id or callback_task_name)
+        if callback_task_id and expected_task_id:
+            if callback_task_id != expected_task_id:
                 return {"accepted": False, "message": "回调 task_id 与扫库任务不匹配"}
-        elif (
-            expected_task_name
-            and str(event.get("task_name") or "").strip() != expected_task_name
-        ):
-            return {"accepted": False, "message": "回调 task_name 与扫库任务不匹配"}
-        event_name = str(event.get("event_name") or "").strip().casefold()
-        if event_name not in COMPLETED_SCAN_EVENTS:
-            return {"accepted": False, "message": "不是 scheduledtasks.completed 回调"}
+        elif callback_task_name and expected_task_name:
+            if callback_task_name.casefold() != expected_task_name.casefold():
+                return {"accepted": False, "message": "回调 task_name 与扫库任务不匹配"}
+
+        # Emby Webhooks can emit ScheduledTasks.Completed without the nested
+        # Task/Server object.  The callback secret has already been verified by
+        # the API route; use the configured Emby task as a second factor before
+        # accepting an identifierless event.
+        api_confirmation = None
+        if not callback_has_identity:
+            try:
+                task = self.scanner.emby_task_status(
+                    expected_task_id, expected_task_name
+                )
+            except Exception as error:
+                return {
+                    "accepted": False,
+                    "message": f"回调未携带扫库任务标识，Emby 状态核对失败：{error}",
+                }
+            if not self._scan_task_completed_after_refresh(batch, task):
+                return {
+                    "accepted": False,
+                    "message": "回调未携带扫库任务标识，Emby 尚未确认本轮扫库完成",
+                }
+            api_confirmation = task
         details = dict(batch.get("details") or {})
         details["scan_callback"] = copy.deepcopy(event)
+        if api_confirmation:
+            details["scan_callback_api_confirmation"] = copy.deepcopy(api_confirmation)
         details["scan_completed_at"] = utc_now()
         batch["details"] = details
         batch["updated_at"] = utc_now()
@@ -362,6 +389,22 @@ class PendingImportCoordinator:
                 else "扫库完成回调已确认"
             ),
         }
+
+    @staticmethod
+    def _scan_task_completed_after_refresh(
+        batch: Dict[str, Any], task: Dict[str, Any]
+    ) -> bool:
+        requested_at = _parse_time(batch.get("refresh_requested_at"))
+        last_started_at = _parse_time(task.get("last_started_at"))
+        last_finished_at = _parse_time(task.get("last_finished_at"))
+        last_status = str(task.get("last_status") or "").strip().casefold()
+        return bool(
+            requested_at
+            and last_started_at
+            and last_finished_at
+            and last_started_at >= requested_at
+            and last_status in {"completed", "success", "succeeded"}
+        )
 
     def _resume_current_card_if_needed(self, batch: Dict[str, Any]) -> str:
         media_id = str(batch.get("current_media_id") or "").strip()
