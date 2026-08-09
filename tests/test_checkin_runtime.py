@@ -5,7 +5,9 @@ import sys
 import types
 import unittest
 from abc import ABCMeta, abstractmethod
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -272,24 +274,31 @@ class CheckinRuntimeTest(unittest.TestCase):
         self.assertEqual(len(self.plugin._test_messages), 1)
 
     def test_streak_days_are_calculated_from_successful_history(self):
+        today = datetime(2026, 8, 6, 12, 0, 0)
+
+        class _FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return today
+
         self.plugin._test_data["history"] = [
             {
-                "date": "2026-08-04 09:00:00",
+                "date": (today - timedelta(days=2)).strftime("%Y-%m-%d 09:00:00"),
                 "site": "smzdm",
                 "status": "success",
             },
             {
-                "date": "2026-08-05 09:00:00",
+                "date": (today - timedelta(days=1)).strftime("%Y-%m-%d 09:00:00"),
                 "site": "smzdm",
                 "status": "already",
             },
         ]
-        self.plugin._module_now = None
-        record = self.plugin._decorate_result(
-            "smzdm",
-            {"status": "success", "message": "ok"},
-            manual=True,
-        )
+        with patch.object(self.module, "datetime", _FixedDateTime):
+            record = self.plugin._decorate_result(
+                "smzdm",
+                {"status": "success", "message": "ok"},
+                manual=True,
+            )
         self.assertEqual(record["streak_days"], 3)
 
 
