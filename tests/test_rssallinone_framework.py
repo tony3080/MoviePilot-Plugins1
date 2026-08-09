@@ -572,6 +572,15 @@ class RepositoryContractTest(unittest.TestCase):
         )[1].split("async function saveManualIdentify", 1)[0]
         self.assertNotIn("clearSelection()", refresh_block)
 
+    def test_media_pages_default_to_specific_states(self) -> None:
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("const mediaState = ref('identified')", app_page)
+        self.assertIn("const qbView = ref('pending')", app_page)
+        self.assertNotIn("{ title: '全部', value: '' },", app_page)
+        self.assertNotIn('<VBtn value="">全部</VBtn>', app_page)
+
     def test_file_manager_page_contract(self) -> None:
         app_page = (
             PLUGIN_DIR / "src" / "components" / "AppPage.vue"

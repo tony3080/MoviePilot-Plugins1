@@ -29,12 +29,12 @@ const itemBusyKey = ref('')
 const batchAction = ref('')
 const identifyDialog = ref(false)
 const identifyItem = ref(null)
-const mediaState = ref('')
+const mediaState = ref('identified')
 const mediaType = ref('')
 const mediaRssTaskIds = ref([])
 const qbDownloaders = ref([])
 const qbDownloader = ref('')
-const qbView = ref('')
+const qbView = ref('pending')
 const qbKeyword = ref('')
 const qbTask = ref(null)
 const rssTestingTaskId = ref('')
@@ -195,7 +195,6 @@ const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => (
   value: String(task.id || ''),
 })).filter(item => item.value))
 const mediaStateOptions = [
-  { title: '全部', value: '' },
   { title: '已识别', value: 'identified' },
   { title: '未识别', value: 'unidentified' },
   { title: '已存在', value: 'existing' },
@@ -1301,7 +1300,7 @@ onBeforeUnmount(() => {
               <div class="state-filter-buttons">
                 <VBtn
                   v-for="option in mediaStateOptions"
-                  :key="option.value || 'all'"
+                  :key="option.value"
                   size="small"
                   :color="mediaState === option.value ? 'primary' : 'default'"
                   :variant="mediaState === option.value ? 'tonal' : 'text'"
@@ -1425,7 +1424,6 @@ onBeforeUnmount(() => {
             variant="outlined"
             color="primary"
           >
-            <VBtn value="">全部</VBtn>
             <VBtn value="existing">已存在</VBtn>
             <VBtn value="pending">待下载</VBtn>
           </VBtnToggle>

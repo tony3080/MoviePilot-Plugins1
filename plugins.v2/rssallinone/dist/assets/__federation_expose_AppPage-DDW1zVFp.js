@@ -1654,12 +1654,12 @@ const itemBusyKey = ref('');
 const batchAction = ref('');
 const identifyDialog = ref(false);
 const identifyItem = ref(null);
-const mediaState = ref('');
+const mediaState = ref('identified');
 const mediaType = ref('');
 const mediaRssTaskIds = ref([]);
 const qbDownloaders = ref([]);
 const qbDownloader = ref('');
-const qbView = ref('');
+const qbView = ref('pending');
 const qbKeyword = ref('');
 const qbTask = ref(null);
 const rssTestingTaskId = ref('');
@@ -1794,7 +1794,6 @@ const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => (
   value: String(task.id || ''),
 })).filter(item => item.value));
 const mediaStateOptions = [
-  { title: '全部', value: '' },
   { title: '已识别', value: 'identified' },
   { title: '未识别', value: 'unidentified' },
   { title: '已存在', value: 'existing' },
@@ -2987,7 +2986,7 @@ return (_ctx, _cache) => {
                     _createElementVNode("div", _hoisted_15, [
                       (_openBlock(), _createElementBlock(_Fragment, null, _renderList(mediaStateOptions, (option) => {
                         return _createVNode(_component_VBtn, {
-                          key: option.value || 'all',
+                          key: option.value,
                           size: "small",
                           color: mediaState.value === option.value ? 'primary' : 'default',
                           variant: mediaState.value === option.value ? 'tonal' : 'text',
@@ -3187,20 +3186,14 @@ return (_ctx, _cache) => {
                       color: "primary"
                     }, {
                       default: _withCtx(() => [
-                        _createVNode(_component_VBtn, { value: "" }, {
-                          default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
-                            _createTextVNode("全部", -1)
-                          ]))]),
-                          _: 1
-                        }),
                         _createVNode(_component_VBtn, { value: "existing" }, {
-                          default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
+                          default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
                             _createTextVNode("已存在", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VBtn, { value: "pending" }, {
-                          default: _withCtx(() => [...(_cache[39] || (_cache[39] = [
+                          default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
                             _createTextVNode("待下载", -1)
                           ]))]),
                           _: 1
@@ -3230,7 +3223,7 @@ return (_ctx, _cache) => {
                       disabled: qbRefreshing.value || !overview.value.plugin?.enabled,
                       onClick: refreshQb
                     }, {
-                      default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
+                      default: _withCtx(() => [...(_cache[39] || (_cache[39] = [
                         _createTextVNode(" 刷新识别 ", -1)
                       ]))]),
                       _: 1
@@ -3245,7 +3238,7 @@ return (_ctx, _cache) => {
                           disabled: !selectedItems.value.length || Boolean(batchAction.value) || qbRefreshing.value,
                           onClick: deleteSelectedQbTasks
                         }), {
-                          default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
+                          default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
                             _createTextVNode(" 删除任务 ", -1)
                           ]))]),
                           _: 1
@@ -3290,7 +3283,7 @@ return (_ctx, _cache) => {
                           variant: "text",
                           onClick: selectAllVisible
                         }, {
-                          default: _withCtx(() => [...(_cache[42] || (_cache[42] = [
+                          default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
                             _createTextVNode("全选当前", -1)
                           ]))]),
                           _: 1
@@ -3301,7 +3294,7 @@ return (_ctx, _cache) => {
                           disabled: !selectedKeys.value.length,
                           onClick: _cache[15] || (_cache[15] = $event => (selectedKeys.value = []))
                         }, {
-                          default: _withCtx(() => [...(_cache[43] || (_cache[43] = [
+                          default: _withCtx(() => [...(_cache[42] || (_cache[42] = [
                             _createTextVNode("取消选择", -1)
                           ]))]),
                           _: 1
@@ -3354,19 +3347,19 @@ return (_ctx, _cache) => {
                     }, {
                       default: _withCtx(() => [
                         _createVNode(_component_VTab, { value: "rss_tasks" }, {
-                          default: _withCtx(() => [...(_cache[44] || (_cache[44] = [
+                          default: _withCtx(() => [...(_cache[43] || (_cache[43] = [
                             _createTextVNode("RSS任务", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "rss_history" }, {
-                          default: _withCtx(() => [...(_cache[45] || (_cache[45] = [
+                          default: _withCtx(() => [...(_cache[44] || (_cache[44] = [
                             _createTextVNode("RSS历史", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "sites" }, {
-                          default: _withCtx(() => [...(_cache[46] || (_cache[46] = [
+                          default: _withCtx(() => [...(_cache[45] || (_cache[45] = [
                             _createTextVNode("站点访问身份", -1)
                           ]))]),
                           _: 1
@@ -3456,7 +3449,7 @@ return (_ctx, _cache) => {
                           disabled: loading.value || total.value === 0,
                           onClick: clearBackgroundTasks
                         }, {
-                          default: _withCtx(() => [...(_cache[47] || (_cache[47] = [
+                          default: _withCtx(() => [...(_cache[46] || (_cache[46] = [
                             _createTextVNode(" 清除已结束任务 ", -1)
                           ]))]),
                           _: 1
@@ -3651,6 +3644,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-62ed0d79"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-1564454a"]]);
 
 export { AppPage as default };
