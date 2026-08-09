@@ -1159,6 +1159,48 @@ onBeforeUnmount(() => {
           {{ tab.title }}
         </VTab>
       </VTabs>
+      <div class="global-runtime-controls">
+        <div class="global-queue-summary">
+          <VChip
+            size="small"
+            :color="pendingImportState === 'paused_risk' || pendingImportState === 'restore_failed' ? 'error' : pendingImportActive ? 'primary' : 'default'"
+            variant="tonal"
+          >
+            {{ pendingImportStateText }}
+          </VChip>
+          <span class="global-queue-counts">
+            待入库 {{ pendingImport.pending || 0 }} · 入库中 {{ pendingImport.importing || 0 }} · CD2监控 {{ pendingImport.active_watches || 0 }}
+          </span>
+        </div>
+        <VTooltip v-if="errorMessage" :text="errorMessage">
+          <template #activator="{ props: tooltipProps }">
+            <VChip
+              v-bind="tooltipProps"
+              color="error"
+              variant="tonal"
+              size="small"
+              prepend-icon="mdi-alert-circle-outline"
+              closable
+              class="global-message-chip"
+              @click:close="errorMessage = ''"
+            >{{ errorMessage }}</VChip>
+          </template>
+        </VTooltip>
+        <VTooltip v-if="successMessage" :text="successMessage">
+          <template #activator="{ props: tooltipProps }">
+            <VChip
+              v-bind="tooltipProps"
+              color="success"
+              variant="tonal"
+              size="small"
+              prepend-icon="mdi-check-circle-outline"
+              closable
+              class="global-message-chip"
+              @click:close="successMessage = ''"
+            >{{ successMessage }}</VChip>
+          </template>
+        </VTooltip>
+      </div>
       <div class="external-switch-controls">
         <VTooltip :text="catchupState === null ? '读取追更状态' : `点击${catchupState ? '关闭' : '开启'}追更`">
           <template #activator="{ props: tooltipProps }">
@@ -1202,13 +1244,6 @@ onBeforeUnmount(() => {
         </VTooltip>
       </div>
     </div>
-
-    <VAlert v-if="errorMessage" type="error" variant="tonal" class="status-alert">
-      {{ errorMessage }}
-    </VAlert>
-    <VAlert v-if="successMessage" type="success" variant="tonal" class="status-alert">
-      {{ successMessage }}
-    </VAlert>
 
     <main class="workspace">
       <section v-if="activeTab === 'overview'" class="overview-section">
@@ -1254,52 +1289,8 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'library'">
-        <div class="sticky-control-stack">
-          <div class="queue-status-bar">
-          <VChip
-            size="small"
-            :color="pendingImportState === 'paused_risk' || pendingImportState === 'restore_failed' ? 'error' : pendingImportActive ? 'primary' : 'default'"
-            variant="tonal"
-          >
-            {{ pendingImportStateText }}
-          </VChip>
-          <span class="text-caption text-medium-emphasis">
-            待入库 {{ pendingImport.pending || 0 }} · 入库中 {{ pendingImport.importing || 0 }} · CD2监控 {{ pendingImport.active_watches || 0 }}
-          </span>
-          <VSpacer />
-          <VBtn
-            v-if="pendingImportState === 'waiting_scan_callback'"
-            size="small"
-            color="warning"
-            variant="tonal"
-            prepend-icon="mdi-stop-circle-outline"
-            :loading="pendingImportEndingWait"
-            :disabled="pendingImportEndingWait"
-            @click="cancelPendingImportWait"
-          >结束等待</VBtn>
-          <VBtn
-            size="small"
-            color="primary"
-            variant="tonal"
-            prepend-icon="mdi-play"
-            :loading="pendingImportStarting"
-            :disabled="pendingImportActive || pendingImportStarting || Number(pendingImport.pending || 0) <= 0"
-            @click="runPendingImport"
-          >立即处理</VBtn>
-          <VTooltip text="刷新队列状态">
-            <template #activator="{ props: tooltipProps }">
-              <VBtn
-                v-bind="tooltipProps"
-                icon="mdi-refresh"
-                size="small"
-                variant="text"
-                aria-label="刷新队列状态"
-                @click="loadPendingImportStatus({ reloadCards: true })"
-              />
-            </template>
-          </VTooltip>
-          </div>
-          <div class="filter-bar">
+        <div class="sticky-control-stack management-toolbar">
+          <div class="management-filter-row">
             <VSelect
               v-model="mediaType"
               :items="[
@@ -1343,9 +1334,43 @@ onBeforeUnmount(() => {
               hide-details
               class="rss-task-filter"
             />
+            <VSpacer />
             <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
+            <div class="toolbar-actions">
+              <VBtn
+                v-if="pendingImportState === 'waiting_scan_callback'"
+                size="small"
+                color="warning"
+                variant="tonal"
+                prepend-icon="mdi-stop-circle-outline"
+                :loading="pendingImportEndingWait"
+                :disabled="pendingImportEndingWait"
+                @click="cancelPendingImportWait"
+              >结束等待</VBtn>
+              <VBtn
+                size="small"
+                color="primary"
+                variant="tonal"
+                prepend-icon="mdi-play"
+                :loading="pendingImportStarting"
+                :disabled="pendingImportActive || pendingImportStarting || Number(pendingImport.pending || 0) <= 0"
+                @click="runPendingImport"
+              >立即处理</VBtn>
+              <VTooltip text="刷新队列状态">
+                <template #activator="{ props: tooltipProps }">
+                  <VBtn
+                    v-bind="tooltipProps"
+                    icon="mdi-refresh"
+                    size="small"
+                    variant="text"
+                    aria-label="刷新队列状态"
+                    @click="loadPendingImportStatus({ reloadCards: true })"
+                  />
+                </template>
+              </VTooltip>
+            </div>
           </div>
-          <div v-if="rows.length" class="selection-bar">
+          <div v-if="rows.length" class="selection-bar management-selection-row">
           <span>已选 {{ selectedKeys.length }} 项</span>
           <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
           <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
@@ -1429,8 +1454,8 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'qb'">
-        <div class="sticky-control-stack qb-sticky-controls">
-          <div class="qb-toolbar">
+        <div class="sticky-control-stack management-toolbar qb-sticky-controls">
+          <div class="management-filter-row">
           <VSelect
             v-model="qbDownloader"
             :items="[{ title: '全部节点', value: '' }, ...qbDownloaders]"
@@ -1473,21 +1498,6 @@ onBeforeUnmount(() => {
           >
             刷新识别
           </VBtn>
-          <VTooltip text="只删除选中的 qB 任务，保留已下载文件">
-            <template #activator="{ props: tooltipProps }">
-              <VBtn
-                v-bind="tooltipProps"
-                color="error"
-                variant="tonal"
-                prepend-icon="mdi-delete-outline"
-                :loading="batchAction === 'delete_qb_task'"
-                :disabled="!selectedItems.length || Boolean(batchAction) || qbRefreshing"
-                @click="deleteSelectedQbTasks"
-              >
-                删除任务
-              </VBtn>
-            </template>
-          </VTooltip>
           </div>
           <VAlert
             v-if="qbTask"
@@ -1510,10 +1520,27 @@ onBeforeUnmount(() => {
               {{ qbTask.current_item }}
             </div>
           </VAlert>
-          <div v-if="rows.length" class="selection-bar">
+          <div v-if="rows.length" class="selection-bar management-selection-row">
             <span>已选 {{ selectedKeys.length }} 项</span>
             <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
             <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
+            <VSpacer />
+            <div class="selection-actions">
+              <VTooltip text="只删除选中的 qB 任务，保留已下载文件">
+                <template #activator="{ props: tooltipProps }">
+                  <VBtn
+                    v-bind="tooltipProps"
+                    size="small"
+                    color="error"
+                    variant="tonal"
+                    prepend-icon="mdi-delete-outline"
+                    :loading="batchAction === 'delete_qb_task'"
+                    :disabled="!selectedItems.length || Boolean(batchAction) || qbRefreshing"
+                    @click="deleteSelectedQbTasks"
+                  >删除任务</VBtn>
+                </template>
+              </VTooltip>
+            </div>
           </div>
         </div>
         <div v-if="rows.length" class="poster-grid">
@@ -1748,6 +1775,42 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+.global-runtime-controls {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 520px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.global-queue-summary {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.global-queue-counts {
+  color: rgba(var(--v-theme-on-surface), 0.68);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.global-message-chip {
+  min-width: 0;
+  max-width: 280px;
+}
+
+.global-message-chip :deep(.v-chip__content) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .external-switch-controls {
   display: flex;
   flex: 0 0 auto;
@@ -1755,10 +1818,6 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding: 4px 12px;
   border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-
-.status-alert {
-  margin: 12px 16px 0;
 }
 
 .workspace {
@@ -1795,12 +1854,12 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-.filter-bar {
+.management-filter-row {
   display: flex;
+  min-height: 44px;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
 }
 
 .sticky-control-stack {
@@ -1820,24 +1879,24 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 
-.queue-status-bar {
-  display: flex;
-  min-height: 40px;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 6px 8px;
-  margin-bottom: 10px;
+.management-toolbar {
+  padding: 8px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
 }
 
-.qb-toolbar {
+.toolbar-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  gap: 6px;
+}
+
+.management-selection-row {
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .qb-search {
@@ -2051,6 +2110,25 @@ onBeforeUnmount(() => {
   padding-inline: 8px;
 }
 
+@media (max-width: 1400px) {
+  .main-nav-row {
+    flex-wrap: wrap;
+  }
+
+  .main-tabs {
+    flex-basis: 100%;
+  }
+
+  .global-runtime-controls,
+  .external-switch-controls {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  }
+
+  .global-runtime-controls {
+    border-left: 0;
+  }
+}
+
 @media (max-width: 760px) {
   .main-nav-row {
     flex-wrap: wrap;
@@ -2058,6 +2136,18 @@ onBeforeUnmount(() => {
 
   .main-tabs {
     flex-basis: 100%;
+  }
+
+  .global-runtime-controls {
+    width: 100%;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-left: 0;
+  }
+
+  .global-message-chip {
+    max-width: min(100%, 360px);
   }
 
   .external-switch-controls {

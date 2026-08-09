@@ -59,6 +59,20 @@ class ChineseTitleTest(unittest.TestCase):
         title = "[国语][特效][REMUX][沙丘：第二部]"
         self.assertEqual(rss_rename.extract_chinese_title(title), "沙丘：第二部")
 
+    def test_trims_unseparated_technical_suffix_from_chinese_title(self):
+        title = (
+            "Rouge 1987 CHN BluRay Remux UHD-CHD"
+            "[胭脂扣  国版原盘REMUX  国粤双语  简体中文字幕]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "胭脂扣")
+
+    def test_keeps_spaced_title_when_suffix_is_not_technical(self):
+        self.assertEqual(
+            rss_rename.extract_chinese_title("[新  龙门客栈 / New Dragon Gate Inn]"),
+            "新  龙门客栈",
+        )
+
     def test_labels_do_not_block_chinese_prefix(self):
         self.assertFalse(rss_rename.has_meaningful_chinese("Movie-国配-特效.mkv"))
         self.assertTrue(rss_rename.has_meaningful_chinese("[沙丘].Movie.mkv"))

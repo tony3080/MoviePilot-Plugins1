@@ -20,6 +20,11 @@ LABEL_ONLY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 REGEX_RULE_PATTERN = re.compile(r"^/(.*)/([a-zA-Z]*)$")
+TECHNICAL_TITLE_SUFFIX = re.compile(
+    r"(?:原盘|remux|web(?:-dl)?|蓝光|国语|国配|國語|國配|"
+    r"双语|多语|简体|繁体|中字|字幕|特效|内封|音轨|章节)",
+    re.IGNORECASE,
+)
 
 
 class RssRenameError(RuntimeError):
@@ -92,6 +97,7 @@ def extract_chinese_title(rss_title: object) -> str:
     candidates: List[str] = []
     for bracket in _top_level_brackets(title):
         for raw_candidate in re.split(r"\s*(?:/|\|)\s*", bracket):
+            raw_candidate = _trim_technical_title_suffix(raw_candidate)
             candidate = re.sub(
                 r"\([^)]*\)|（[^）]*）", "", raw_candidate
             ).strip(" ._-[]")
@@ -109,6 +115,14 @@ def extract_chinese_title(rss_title: object) -> str:
         return ""
     preferred = [item for item in candidates if 2 <= len(item) <= 20]
     return (preferred or candidates)[0]
+
+
+def _trim_technical_title_suffix(value: str) -> str:
+    for separator in re.finditer(r"\s{2,}", str(value or "")):
+        suffix = value[separator.end():]
+        if TECHNICAL_TITLE_SUFFIX.search(suffix):
+            return value[:separator.start()]
+    return value
 
 
 def has_meaningful_chinese(value: object) -> bool:

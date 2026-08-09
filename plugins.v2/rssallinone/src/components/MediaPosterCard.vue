@@ -48,8 +48,9 @@ const mediaCategory = computed(() => props.item.media_category || details.value.
 const plannedName = computed(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '')
 const sizeText = computed(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)))
 const isImported = computed(() => props.mode === 'imported')
+const inventoryCompared = computed(() => isImported.value && Boolean(inventory.value.refreshed_at))
 const inventoryIncomplete = computed(() => {
-  if (!isImported.value || totalFiles.value <= 0) return false
+  if (!inventoryCompared.value || totalFiles.value <= 0) return false
   const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || ''
   const folderExists = folderStatus === 'exists'
     || ['exists', 'partial'].includes(props.item.inventory_state)

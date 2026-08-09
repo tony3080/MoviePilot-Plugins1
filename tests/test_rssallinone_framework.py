@@ -407,6 +407,19 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("{ flush: 'sync' }", app_page)
         self.assertGreaterEqual(app_page.count('class="sticky-control-stack'), 2)
         self.assertIn(".sticky-control-stack {\n  position: sticky;", app_page)
+        self.assertEqual(app_page.count("management-toolbar"), 3)
+        self.assertEqual(app_page.count('class="management-filter-row"'), 2)
+        self.assertEqual(
+            app_page.count('class="selection-bar management-selection-row"'),
+            2,
+        )
+        self.assertLess(
+            app_page.index('class="global-runtime-controls"'),
+            app_page.index('class="external-switch-controls"'),
+        )
+        self.assertIn("{{ pendingImportStateText }}", app_page)
+        self.assertIn("{{ errorMessage }}", app_page)
+        self.assertIn("{{ successMessage }}", app_page)
         library_template = app_page[app_page.index("activeTab === 'library'"):]
         self.assertLess(
             library_template.index('v-model="mediaType"'),
@@ -569,6 +582,8 @@ class RepositoryContractTest(unittest.TestCase):
             PLUGIN_DIR / "src" / "components" / "AppPage.vue"
         ).read_text(encoding="utf-8")
         self.assertIn("'inventory-incomplete': inventoryIncomplete", card)
+        self.assertIn("Boolean(inventory.value.refreshed_at)", card)
+        self.assertIn("if (!inventoryCompared.value || totalFiles.value <= 0)", card)
         self.assertIn("库存不完整", card)
         self.assertIn("background: #dc2626 !important", card)
         refresh_block = app_page.split(
