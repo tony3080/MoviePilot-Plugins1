@@ -282,8 +282,8 @@ button.corner-badge { cursor: pointer; }
 .card-body {
   display: flex;
   flex: 1 1 auto;
-  height: 287px;
-  min-height: 287px;
+  height: 342px;
+  min-height: 342px;
   flex-direction: column;
   padding: 12px 14px 14px;
 }
@@ -304,11 +304,11 @@ button.corner-badge { cursor: pointer; }
 }
 .card-body h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.3; }
 .tags-slot {
-  max-height: 49px;
+  max-height: 104px;
   flex: 0 0 auto;
   margin-top: 4px;
 }
-.chip-row { display: flex; min-width: 0; max-height: 49px; flex-wrap: wrap; align-items: flex-start; gap: 5px; overflow: hidden; }
+.chip-row { display: flex; min-width: 0; max-height: 104px; flex-wrap: wrap; align-items: flex-start; gap: 5px; overflow: hidden; }
 .info-chip {
   width: fit-content;
   max-width: 100%;
@@ -331,7 +331,8 @@ button.corner-badge { cursor: pointer; }
 .tag-purple, .season-chip { border-color: rgba(124,58,237,.30) !important; background: rgba(124,58,237,.20) !important; color: #a78bfa !important; }
 .resolution-chip { border-color: rgba(8,145,178,.30) !important; background: rgba(8,145,178,.20) !important; color: #22d3ee !important; }
 .category-chip { border-color: rgba(139,92,246,.30) !important; background: rgba(139,92,246,.20) !important; color: #a78bfa !important; }
-.customization-chip { border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
+.customization-chip { width: 100%; flex-basis: 100%; border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
+.customization-chip :deep(.v-chip__content) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .inventory-incomplete-chip { border-color: #b91c1c !important; background: #dc2626 !important; color: #fff !important; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
 .source-name,

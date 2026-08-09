@@ -254,6 +254,83 @@ class SQLiteFrameworkTest(unittest.TestCase):
                 {"task-a", "task-c"},
             )
 
+    def test_media_state_counts_respect_non_state_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            records = (
+                ("movie-a", "identified", "movie", "task-a"),
+                ("movie-b", "existing", "movie", "task-a"),
+                ("movie-c", "identified", "movie", "task-b"),
+                ("tv-a", "pending", "tv", "task-a"),
+            )
+            for media_id, state, media_type, task_id in records:
+                store.upsert_media_item({
+                    "id": media_id,
+                    "state": state,
+                    "media_type": media_type,
+                    "title": media_id,
+                    "details": {"import_control": {"task_id": task_id}},
+                })
+
+            result = store.list_media(
+                state="identified",
+                media_type="movie",
+                rss_task_ids=["task-a"],
+            )
+
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(
+                result["state_counts"],
+                {"identified": 1, "existing": 1},
+            )
+
+    def test_torrent_view_counts_respect_downloader_and_keyword(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            records = (
+                ("qb-a", "hash-a", "Movie Alpha", "exists"),
+                ("qb-a", "hash-b", "Movie Beta", "missing"),
+                ("qb-a", "hash-c", "Show Gamma", "missing"),
+                ("qb-b", "hash-d", "Movie Delta", "exists"),
+            )
+            for downloader_id, info_hash, name, inventory_state in records:
+                store.upsert_torrent_snapshot({
+                    "downloader_id": downloader_id,
+                    "info_hash": info_hash,
+                    "name": name,
+                    "state": "pausedDL",
+                    "category": "media",
+                    "content_path": f"/downloads/{name}.mkv",
+                    "progress": 0,
+                    "size": 1024,
+                    "source_url_masked": "",
+                    "present": 1,
+                    "recognition_state": "identified",
+                    "inventory_state": inventory_state,
+                    "media_title": name,
+                    "media_type": "movie",
+                    "media_year": "",
+                    "poster": "",
+                    "recognition_error": "",
+                    "last_seen_at": database.utc_now(),
+                    "updated_at": database.utc_now(),
+                    "details": {},
+                })
+
+            result = store.list_torrents(
+                downloader_id="qb-a",
+                view="pending",
+                keyword="Movie",
+            )
+
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(
+                result["view_counts"],
+                {"existing": 1, "pending": 1},
+            )
+
     def test_clear_card_data_keeps_rss_configuration_and_resets_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")
@@ -545,6 +622,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
         self.assertIn('<VBtnToggle\n                v-model="mediaState"', app_page)
         self.assertIn(':value="option.value"', app_page)
+        self.assertIn("mediaStateCounts[option.value]", app_page)
+        self.assertIn("qbViewCounts.existing", app_page)
+        self.assertIn("qbViewCounts.pending", app_page)
+        self.assertIn('class="state-button-count"', app_page)
         self.assertIn("timeZone: 'Asia/Shanghai'", app_page)
         self.assertIn('formatBeijingTime(item.updated_at)', app_page)
 
@@ -568,10 +649,12 @@ class RepositoryContractTest(unittest.TestCase):
             "target-slot", "inventory-slot",
         ):
             self.assertIn(f'class="{class_name}"', card)
-        self.assertIn("height: 287px", card)
+        self.assertIn("height: 342px", card)
         self.assertIn("flex: 1 1 48px", card)
         self.assertIn("margin-top: auto", card)
         self.assertIn("-webkit-line-clamp: 3", card)
+        self.assertIn("flex-basis: 100%", card)
+        self.assertIn("-webkit-line-clamp: 2", card)
         self.assertIn("align-items: stretch", app_page)
 
     def test_imported_inventory_warning_and_refresh_selection_contract(self) -> None:

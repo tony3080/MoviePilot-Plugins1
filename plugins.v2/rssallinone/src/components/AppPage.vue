@@ -20,6 +20,8 @@ const successMessage = ref('')
 const overview = ref({ plugin: {}, counts: {}, capabilities: {} })
 const rows = ref([])
 const total = ref(0)
+const mediaStateCounts = ref({})
+const qbViewCounts = ref({})
 const rssTasks = ref([])
 const allQbDownloaders = ref([])
 const siteIdentities = ref([])
@@ -620,6 +622,7 @@ async function loadActive() {
     if (requestedTab === 'tasks') {
       rows.value = normalizeTaskRows(items)
     } else if (requestedTab === 'library') {
+      mediaStateCounts.value = response?.state_counts || {}
       rows.value = items.map(item => ({
         ...item,
         row_key: item.id,
@@ -630,6 +633,7 @@ async function loadActive() {
         recognition_state: item.state === 'unidentified' ? 'unidentified' : 'identified',
       }))
     } else if (requestedTab === 'qb') {
+      qbViewCounts.value = response?.view_counts || {}
       rows.value = items.map(item => {
         const recognition = torrentRecognition(item)
         const mappings = item.details?.file_mappings || []
@@ -1319,7 +1323,10 @@ onBeforeUnmount(() => {
                   :key="option.value"
                   :value="option.value"
                   size="small"
-                >{{ option.title }}</VBtn>
+                >
+                  <span>{{ option.title }}</span>
+                  <span class="state-button-count">{{ Number(mediaStateCounts[option.value] || 0) }}</span>
+                </VBtn>
               </VBtnToggle>
             </div>
             <VSelect
@@ -1472,8 +1479,14 @@ onBeforeUnmount(() => {
             variant="outlined"
             color="primary"
           >
-            <VBtn value="existing">已存在</VBtn>
-            <VBtn value="pending">待下载</VBtn>
+            <VBtn value="existing">
+              <span>已存在</span>
+              <span class="state-button-count">{{ Number(qbViewCounts.existing || 0) }}</span>
+            </VBtn>
+            <VBtn value="pending">
+              <span>待下载</span>
+              <span class="state-button-count">{{ Number(qbViewCounts.pending || 0) }}</span>
+            </VBtn>
           </VBtnToggle>
           <VTextField
             v-model="qbKeyword"
@@ -2058,6 +2071,27 @@ onBeforeUnmount(() => {
 .state-filter-buttons .v-btn {
   min-width: 0;
   padding-inline: 9px;
+}
+
+.state-button-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding-inline: 5px;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.2);
+  border-radius: 9px;
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.v-btn--active .state-button-count {
+  border-color: rgba(var(--v-theme-primary), 0.5);
+  background: rgba(var(--v-theme-primary), 0.2);
 }
 
 .rss-task-filter {

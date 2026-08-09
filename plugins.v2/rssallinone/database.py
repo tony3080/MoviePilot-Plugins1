@@ -460,12 +460,16 @@ class SQLiteStore:
         safe_offset, safe_limit = self._page(offset, limit)
         clauses: List[str] = []
         params: List[Any] = []
+        count_clauses: List[str] = []
+        count_params: List[Any] = []
         if state:
             clauses.append("state = ?")
             params.append(state)
         if media_type:
             clauses.append("media_type = ?")
             params.append(media_type)
+            count_clauses.append("media_type = ?")
+            count_params.append(media_type)
         normalized_task_ids = sorted({
             str(item or "").strip()
             for item in rss_task_ids or []
@@ -473,12 +477,18 @@ class SQLiteStore:
         })
         if normalized_task_ids:
             placeholders = ",".join("?" for _ in normalized_task_ids)
-            clauses.append(
+            task_clause = (
                 "json_extract(details_json, '$.import_control.task_id') "
                 f"IN ({placeholders})"
             )
+            clauses.append(task_clause)
             params.extend(normalized_task_ids)
+            count_clauses.append(task_clause)
+            count_params.extend(normalized_task_ids)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        count_where = (
+            f"WHERE {' AND '.join(count_clauses)}" if count_clauses else ""
+        )
         with self.connection() as connection:
             total = connection.execute(
                 f"SELECT COUNT(*) FROM media_items {where}", params
@@ -489,7 +499,19 @@ class SQLiteStore:
                     LIMIT ? OFFSET ?""",
                 [*params, safe_limit, safe_offset],
             ).fetchall()
-        return self._result(rows, total, safe_offset, safe_limit)
+            state_rows = connection.execute(
+                f"""SELECT state, COUNT(*) AS item_count
+                    FROM media_items {count_where}
+                    GROUP BY state""",
+                count_params,
+            ).fetchall()
+        result = self._result(rows, total, safe_offset, safe_limit)
+        result["state_counts"] = {
+            str(row["state"] or ""): int(row["item_count"] or 0)
+            for row in state_rows
+            if str(row["state"] or "")
+        }
+        return result
 
     def get_media_item(self, media_id: object) -> Optional[Dict[str, Any]]:
         with self.connection() as connection:
@@ -615,11 +637,16 @@ class SQLiteStore:
         safe_offset, safe_limit = self._page(offset, limit)
         clauses: List[str] = []
         params: List[Any] = []
+        count_clauses: List[str] = []
+        count_params: List[Any] = []
         if present_only:
             clauses.append("present = 1")
+            count_clauses.append("present = 1")
         if downloader_id:
             clauses.append("downloader_id = ?")
             params.append(downloader_id)
+            count_clauses.append("downloader_id = ?")
+            count_params.append(downloader_id)
         if view == "existing":
             clauses.append("inventory_state = 'exists'")
         elif view == "pending":
@@ -629,10 +656,16 @@ class SQLiteStore:
         elif view == "unrecognized":
             clauses.append("recognition_state = 'unidentified'")
         if keyword:
-            clauses.append("(name LIKE ? OR media_title LIKE ? OR info_hash LIKE ?)")
+            keyword_clause = "(name LIKE ? OR media_title LIKE ? OR info_hash LIKE ?)"
+            clauses.append(keyword_clause)
             pattern = f"%{keyword}%"
             params.extend([pattern, pattern, pattern])
+            count_clauses.append(keyword_clause)
+            count_params.extend([pattern, pattern, pattern])
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        count_where = (
+            f"WHERE {' AND '.join(count_clauses)}" if count_clauses else ""
+        )
         with self.connection() as connection:
             total = connection.execute(
                 f"SELECT COUNT(*) FROM torrent_snapshots {where}", params
@@ -645,7 +678,21 @@ class SQLiteStore:
                     LIMIT ? OFFSET ?""",
                 [*params, safe_limit, safe_offset],
             ).fetchall()
-        return self._result(rows, total, safe_offset, safe_limit)
+            view_counts = connection.execute(
+                f"""SELECT
+                        SUM(CASE WHEN inventory_state = 'exists' THEN 1 ELSE 0 END)
+                            AS existing_count,
+                        SUM(CASE WHEN inventory_state != 'exists' THEN 1 ELSE 0 END)
+                            AS pending_count
+                    FROM torrent_snapshots {count_where}""",
+                count_params,
+            ).fetchone()
+        result = self._result(rows, total, safe_offset, safe_limit)
+        result["view_counts"] = {
+            "existing": int(view_counts["existing_count"] or 0),
+            "pending": int(view_counts["pending_count"] or 0),
+        }
+        return result
 
     def get_torrent_snapshot(
         self, downloader_id: str, info_hash: str
