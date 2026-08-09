@@ -33,6 +33,42 @@ class MediaActionService:
     DESTRUCTIVE_ACTIONS = {"delete_source", "delete_hardlinks", "delete_both"}
     _destructive_lock = threading.RLock()
 
+    @staticmethod
+    def pending_batch_action_error(
+        action: object,
+        items: Sequence[Optional[Dict[str, Any]]],
+        *,
+        current_media_id: object = "",
+        watched_media_ids: Iterable[object] = (),
+    ) -> str:
+        """Return why an action conflicts with an active monitored batch."""
+
+        normalized_action = str(action or "").strip().casefold()
+        if normalized_action == "queue_import":
+            return ""
+        if normalized_action == "import":
+            return "待入库批次运行期间不能手动直接入库"
+        if normalized_action not in {"delete_hardlinks", "delete_both"}:
+            return "待入库批次运行期间只能清理已完成入库的卡片"
+
+        current = str(current_media_id or "").strip()
+        watched = {
+            str(value or "").strip()
+            for value in watched_media_ids or ()
+            if str(value or "").strip()
+        }
+        for item in items:
+            if not item:
+                return "媒体记录不存在"
+            media_id = str(item.get("id") or "").strip()
+            if str(item.get("state") or "") != "imported":
+                return "批次运行期间只能删除已经完成入库的卡片"
+            if media_id == current:
+                return "当前正在处理的卡片不能删除"
+            if media_id in watched:
+                return "卡片仍有 CD2 监控任务，不能删除"
+        return ""
+
     def __init__(
         self,
         store: SQLiteStore,

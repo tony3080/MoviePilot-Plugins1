@@ -85,6 +85,64 @@ class MediaActionServiceTest(unittest.TestCase):
             })
         self.store.replace_file_mappings("qb-main", media_id, prepared)
 
+    def test_active_batch_only_blocks_cards_still_owned_by_queue(self) -> None:
+        imported = {"id": "done", "state": "imported"}
+        another_imported = {"id": "done-2", "state": "imported"}
+        importing = {"id": "active", "state": "importing"}
+
+        self.assertEqual(
+            self.service.pending_batch_action_error(
+                "delete_hardlinks", [imported]
+            ),
+            "",
+        )
+        self.assertEqual(
+            self.service.pending_batch_action_error(
+                "delete_both", [imported, another_imported]
+            ),
+            "",
+        )
+        self.assertIn(
+            "正在处理",
+            self.service.pending_batch_action_error(
+                "delete_both",
+                [imported],
+                current_media_id="done",
+            ),
+        )
+        self.assertIn(
+            "CD2 监控",
+            self.service.pending_batch_action_error(
+                "delete_hardlinks",
+                [imported],
+                watched_media_ids={"done"},
+            ),
+        )
+        self.assertIn(
+            "完成入库",
+            self.service.pending_batch_action_error(
+                "delete_both", [importing]
+            ),
+        )
+        self.assertIn(
+            "手动直接入库",
+            self.service.pending_batch_action_error(
+                "import", [imported]
+            ),
+        )
+        self.assertIn(
+            "只能清理",
+            self.service.pending_batch_action_error(
+                "delete_source", [imported]
+            ),
+        )
+        self.assertEqual(
+            self.service.pending_batch_action_error(
+                "queue_import", [importing]
+            ),
+            "",
+        )
+
     def test_import_creates_only_missing_hardlinks_and_rolls_back_cleanly(self) -> None:
         source_dir = self.root / "source"
         source_dir.mkdir()

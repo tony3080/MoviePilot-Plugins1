@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.23"
+    plugin_version = "0.13.24"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -730,8 +730,24 @@ class RssAllInOne(_PluginBase):
         media_ids = data.get("media_ids") or []
         if isinstance(media_ids, str):
             media_ids = [media_ids]
-        if action != "queue_import" and self._pending_coordinator().status().get("running"):
-            return {"success": False, "message": "待入库批次运行期间不能执行其他入库或删除操作"}
+        pending_status = self._pending_coordinator().status()
+        if pending_status.get("running"):
+            store = self._require_store()
+            active_watches = store.list_import_watches(states={
+                "waiting_task", "watching", "waiting_library", "rolling_back"
+            })
+            conflict = MediaActionService.pending_batch_action_error(
+                action,
+                [store.get_media_item(media_id) for media_id in media_ids],
+                current_media_id=(pending_status.get("batch") or {}).get(
+                    "current_media_id"
+                ),
+                watched_media_ids={
+                    watch.get("media_id") for watch in active_watches
+                },
+            )
+            if conflict:
+                return {"success": False, "message": conflict}
         if action in MediaActionService.DESTRUCTIVE_ACTIONS:
             expected = f"CONFIRM_{action.upper()}"
             if str(data.get("confirm") or "").strip() != expected:
