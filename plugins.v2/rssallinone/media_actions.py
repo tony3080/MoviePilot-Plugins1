@@ -41,17 +41,13 @@ class MediaActionService:
         current_media_id: object = "",
         watched_media_ids: Iterable[object] = (),
     ) -> str:
-        """Return why an action conflicts with an active monitored batch."""
+        """Protect only cards currently owned by the active import batch."""
 
         normalized_action = str(action or "").strip().casefold()
-        if normalized_action == "queue_import":
-            return ""
-        if normalized_action == "import":
-            return "待入库批次运行期间不能手动直接入库"
         if normalized_action not in {
-            "delete_source", "delete_hardlinks", "delete_both"
+            "import", "delete_source", "delete_hardlinks", "delete_both"
         }:
-            return "待入库批次运行期间只能清理已完成入库的卡片"
+            return ""
 
         current = str(current_media_id or "").strip()
         watched = {
@@ -63,12 +59,10 @@ class MediaActionService:
             if not item:
                 return "媒体记录不存在"
             media_id = str(item.get("id") or "").strip()
-            if str(item.get("state") or "") not in {"existing", "imported"}:
-                return "批次运行期间只能删除已存在或已入库的卡片"
-            if media_id == current:
-                return "当前正在处理的卡片不能删除"
+            if media_id == current or str(item.get("state") or "") == "importing":
+                return "当前正在处理的卡片不能执行此操作"
             if media_id in watched:
-                return "卡片仍有 CD2 监控任务，不能删除"
+                return "卡片仍有 CD2 监控任务，不能执行此操作"
         return ""
 
     def __init__(

@@ -183,26 +183,57 @@ function usableSourceUrl(value) {
     </div>
 
     <VCardText class="card-body">
-      <h3>{{ title }}</h3>
-      <div class="chip-row">
-        <VChip size="x-small" variant="flat" :class="['info-chip', 'status-chip', `tag-${status.color}`]">{{ status.text }}</VChip>
-        <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" variant="flat" class="info-chip season-chip">
-          {{ Number(item.season) === 0 ? '特别篇(S00)' : `第${Number(item.season)}季` }}
-        </VChip>
-        <VChip v-if="resolution" size="x-small" variant="flat" class="info-chip resolution-chip">{{ resolution }}</VChip>
-        <VChip v-if="mediaCategory" size="x-small" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
-        <VChip v-if="customization" size="x-small" variant="flat" class="info-chip customization-chip">{{ customizationLabel }}</VChip>
+      <div class="title-slot">
+        <VTooltip :text="title">
+          <template #activator="{ props: tooltipProps }">
+            <h3 v-bind="tooltipProps">{{ title }}</h3>
+          </template>
+        </VTooltip>
       </div>
-      <p v-if="sourceName" class="source-name">源: {{ sourceName }}</p>
-      <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
-      <p v-if="plannedName && item.recognition_state !== 'unidentified'" class="target-name">{{ plannedName }}</p>
-      <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+      <div class="tags-slot">
+        <div class="chip-row">
+          <VChip size="x-small" variant="flat" :class="['info-chip', 'status-chip', `tag-${status.color}`]">{{ status.text }}</VChip>
+          <VChip v-if="mediaType !== 'movie' && item.season !== null && item.season !== undefined" size="x-small" variant="flat" class="info-chip season-chip">
+            {{ Number(item.season) === 0 ? '特别篇(S00)' : `第${Number(item.season)}季` }}
+          </VChip>
+          <VChip v-if="resolution" size="x-small" variant="flat" class="info-chip resolution-chip">{{ resolution }}</VChip>
+          <VChip v-if="mediaCategory" size="x-small" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
+          <VTooltip v-if="customization" :text="customization">
+            <template #activator="{ props: tooltipProps }">
+              <VChip v-bind="tooltipProps" size="x-small" variant="flat" class="info-chip customization-chip">{{ customizationLabel }}</VChip>
+            </template>
+          </VTooltip>
+        </div>
+      </div>
+      <div class="source-slot">
+        <VTooltip v-if="sourceName" :text="sourceName">
+          <template #activator="{ props: tooltipProps }">
+            <p v-bind="tooltipProps" class="source-name">源: {{ sourceName }}</p>
+          </template>
+        </VTooltip>
+      </div>
+      <div class="size-slot">
+        <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
+      </div>
+      <div class="target-slot">
+        <VTooltip v-if="plannedName && item.recognition_state !== 'unidentified'" :text="plannedName">
+          <template #activator="{ props: tooltipProps }">
+            <p v-bind="tooltipProps" class="target-name">{{ plannedName }}</p>
+          </template>
+        </VTooltip>
+      </div>
+      <div class="inventory-slot">
+        <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+      </div>
     </VCardText>
   </VCard>
 </template>
 
 <style scoped>
 .media-poster-card {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
   overflow: hidden;
   border: 3px solid transparent;
   border-radius: 8px;
@@ -232,9 +263,26 @@ button.corner-badge { cursor: pointer; }
 .tmdb { background: #20b7cf; }
 .poster-action { background: rgba(5,10,15,.78) !important; color: #fff !important; border-radius: 5px !important; }
 .version-chip { position: absolute; right: 10px; bottom: 10px; }
-.card-body { display: grid; gap: 7px; padding: 12px 14px 14px; }
+.card-body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: 42px 49px 40px 22px 58px 20px;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+.title-slot,
+.tags-slot,
+.source-slot,
+.size-slot,
+.target-slot,
+.inventory-slot {
+  min-width: 0;
+  overflow: hidden;
+}
+.title-slot { display: flex; align-items: flex-start; }
 .card-body h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 1rem; line-height: 1.3; }
-.chip-row { display: flex; min-width: 0; min-height: 24px; flex-wrap: wrap; align-items: flex-start; gap: 5px; margin-top: -2px; }
+.tags-slot { max-height: 49px; }
+.chip-row { display: flex; min-width: 0; max-height: 49px; flex-wrap: wrap; align-items: flex-start; gap: 5px; overflow: hidden; }
 .info-chip {
   width: fit-content;
   max-width: 100%;
@@ -259,10 +307,18 @@ button.corner-badge { cursor: pointer; }
 .category-chip { border-color: rgba(139,92,246,.30) !important; background: rgba(139,92,246,.20) !important; color: #a78bfa !important; }
 .customization-chip { border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
-.source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.45; }
+.source-name,
+.target-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+.source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.45; -webkit-line-clamp: 2; }
+.size-slot { display: flex; align-items: flex-start; }
 .size-label { width: fit-content; max-width: 100%; padding: 2px 6px; border: 1px solid #4b5563; border-radius: 4px; background: #374151; color: #fff; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
-.target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; }
-.inventory-line { font-size: .78rem; font-weight: 600; }
+.target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.45; -webkit-line-clamp: 3; }
+.inventory-slot { display: flex; align-items: flex-end; }
+.inventory-line { overflow: hidden; font-size: .78rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-ok { color: rgb(var(--v-theme-success)); }
 .inventory-missing { color: rgb(var(--v-theme-error)); }
 .inventory-warning { color: rgb(var(--v-theme-warning)); }

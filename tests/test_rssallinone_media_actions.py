@@ -89,6 +89,8 @@ class MediaActionServiceTest(unittest.TestCase):
         imported = {"id": "done", "state": "imported"}
         another_imported = {"id": "done-2", "state": "imported"}
         existing = {"id": "already-present", "state": "existing"}
+        identified = {"id": "identified", "state": "identified"}
+        pending = {"id": "pending", "state": "pending"}
         importing = {"id": "active", "state": "importing"}
 
         self.assertEqual(
@@ -119,16 +121,28 @@ class MediaActionServiceTest(unittest.TestCase):
                 watched_media_ids={"done"},
             ),
         )
-        self.assertIn(
-            "已存在或已入库",
+        self.assertEqual(
             self.service.pending_batch_action_error(
-                "delete_both", [importing]
+                "delete_source", [identified, pending]
+            ),
+            "",
+        )
+        self.assertEqual(
+            self.service.pending_batch_action_error(
+                "import", [imported]
+            ),
+            "",
+        )
+        self.assertIn(
+            "正在处理",
+            self.service.pending_batch_action_error(
+                "import", [importing], current_media_id="active"
             ),
         )
         self.assertIn(
-            "手动直接入库",
+            "正在处理",
             self.service.pending_batch_action_error(
-                "import", [imported]
+                "delete_source", [importing]
             ),
         )
         self.assertEqual(

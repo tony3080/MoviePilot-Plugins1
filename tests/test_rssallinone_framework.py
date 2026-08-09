@@ -405,6 +405,17 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("if (isStale()) return", app_page)
         self.assertIn("rows.value = []\n  total.value = 0\n  loading.value = true", app_page)
         self.assertIn("{ flush: 'sync' }", app_page)
+        self.assertGreaterEqual(app_page.count('class="sticky-control-stack'), 2)
+        self.assertIn(".sticky-control-stack {\n  position: sticky;", app_page)
+        library_template = app_page[app_page.index("activeTab === 'library'"):]
+        self.assertLess(
+            library_template.index('v-model="mediaType"'),
+            library_template.index('class="state-filter-group"'),
+        )
+        self.assertLess(
+            library_template.index('class="state-filter-group"'),
+            library_template.index('v-model="mediaRssTaskIds"'),
+        )
 
     def test_chinese_dashboard_task_labels_and_dragon_branding(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
@@ -527,6 +538,22 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("props.item.state === 'rolled_back'", card)
         self.assertIn("!isRolledBack.value", card)
         self.assertIn('class="corner-badge rollback">R</span>', card)
+
+    def test_media_cards_use_stable_information_slots(self) -> None:
+        card = (
+            PLUGIN_DIR / "src" / "components" / "MediaPosterCard.vue"
+        ).read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        for class_name in (
+            "title-slot", "tags-slot", "source-slot", "size-slot",
+            "target-slot", "inventory-slot",
+        ):
+            self.assertIn(f'class="{class_name}"', card)
+        self.assertIn("grid-template-rows: 42px 49px 40px 22px 58px 20px", card)
+        self.assertIn("-webkit-line-clamp: 3", card)
+        self.assertIn("align-items: stretch", app_page)
 
     def test_file_manager_page_contract(self) -> None:
         app_page = (

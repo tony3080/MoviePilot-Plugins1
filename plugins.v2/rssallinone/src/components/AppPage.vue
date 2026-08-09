@@ -193,6 +193,15 @@ const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => (
   title: task.name || task.id,
   value: String(task.id || ''),
 })).filter(item => item.value))
+const mediaStateOptions = [
+  { title: '全部', value: '' },
+  { title: '已识别', value: 'identified' },
+  { title: '未识别', value: 'unidentified' },
+  { title: '已存在', value: 'existing' },
+  { title: '待入库', value: 'pending' },
+  { title: '已入库', value: 'imported' },
+  { title: '已回退', value: 'rolled_back' },
+]
 const selectedItems = computed(() => rows.value.filter(
   item => selectedKeys.value.includes(itemKey(item)),
 ))
@@ -1212,7 +1221,8 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'library'">
-        <div class="queue-status-bar">
+        <div class="sticky-control-stack">
+          <div class="queue-status-bar">
           <VChip
             size="small"
             :color="pendingImportState === 'paused_risk' || pendingImportState === 'restore_failed' ? 'error' : pendingImportActive ? 'primary' : 'default'"
@@ -1245,51 +1255,48 @@ onBeforeUnmount(() => {
               />
             </template>
           </VTooltip>
-        </div>
-        <div class="filter-bar">
-          <VSelect
-            v-model="mediaState"
-            :items="[
-              { title: '全部状态', value: '' },
-              { title: '已识别', value: 'identified' },
-              { title: '未识别', value: 'unidentified' },
-              { title: '已存在', value: 'existing' },
-              { title: '待入库', value: 'pending' },
-              { title: '已入库', value: 'imported' },
-              { title: '已回退', value: 'rolled_back' },
-            ]"
-            label="状态"
-            density="compact"
-            hide-details
-            class="filter-control"
-          />
-          <VSelect
-            v-model="mediaType"
-            :items="[
-              { title: '全部类型', value: '' },
-              { title: '电影', value: 'movie' },
-              { title: '电视剧', value: 'tv' },
-            ]"
-            label="类型"
-            density="compact"
-            hide-details
-            class="filter-control"
-          />
-          <VSelect
-            v-model="mediaRssTaskIds"
-            :items="rssTaskFilterOptions"
-            label="RSS任务"
-            multiple
-            chips
-            closable-chips
-            clearable
-            density="compact"
-            hide-details
-            class="rss-task-filter"
-          />
-          <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
-        </div>
-        <div v-if="rows.length" class="selection-bar">
+          </div>
+          <div class="filter-bar">
+            <VSelect
+              v-model="mediaType"
+              :items="[
+                { title: '全部类型', value: '' },
+                { title: '电影', value: 'movie' },
+                { title: '电视剧', value: 'tv' },
+              ]"
+              label="类型"
+              density="compact"
+              hide-details
+              class="filter-control media-type-filter"
+            />
+            <div class="state-filter-group" role="group" aria-label="状态">
+              <span class="filter-label">状态</span>
+              <div class="state-filter-buttons">
+                <VBtn
+                  v-for="option in mediaStateOptions"
+                  :key="option.value || 'all'"
+                  size="small"
+                  :color="mediaState === option.value ? 'primary' : 'default'"
+                  :variant="mediaState === option.value ? 'tonal' : 'text'"
+                  @click="mediaState = option.value"
+                >{{ option.title }}</VBtn>
+              </div>
+            </div>
+            <VSelect
+              v-model="mediaRssTaskIds"
+              :items="rssTaskFilterOptions"
+              label="RSS任务"
+              multiple
+              chips
+              closable-chips
+              clearable
+              density="compact"
+              hide-details
+              class="rss-task-filter"
+            />
+            <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
+          </div>
+          <div v-if="rows.length" class="selection-bar">
           <span>已选 {{ selectedKeys.length }} 项</span>
           <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
           <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
@@ -1352,6 +1359,7 @@ onBeforeUnmount(() => {
               @click="runMediaAction('delete_both')"
             >删除硬链接和源文件</VBtn>
           </div>
+          </div>
         </div>
         <div v-if="rows.length" class="poster-grid">
           <MediaPosterCard
@@ -1372,7 +1380,8 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeTab === 'qb'">
-        <div class="qb-toolbar">
+        <div class="sticky-control-stack qb-sticky-controls">
+          <div class="qb-toolbar">
           <VSelect
             v-model="qbDownloader"
             :items="[{ title: '全部节点', value: '' }, ...qbDownloaders]"
@@ -1431,32 +1440,33 @@ onBeforeUnmount(() => {
               </VBtn>
             </template>
           </VTooltip>
-        </div>
-        <VAlert
-          v-if="qbTask"
-          :type="qbTask.state === 'failed' ? 'error' : 'info'"
-          variant="tonal"
-          density="compact"
-          class="qb-task-status"
-        >
-          <div class="qb-task-line">
-            <span>{{ qbRefreshing ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.state}` }}</span>
-            <span>{{ qbTask.processed || 0 }}/{{ qbTask.total || 0 }}</span>
           </div>
-          <VProgressLinear
-            v-if="qbRefreshing"
-            :model-value="qbProgress"
-            height="4"
-            class="mt-2"
-          />
-          <div v-if="qbTask.current_item" class="text-caption mt-1 text-truncate">
-            {{ qbTask.current_item }}
+          <VAlert
+            v-if="qbTask"
+            :type="qbTask.state === 'failed' ? 'error' : 'info'"
+            variant="tonal"
+            density="compact"
+            class="qb-task-status"
+          >
+            <div class="qb-task-line">
+              <span>{{ qbRefreshing ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.state}` }}</span>
+              <span>{{ qbTask.processed || 0 }}/{{ qbTask.total || 0 }}</span>
+            </div>
+            <VProgressLinear
+              v-if="qbRefreshing"
+              :model-value="qbProgress"
+              height="4"
+              class="mt-2"
+            />
+            <div v-if="qbTask.current_item" class="text-caption mt-1 text-truncate">
+              {{ qbTask.current_item }}
+            </div>
+          </VAlert>
+          <div v-if="rows.length" class="selection-bar">
+            <span>已选 {{ selectedKeys.length }} 项</span>
+            <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
+            <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
           </div>
-        </VAlert>
-        <div v-if="rows.length" class="selection-bar">
-          <span>已选 {{ selectedKeys.length }} 项</span>
-          <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
-          <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
         </div>
         <div v-if="rows.length" class="poster-grid">
           <MediaPosterCard
@@ -1742,6 +1752,23 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 
+.sticky-control-stack {
+  position: sticky;
+  top: 64px;
+  z-index: 10;
+  max-height: calc(100vh - 72px);
+  margin: -4px -4px 12px;
+  padding: 4px;
+  overflow-y: auto;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-background));
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.08);
+}
+
+.sticky-control-stack > :last-child {
+  margin-bottom: 0;
+}
+
 .queue-status-bar {
   display: flex;
   min-height: 40px;
@@ -1893,6 +1920,39 @@ onBeforeUnmount(() => {
   flex: 0 1 190px;
   min-width: 150px;
 }
+
+.media-type-filter {
+  flex-basis: 170px;
+}
+
+.state-filter-group {
+  display: flex;
+  flex: 1 1 520px;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-label {
+  flex: 0 0 auto;
+  color: rgba(var(--v-theme-on-surface), 0.68);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.state-filter-buttons {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+
+.state-filter-buttons .v-btn {
+  min-width: 0;
+  padding-inline: 9px;
+}
+
 .rss-task-filter {
   flex: 1 1 320px;
   min-width: 240px;
@@ -1935,7 +1995,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .sub-tabs {
@@ -1974,6 +2034,17 @@ onBeforeUnmount(() => {
   .filter-control {
     flex: 1 1 160px;
   }
+
+  .sticky-control-stack {
+    top: 64px;
+    margin-inline: 0;
+  }
+
+  .state-filter-group {
+    flex-basis: 100%;
+    align-items: flex-start;
+  }
+
   .rss-task-filter {
     flex: 1 1 100%;
     max-width: none;
