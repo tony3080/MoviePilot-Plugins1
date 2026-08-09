@@ -797,8 +797,6 @@ class PendingImportCoordinator:
         if not task:
             discovery_deadline = _parse_time(details.get("discovery_deadline"))
             card_deadline = _parse_time(details.get("card_deadline"))
-            if card_deadline and now >= card_deadline:
-                return "failed:CD2 单卡监控超过最终超时"
             missing_task_deadline = None
             if key:
                 missing_since = _parse_time(details.get("task_missing_since"))
@@ -844,6 +842,8 @@ class PendingImportCoordinator:
                 details["cloud_verify_after"] = (
                     now + timedelta(seconds=max(10, self.config.poll_interval))
                 ).isoformat(timespec="seconds")
+            if card_deadline and now >= card_deadline:
+                return "failed:CD2 单卡监控超过最终超时"
             if not key and discovery_deadline and now >= discovery_deadline:
                 suffix = ""
                 if details.get("last_cloud_error"):

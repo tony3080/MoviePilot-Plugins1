@@ -781,6 +781,7 @@ class PendingImportTest(unittest.TestCase):
                 FakeScanner(),
             )
             coordinator.config.cloud_verify_delay = 0
+            coordinator.config.card_timeout = 1
 
             coordinator.run("cron")
 
