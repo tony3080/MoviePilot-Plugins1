@@ -897,6 +897,8 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(controls.restored, 1)
 
     def test_running_emby_scan_extends_callback_deadline(self):
+        self.assertEqual(pending_import.SCAN_STATUS_POLL_INTERVAL, 600)
+        self.assertEqual(pending_import.SCAN_RUNNING_POLL_INTERVAL, 600)
         with tempfile.TemporaryDirectory() as directory:
             store, _source, _target, _inventory = self.make_store(directory)
             controls = FakeControls()

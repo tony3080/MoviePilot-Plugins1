@@ -43,8 +43,8 @@ COMPLETED_SCAN_EVENTS = {
     "scheduledtask.completed",
     "scheduledtasks.completed",
 }
-SCAN_STATUS_POLL_INTERVAL = 60
-SCAN_RUNNING_POLL_INTERVAL = 300
+SCAN_STATUS_POLL_INTERVAL = 600
+SCAN_RUNNING_POLL_INTERVAL = 600
 
 
 def _parse_time(value: object) -> Optional[datetime]:

@@ -310,6 +310,23 @@ function itemKey(item) {
   return item.row_key || item.id || `${item.downloader_id}:${item.info_hash}`
 }
 
+function formatBeijingTime(value) {
+  const date = new Date(value || '')
+  if (Number.isNaN(date.getTime())) return value || '-'
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`
+}
+
 function toggleSelected(item) {
   const key = itemKey(item)
   selectedKeys.value = selectedKeys.value.includes(key)
@@ -1609,6 +1626,9 @@ onBeforeUnmount(() => {
             <VChip :color="taskStateColor(item.state)" size="small" variant="tonal">
               {{ item.state_text }}
             </VChip>
+          </template>
+          <template #item.updated_at="{ item }">
+            {{ formatBeijingTime(item.updated_at) }}
           </template>
         </VDataTable>
       </section>

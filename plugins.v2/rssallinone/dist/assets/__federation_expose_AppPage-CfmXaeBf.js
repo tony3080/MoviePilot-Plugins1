@@ -1890,6 +1890,23 @@ function itemKey(item) {
   return item.row_key || item.id || `${item.downloader_id}:${item.info_hash}`
 }
 
+function formatBeijingTime(value) {
+  const date = new Date(value || '');
+  if (Number.isNaN(date.getTime())) return value || '-'
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`
+}
+
 function toggleSelected(item) {
   const key = itemKey(item);
   selectedKeys.value = selectedKeys.value.includes(key)
@@ -3487,6 +3504,9 @@ return (_ctx, _cache) => {
                             _: 2
                           }, 1032, ["color"])
                         ]),
+                        "item.updated_at": _withCtx(({ item }) => [
+                          _createTextVNode(_toDisplayString(formatBeijingTime(item.updated_at)), 1)
+                        ]),
                         _: 1
                       }, 8, ["items", "loading"])
                     ]))
@@ -3653,6 +3673,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-d9afe8df"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-a5545944"]]);
 
 export { AppPage as default };

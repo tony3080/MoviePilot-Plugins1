@@ -532,6 +532,8 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
         self.assertIn('<VBtnToggle\n                v-model="mediaState"', app_page)
         self.assertIn(':value="option.value"', app_page)
+        self.assertIn("timeZone: 'Asia/Shanghai'", app_page)
+        self.assertIn('formatBeijingTime(item.updated_at)', app_page)
 
     def test_rollback_card_uses_rollback_marker_before_failure_marker(self) -> None:
         card = (
