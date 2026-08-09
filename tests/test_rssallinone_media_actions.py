@@ -212,6 +212,35 @@ class MediaActionServiceTest(unittest.TestCase):
         self.assertEqual(item["state"], "rolled_back")
         self.assertTrue(item["rolled_back"])
 
+    def test_import_repairs_legacy_mapping_missing_dotted_source_directory(self) -> None:
+        source_dir = self.root / "source" / "Show.2026.S01.Complete.1080p.WEB-DL"
+        source_dir.mkdir(parents=True)
+        source = source_dir / "Show.2026.S01E01.1080p.mkv"
+        source.write_bytes(b"episode-one")
+        target = self.root / "links" / "Show" / "E01.mkv"
+        self.add_item("legacy-dotted-folder", [{
+            "source_relative_path": source.name,
+            "source": source,
+            "target": target,
+            "new_rel": "Show/Season 01/Show S01E01.mkv",
+        }])
+        item = self.store.get_media_item("legacy-dotted-folder")
+        item["source_path"] = str(source_dir)
+        self.store.upsert_media_item(item)
+        mappings = self.store.list_file_mappings("qb-main", "legacy-dotted-folder")
+        mappings[0]["current_source_path"] = str(source_dir.parent / source.name)
+        self.store.replace_file_mappings("qb-main", "legacy-dotted-folder", mappings)
+
+        result = self.service.execute("import", ["legacy-dotted-folder"])
+
+        self.assertTrue(result["success"])
+        self.assertTrue(target.is_file())
+        self.assertTrue(os.path.samefile(source, target))
+        repaired = self.store.list_file_mappings("qb-main", "legacy-dotted-folder")
+        self.assertTrue(os.path.samefile(repaired[0]["current_source_path"], source))
+        refreshed = self.store.get_media_item("legacy-dotted-folder")
+        self.assertIn("source_paths_repaired_at", refreshed["details"])
+
     def test_import_failure_removes_links_created_in_same_attempt(self) -> None:
         source_dir = self.root / "source"
         source_dir.mkdir()

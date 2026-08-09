@@ -497,7 +497,66 @@ class MediaActionService:
         )
         if not mappings:
             raise MediaActionError("没有持久化的文件映射，拒绝猜测文件路径")
-        return mappings
+        repaired = self._repair_missing_source_paths(item, mappings)
+        if not repaired:
+            return mappings
+        persisted = self.store.replace_file_mappings(
+            item.get("downloader_id"), item.get("info_hash"), mappings
+        )
+        details = dict(item.get("details") or {})
+        details["file_mappings"] = copy.deepcopy(persisted)
+        details["source_paths_repaired_at"] = utc_now()
+        item["details"] = details
+        item["updated_at"] = utc_now()
+        self.store.upsert_media_item(item)
+        return persisted
+
+    @staticmethod
+    def _repair_missing_source_paths(
+        item: Dict[str, Any], mappings: List[Dict[str, Any]]
+    ) -> bool:
+        """Repair legacy mappings only from the card's authoritative source root."""
+
+        source_text = str(item.get("source_path") or "").strip()
+        if not source_text:
+            return False
+        source_root = Path(source_text).expanduser()
+        changed = False
+        for mapping in mappings:
+            current_text = str(mapping.get("current_source_path") or "").strip()
+            if current_text and Path(current_text).expanduser().is_file():
+                continue
+            relative_text = str(
+                mapping.get("source_relative_path") or ""
+            ).strip().replace("\\", "/")
+            relative = PurePosixPath(relative_text)
+            if (
+                not relative_text
+                or relative.is_absolute()
+                or any(part in {"", ".", ".."} for part in relative.parts)
+            ):
+                continue
+
+            candidates: List[Path] = []
+            if source_root.is_file():
+                if len(relative.parts) == 1 and (
+                    source_root.name.casefold() == relative.name.casefold()
+                ):
+                    candidates.append(source_root)
+            elif source_root.is_dir():
+                candidates.append(source_root.joinpath(*relative.parts))
+                if (
+                    relative.parts
+                    and relative.parts[0].casefold() == source_root.name.casefold()
+                ):
+                    candidates.append(source_root.parent.joinpath(*relative.parts))
+
+            candidate = next((path for path in candidates if path.is_file()), None)
+            if candidate is None:
+                continue
+            mapping["current_source_path"] = str(candidate.resolve(strict=True))
+            changed = True
+        return changed
 
     @staticmethod
     def _source_target(mapping: Dict[str, Any]) -> Tuple[Path, Path]:
