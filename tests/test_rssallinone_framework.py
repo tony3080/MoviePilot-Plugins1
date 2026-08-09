@@ -551,7 +551,9 @@ class RepositoryContractTest(unittest.TestCase):
             "target-slot", "inventory-slot",
         ):
             self.assertIn(f'class="{class_name}"', card)
-        self.assertIn("grid-template-rows: 42px 49px 40px 22px 58px 20px", card)
+        self.assertIn("height: 287px", card)
+        self.assertIn("flex: 1 1 48px", card)
+        self.assertIn("margin-top: auto", card)
         self.assertIn("-webkit-line-clamp: 3", card)
         self.assertIn("align-items: stretch", app_page)
 
