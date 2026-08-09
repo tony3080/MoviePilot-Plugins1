@@ -1297,16 +1297,22 @@ onBeforeUnmount(() => {
             />
             <div class="state-filter-group" role="group" aria-label="状态">
               <span class="filter-label">状态</span>
-              <div class="state-filter-buttons">
+              <VBtnToggle
+                v-model="mediaState"
+                mandatory
+                divided
+                density="compact"
+                variant="outlined"
+                color="primary"
+                class="state-filter-buttons"
+              >
                 <VBtn
                   v-for="option in mediaStateOptions"
                   :key="option.value"
+                  :value="option.value"
                   size="small"
-                  :color="mediaState === option.value ? 'primary' : 'default'"
-                  :variant="mediaState === option.value ? 'tonal' : 'text'"
-                  @click="mediaState = option.value"
                 >{{ option.title }}</VBtn>
-              </div>
+              </VBtnToggle>
             </div>
             <VSelect
               v-model="mediaRssTaskIds"
@@ -1966,11 +1972,8 @@ onBeforeUnmount(() => {
 }
 
 .state-filter-buttons {
-  display: flex;
   min-width: 0;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 3px;
 }
 
 .state-filter-buttons .v-btn {

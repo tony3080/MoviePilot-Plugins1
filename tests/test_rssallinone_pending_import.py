@@ -974,7 +974,9 @@ class PendingImportTest(unittest.TestCase):
                     requested_at + pending_import.timedelta(minutes=20)
                 ).isoformat(),
             })
-            batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
+            details = dict(batch.get("details") or {})
+            details["next_scan_status_check_at"] = "2000-01-01T00:00:00+00:00"
+            batch["details"] = details
             store.upsert_import_batch(batch)
 
             coordinator.run("cron")
@@ -984,6 +986,7 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(finished["state"], "completed")
             self.assertIn("scan_completed_via_api", finished["details"])
             self.assertEqual(controls.restored, 1)
+            self.assertIn("Extract MediaInfo", scanner.post_scan_tasks)
 
     def test_switch_snapshot_is_persisted_before_disable_side_effect(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.35"
+    plugin_version = "0.13.36"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -871,6 +871,13 @@ class RssAllInOne(_PluginBase):
             return {"success": False, "message": "扫库回调密钥不正确"}
         event = self._normalize_emby_callback(data)
         result = self._pending_coordinator().handle_scan_callback(event)
+        logger.info(
+            "RSS一条龙：收到 Emby 计划任务回调，"
+            f"event={event.get('event_name') or '<empty>'}，"
+            f"task={event.get('task_name') or event.get('task_id') or '<empty>'}，"
+            f"accepted={bool(result.get('accepted'))}，"
+            f"message={result.get('message') or ''}"
+        )
         return {"success": bool(result.get("accepted")), **result}
 
     def api_media_refresh(

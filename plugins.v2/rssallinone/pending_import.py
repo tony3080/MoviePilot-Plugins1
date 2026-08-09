@@ -43,6 +43,8 @@ COMPLETED_SCAN_EVENTS = {
     "scheduledtask.completed",
     "scheduledtasks.completed",
 }
+SCAN_STATUS_POLL_INTERVAL = 60
+SCAN_RUNNING_POLL_INTERVAL = 300
 
 
 def _parse_time(value: object) -> Optional[datetime]:
@@ -1020,10 +1022,23 @@ class PendingImportCoordinator:
     def _supervise_scan_wait(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         deadline = _parse_time(batch.get("scan_callback_deadline"))
         now = datetime.now(timezone.utc)
-        if not deadline or now < deadline:
+        details = dict(batch.get("details") or {})
+        requested_at = _parse_time(batch.get("refresh_requested_at"))
+        next_status_check = _parse_time(details.get("next_scan_status_check_at"))
+        if (
+            next_status_check
+            and now < next_status_check
+            and (not deadline or now < deadline)
+        ):
+            return self.status()
+        if (
+            not next_status_check
+            and requested_at
+            and now < requested_at + timedelta(seconds=SCAN_STATUS_POLL_INTERVAL)
+            and (not deadline or now < deadline)
+        ):
             return self.status()
 
-        details = dict(batch.get("details") or {})
         refresh_target = dict(details.get("refresh_target") or {})
         interval = max(300, int(self.config.scan_callback_timeout or 7200))
         try:
@@ -1032,23 +1047,25 @@ class PendingImportCoordinator:
                 str(refresh_target.get("task_name") or self.config.callback_task_name),
             )
         except Exception as error:
-            next_deadline = now + timedelta(seconds=interval)
+            details["next_scan_status_check_at"] = (
+                now + timedelta(seconds=SCAN_RUNNING_POLL_INTERVAL)
+            ).isoformat(timespec="seconds")
             details["scan_status_check_error"] = str(error)
             details["scan_status_check_error_at"] = utc_now()
             details["scan_status_check_count"] = int(
                 details.get("scan_status_check_count") or 0
             ) + 1
-            batch.update({
-                "error_message": "",
-                "scan_callback_deadline": next_deadline.isoformat(timespec="seconds"),
-                "details": details,
-                "updated_at": utc_now(),
-            })
+            batch.update({"error_message": "", "details": details, "updated_at": utc_now()})
+            if deadline and now >= deadline:
+                batch["scan_callback_deadline"] = (
+                    now + timedelta(seconds=interval)
+                ).isoformat(timespec="seconds")
             self.store.upsert_import_batch(batch)
-            self.notify(
-                "RSS一条龙扫库状态检查失败",
-                f"暂时无法查询 Emby 扫库状态，已继续等待：{error}",
-            )
+            if deadline and now >= deadline:
+                self.notify(
+                    "RSS一条龙扫库状态检查失败",
+                    f"暂时无法查询 Emby 扫库状态，已继续等待：{error}",
+                )
             return self.status()
 
         details.pop("scan_status_check_error", None)
@@ -1059,29 +1076,19 @@ class PendingImportCoordinator:
             details.get("scan_status_check_count") or 0
         ) + 1
         if task.get("is_running"):
-            next_deadline = now + timedelta(seconds=interval)
+            details["next_scan_status_check_at"] = (
+                now + timedelta(seconds=SCAN_RUNNING_POLL_INTERVAL)
+            ).isoformat(timespec="seconds")
             details["scan_wait_extended_at"] = utc_now()
-            batch.update({
-                "error_message": "",
-                "scan_callback_deadline": next_deadline.isoformat(timespec="seconds"),
-                "details": details,
-                "updated_at": utc_now(),
-            })
+            batch.update({"error_message": "", "details": details, "updated_at": utc_now()})
+            if deadline and now >= deadline:
+                batch["scan_callback_deadline"] = (
+                    now + timedelta(seconds=interval)
+                ).isoformat(timespec="seconds")
             self.store.upsert_import_batch(batch)
             return self.status()
 
-        requested_at = _parse_time(batch.get("refresh_requested_at"))
-        last_started_at = _parse_time(task.get("last_started_at"))
-        last_finished_at = _parse_time(task.get("last_finished_at"))
-        last_status = str(task.get("last_status") or "").strip().casefold()
-        completed_statuses = {"completed", "success", "succeeded"}
-        if (
-            requested_at
-            and last_started_at
-            and last_finished_at
-            and last_started_at >= requested_at
-            and last_status in completed_statuses
-        ):
+        if self._scan_task_completed_after_refresh(batch, task):
             details["scan_completed_via_api"] = copy.deepcopy(task)
             details["scan_completed_at"] = utc_now()
             batch.update({
@@ -1095,6 +1102,18 @@ class PendingImportCoordinator:
                 "未收到 Emby 回调，但 API 已确认本轮媒体库扫描完成",
             )
             self._restore_and_finish(batch, final_state="completed")
+            return self.status()
+
+        if not deadline or now < deadline:
+            details["next_scan_status_check_at"] = (
+                now + timedelta(seconds=SCAN_STATUS_POLL_INTERVAL)
+            ).isoformat(timespec="seconds")
+            batch.update({
+                "error_message": "",
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_import_batch(batch)
             return self.status()
 
         batch["error_message"] = (
