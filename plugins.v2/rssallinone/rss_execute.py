@@ -28,6 +28,13 @@ from .rss_site_labels import SiteHttpError, SiteLabelService
 RSS_RUN_TASK_TYPE = "rss_run"
 RETRY_DELAYS = (3, 10, 30)
 MAX_TORRENT_BYTES = 20 * 1024 * 1024
+MANDARIN_MEDIA_CATEGORIES = {
+    "",
+    "外语电影",
+    "动画电影",
+    "未识别",
+    "未分类",
+}
 
 
 class RssExecutionError(RuntimeError):
@@ -326,6 +333,7 @@ class RssExecutionService:
         on_enqueued: Any = None,
         on_source_ready: Any = None,
         label_service: Any = None,
+        media_category_resolver: Any = None,
         logger: Any = None,
     ) -> None:
         self.store = store
@@ -341,6 +349,9 @@ class RssExecutionService:
             self.gateway,
             sleeper=self.sleeper,
             logger=logger,
+        )
+        self.media_category_resolver = (
+            media_category_resolver or self._moviepilot_media_category
         )
         self.logger = logger
 
@@ -641,15 +652,60 @@ class RssExecutionService:
                     site_labels: Dict[str, Any] = {}
                     marker_rename: Dict[str, Any] = {}
                     if base_rename.get("status") != "failed":
-                        site_labels = self.label_service.detect(
-                            access=access,
-                            title=str(prepared.get("title") or entry.title or ""),
-                            detail_url=str(entry.detail_url or ""),
-                            torrent_id=str(prepared.get("torrent_id") or ""),
-                            cn_keywords=config.get("cn_keywords") or "",
-                            recognize_cn=bool(config.get("recognize_cn")),
-                            recognize_fx=bool(config.get("recognize_fx")),
-                        )
+                        requested_cn = bool(config.get("recognize_cn"))
+                        requested_fx = bool(config.get("recognize_fx"))
+                        media_category = ""
+                        allow_cn = requested_cn
+                        if requested_cn:
+                            media_category = self._resolve_media_category(
+                                _recognition_title_after_rename(
+                                    base_rename,
+                                    str(prepared.get("title") or entry.title or ""),
+                                )
+                            )
+                            allow_cn = _allows_mandarin_category(media_category)
+                        if not requested_cn and not requested_fx:
+                            site_labels = self.label_service.detect(
+                                access=access,
+                                title=str(prepared.get("title") or entry.title or ""),
+                                detail_url=str(entry.detail_url or ""),
+                                torrent_id=str(prepared.get("torrent_id") or ""),
+                                cn_keywords=config.get("cn_keywords") or "",
+                                recognize_cn=False,
+                                recognize_fx=False,
+                            )
+                        elif allow_cn or requested_fx:
+                            site_labels = self.label_service.detect(
+                                access=access,
+                                title=str(prepared.get("title") or entry.title or ""),
+                                detail_url=str(entry.detail_url or ""),
+                                torrent_id=str(prepared.get("torrent_id") or ""),
+                                cn_keywords=config.get("cn_keywords") or "",
+                                recognize_cn=allow_cn,
+                                recognize_fx=requested_fx,
+                            )
+                        else:
+                            site_labels = {
+                                "requested": True,
+                                "status": "skipped",
+                                "site_kind": "",
+                                "mandarin": False,
+                                "effects": False,
+                                "torrent_id": str(
+                                    prepared.get("torrent_id") or ""
+                                ).strip(),
+                                "request_url_masked": "",
+                                "reason": (
+                                    f"媒体分类“{media_category}”不检查国语标签"
+                                ),
+                            }
+                        if requested_cn:
+                            site_labels["media_category"] = media_category
+                            site_labels["mandarin_allowed"] = allow_cn
+                            if not allow_cn and requested_fx:
+                                site_labels["mandarin_skip_reason"] = (
+                                    f"媒体分类“{media_category}”不检查国语标签"
+                                )
                         if site_labels.get("mandarin") or site_labels.get("effects"):
                             marker_rename = self.renamer.apply(
                                 server,
@@ -710,6 +766,23 @@ class RssExecutionService:
                     else:
                         self.sleeper(delay)
         raise RssExecutionError("；".join(dict.fromkeys(errors))[:500])
+
+    def _resolve_media_category(self, title: str) -> str:
+        try:
+            return str(self.media_category_resolver(title) or "").strip()
+        except Exception as error:
+            self._log(
+                "warning",
+                f"RSS一条龙：MoviePilot 分类预识别失败，将按未识别处理：{error}",
+            )
+            return ""
+
+    @staticmethod
+    def _moviepilot_media_category(title: str) -> str:
+        from .qb_sync import MoviePilotQbGateway
+
+        _meta, media = MoviePilotQbGateway.recognize(str(title or ""))
+        return str(getattr(media, "category", "") or "").strip() if media else ""
 
     def _save_history(
         self,
@@ -783,6 +856,31 @@ def _merge_source_processing(
         "site_labels": dict(site_labels or {}),
         "marker_rename": markers,
     }
+
+
+def _allows_mandarin_category(category: object) -> bool:
+    return str(category or "").strip() in MANDARIN_MEDIA_CATEGORIES
+
+
+def _recognition_title_after_rename(
+    rename_result: Dict[str, Any],
+    fallback: str,
+) -> str:
+    paths = [
+        str(item.get("name") or "").strip().replace("\\", "/")
+        for item in list(rename_result.get("final_files") or [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    top_levels = {
+        path.split("/", 1)[0].strip()
+        for path in paths
+        if "/" in path and path.split("/", 1)[0].strip()
+    }
+    if len(top_levels) == 1:
+        return next(iter(top_levels))
+    if len(paths) == 1:
+        return paths[0].rsplit("/", 1)[-1]
+    return str(fallback or "").strip()
 
 
 def torrent_hash_candidates(content: bytes) -> List[str]:

@@ -145,6 +145,7 @@ class RssExecutionServiceTest(unittest.TestCase):
         renamer=None,
         label_service=None,
         on_source_ready=None,
+        media_category_resolver=None,
         **config,
     ):
         background_id = config.pop("background_id", "run-1")
@@ -154,6 +155,7 @@ class RssExecutionServiceTest(unittest.TestCase):
             renamer=renamer,
             label_service=label_service,
             on_source_ready=on_source_ready,
+            media_category_resolver=media_category_resolver,
             feed_fetcher=feed_fetcher,
             sleeper=gateway.sleeps.append,
         )
@@ -285,6 +287,9 @@ class RssExecutionServiceTest(unittest.TestCase):
             renamer=OrderedRenamer(),
             label_service=Labels(),
             on_source_ready=source_ready,
+            media_category_resolver=lambda _title: (
+                events.append("media_category") or "外语电影"
+            ),
             rename_enabled=True,
             add_chinese_title=True,
             recognize_cn=True,
@@ -292,10 +297,91 @@ class RssExecutionServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(events, [
-            "base_rename", "site_labels", "marker_rename", "mp_recognition",
+            "base_rename", "media_category", "site_labels", "marker_rename",
+            "mp_recognition",
         ])
         self.assertEqual(result["qb_recognized"], 1)
         self.assertEqual(result["qb_recognition_deferred"], 0)
+
+    def test_mandarin_category_allowlist_is_exact(self):
+        for category in ("", "外语电影", "动画电影", "未识别", "未分类"):
+            with self.subTest(category=category):
+                self.assertTrue(rss_execute._allows_mandarin_category(category))
+        for category in ("华语电影", "国产剧", "欧美剧", "纪录片", "动漫"):
+            with self.subTest(category=category):
+                self.assertFalse(rss_execute._allows_mandarin_category(category))
+
+    def test_disabled_label_options_do_not_run_category_resolution(self):
+        category_calls = []
+        self._run(
+            FakeGateway(),
+            media_category_resolver=lambda title: category_calls.append(title),
+        )
+
+        self.assertEqual(category_calls, [])
+        history = self.store.list_rss_history()["items"][0]
+        site_labels = history["payload"]["site_labels"]
+        self.assertFalse(site_labels["requested"])
+        self.assertEqual(site_labels["status"], "skipped")
+
+    def test_disallowed_category_skips_mandarin_site_request(self):
+        class Labels:
+            def __init__(self):
+                self.calls = []
+
+            def detect(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"status": "matched", "mandarin": True, "effects": False}
+
+        labels = Labels()
+        renamer = FakeRenamer()
+        result = self._run(
+            FakeGateway(),
+            renamer=renamer,
+            label_service=labels,
+            media_category_resolver=lambda _title: "国产剧",
+            recognize_cn=True,
+        )
+
+        self.assertEqual(result["queued"], 1)
+        self.assertEqual(labels.calls, [])
+        self.assertEqual(len(renamer.calls), 1)
+        history = self.store.list_rss_history()["items"][0]
+        site_labels = history["payload"]["site_labels"]
+        self.assertEqual(site_labels["status"], "skipped")
+        self.assertEqual(site_labels["media_category"], "国产剧")
+        self.assertFalse(site_labels["mandarin_allowed"])
+
+    def test_disallowed_mandarin_category_still_checks_effects(self):
+        class Labels:
+            def __init__(self):
+                self.calls = []
+
+            def detect(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "status": "matched",
+                    "mandarin": bool(kwargs["recognize_cn"]),
+                    "effects": bool(kwargs["recognize_fx"]),
+                }
+
+        labels = Labels()
+        renamer = FakeRenamer()
+        self._run(
+            FakeGateway(),
+            renamer=renamer,
+            label_service=labels,
+            media_category_resolver=lambda _title: "纪录片",
+            recognize_cn=True,
+            recognize_fx=True,
+        )
+
+        self.assertEqual(len(labels.calls), 1)
+        self.assertFalse(labels.calls[0]["recognize_cn"])
+        self.assertTrue(labels.calls[0]["recognize_fx"])
+        self.assertEqual(len(renamer.calls), 2)
+        self.assertFalse(renamer.calls[1][2]["add_cn"])
+        self.assertTrue(renamer.calls[1][2]["add_fx"])
 
     def test_failed_source_rename_defers_initial_qb_card(self):
         callbacks = []
