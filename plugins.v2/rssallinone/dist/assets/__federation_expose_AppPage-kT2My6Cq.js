@@ -1010,6 +1010,7 @@ watch$1(() => [props.modelValue, props.item], ([visible]) => {
 
 function submit() {
   emit('save', {
+    media_id: props.item?.id,
     downloader_id: props.item?.downloader_id,
     info_hash: props.item?.info_hash,
     media_type: form.media_type,
@@ -1173,7 +1174,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const ManualIdentifyDialog = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-3e83c70b"]]);
+const ManualIdentifyDialog = /*#__PURE__*/_export_sfc(_sfc_main$2, [['__scopeId',"data-v-918e5610"]]);
 
 const {resolveComponent:_resolveComponent$1,createVNode:_createVNode$1,toDisplayString:_toDisplayString$1,createElementVNode:_createElementVNode$1,withCtx:_withCtx$1,createTextVNode:_createTextVNode$1,openBlock:_openBlock$1,createBlock:_createBlock$1,createCommentVNode:_createCommentVNode$1,renderList:_renderList$1,Fragment:_Fragment$1,createElementBlock:_createElementBlock$1} = await importShared('vue');
 

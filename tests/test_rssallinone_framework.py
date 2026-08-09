@@ -575,6 +575,16 @@ class RepositoryContractTest(unittest.TestCase):
             backend,
         )
 
+    def test_manual_identify_submits_the_library_media_id(self) -> None:
+        dialog = (
+            PLUGIN_DIR / "src" / "components" / "ManualIdentifyDialog.vue"
+        ).read_text(encoding="utf-8")
+        backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
+
+        self.assertIn("media_id: props.item?.id", dialog)
+        self.assertIn('media_id = str(data.get("media_id") or "").strip()', backend)
+        self.assertIn("refresh_media_from_saved_files(", backend)
+
     def test_rss_scheduler_uses_function_kwargs_for_task_id(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
         self.assertIn('"func_kwargs": {"task_id": task_id}', backend)

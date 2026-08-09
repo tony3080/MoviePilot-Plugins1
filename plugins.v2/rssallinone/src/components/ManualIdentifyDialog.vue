@@ -31,6 +31,7 @@ watch(() => [props.modelValue, props.item], ([visible]) => {
 
 function submit() {
   emit('save', {
+    media_id: props.item?.id,
     downloader_id: props.item?.downloader_id,
     info_hash: props.item?.info_hash,
     media_type: form.media_type,
