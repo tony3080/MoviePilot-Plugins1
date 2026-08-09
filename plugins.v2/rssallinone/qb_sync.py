@@ -2040,8 +2040,6 @@ def resolve_current_source_path(
         return content.as_posix()
     if source.parts and content.name.casefold() == source.parts[0].casefold():
         return content.parent.joinpath(source).as_posix()
-    if content.suffix and len(source.parts) == 1:
-        return content.parent.joinpath(source).as_posix()
     return content.joinpath(source).as_posix()
 
 

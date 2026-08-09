@@ -1727,6 +1727,38 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
 
 
 class SourceTargetMappingTest(unittest.TestCase):
+    def test_dotted_content_directory_keeps_its_folder_component(self) -> None:
+        source_name = "Show.2026.S03E01.2160p.WEB-DL.mp4"
+
+        path = qb_sync.resolve_current_source_path(
+            {
+                "content_path": (
+                    "/MP/完结剧集1/"
+                    "Show.2026.S03.Complete.2160p.WEB-DL-GROUP"
+                )
+            },
+            source_name,
+        )
+
+        self.assertEqual(
+            path,
+            (
+                "/MP/完结剧集1/"
+                "Show.2026.S03.Complete.2160p.WEB-DL-GROUP/"
+                f"{source_name}"
+            ),
+        )
+
+    def test_single_file_content_path_is_not_duplicated(self) -> None:
+        source_name = "Movie.2026.2160p.mkv"
+
+        path = qb_sync.resolve_current_source_path(
+            {"content_path": f"/MP/电影/{source_name}"},
+            source_name,
+        )
+
+        self.assertEqual(path, f"/MP/电影/{source_name}")
+
     def test_mapping_keeps_qb_source_and_mp_target_as_independent_paths(self) -> None:
         mappings = qb_sync.build_source_target_mappings(
             downloader_id="qb-main",
