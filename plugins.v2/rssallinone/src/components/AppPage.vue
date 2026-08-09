@@ -45,6 +45,7 @@ const rssTestDialog = ref(false)
 const rssTestResult = ref(null)
 const pendingImport = ref({ running: false, batch: null, pending: 0, importing: 0, active_watches: 0 })
 const pendingImportStarting = ref(false)
+const pendingImportEndingWait = ref(false)
 const catchupState = ref(null)
 const scanState = ref(null)
 const catchupBusy = ref(false)
@@ -459,6 +460,23 @@ async function runPendingImport() {
     errorMessage.value = error?.message || '待入库队列启动失败'
   } finally {
     pendingImportStarting.value = false
+  }
+}
+
+async function cancelPendingImportWait() {
+  if (pendingImportEndingWait.value || pendingImportState.value !== 'waiting_scan_callback') return
+  pendingImportEndingWait.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post('plugin/RssAllInOne/import/wait/cancel', {}))
+    if (!response?.success) throw new Error(response?.message || '结束扫库等待失败')
+    successMessage.value = response.message || '已结束扫库等待'
+    await loadPendingImportStatus({ reloadCards: true })
+  } catch (error) {
+    errorMessage.value = error?.message || '结束扫库等待失败'
+  } finally {
+    pendingImportEndingWait.value = false
   }
 }
 
@@ -1234,6 +1252,16 @@ onBeforeUnmount(() => {
             待入库 {{ pendingImport.pending || 0 }} · 入库中 {{ pendingImport.importing || 0 }} · CD2监控 {{ pendingImport.active_watches || 0 }}
           </span>
           <VSpacer />
+          <VBtn
+            v-if="pendingImportState === 'waiting_scan_callback'"
+            size="small"
+            color="warning"
+            variant="tonal"
+            prepend-icon="mdi-stop-circle-outline"
+            :loading="pendingImportEndingWait"
+            :disabled="pendingImportEndingWait"
+            @click="cancelPendingImportWait"
+          >结束等待</VBtn>
           <VBtn
             size="small"
             color="primary"

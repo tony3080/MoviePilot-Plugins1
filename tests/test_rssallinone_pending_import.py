@@ -434,6 +434,42 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(finished["state"], "completed")
             self.assertIn("switch_restore_skipped_at", finished["details"])
 
+    def test_scan_wait_can_be_cancelled_without_rolling_back_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-cancel-wait",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+
+            coordinator.run("cron")
+            batch = store.latest_active_import_batch()
+            self.assertEqual(batch["state"], "waiting_scan_callback")
+
+            result = coordinator.cancel_scan_wait()
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(controls.restored, 1)
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+            self.assertTrue(target.exists())
+            self.assertIsNone(store.latest_active_import_batch())
+            finished = store.get_import_batch(batch["id"])
+            self.assertEqual(finished["state"], "cancelled")
+            self.assertIn("scan_wait_cancelled_at", finished["details"])
+            self.assertEqual(scanner.post_scan_tasks, [])
+
     def test_identifierless_scan_callback_confirms_completed_task_via_emby_api(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, _target, _inventory = self.make_store(directory)

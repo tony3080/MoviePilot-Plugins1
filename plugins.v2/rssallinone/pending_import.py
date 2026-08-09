@@ -390,6 +390,41 @@ class PendingImportCoordinator:
             ),
         }
 
+    def cancel_scan_wait(self) -> Dict[str, Any]:
+        """End an Emby callback wait without changing imported media records."""
+
+        batch = self.store.latest_active_import_batch()
+        if not batch:
+            return {"accepted": False, "message": "当前没有运行中的待入库批次"}
+        if str(batch.get("state") or "") != "waiting_scan_callback":
+            return {"accepted": False, "message": "当前批次不在等待 Emby 扫库完成"}
+
+        details = dict(batch.get("details") or {})
+        details["scan_wait_cancelled_at"] = utc_now()
+        batch.update({
+            "details": details,
+            "error_message": "",
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_import_batch(batch)
+        manages_switches = self._manages_external_switches(batch)
+        self._restore_and_finish(batch, final_state="cancelled")
+
+        finished = self.store.get_import_batch(batch["id"]) or batch
+        if str(finished.get("state") or "") == "restore_failed":
+            return {
+                "accepted": False,
+                "message": str(finished.get("error_message") or "恢复外部开关失败"),
+            }
+        return {
+            "accepted": True,
+            "message": (
+                "已结束扫库等待并恢复外部开关"
+                if manages_switches
+                else "已结束扫库等待"
+            ),
+        }
+
     @staticmethod
     def _scan_task_completed_after_refresh(
         batch: Dict[str, Any], task: Dict[str, Any]

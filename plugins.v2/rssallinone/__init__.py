@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.28"
+    plugin_version = "0.13.29"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -294,6 +294,12 @@ class RssAllInOne(_PluginBase):
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/import/run", self.api_pending_import_run, "POST", "立即处理待入库队列"),
             self._api("/import/status", self.api_pending_import_status, "GET", "读取待入库队列状态"),
+            self._api(
+                "/import/wait/cancel",
+                self.api_pending_import_cancel_wait,
+                "POST",
+                "结束等待 Emby 扫库完成",
+            ),
             self._api(
                 "/external/catchup/control",
                 self.api_external_catchup_control,
@@ -787,6 +793,18 @@ class RssAllInOne(_PluginBase):
 
     def api_pending_import_status(self) -> Dict[str, Any]:
         return {"success": True, **self._pending_coordinator().status()}
+
+    def api_pending_import_cancel_wait(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        del payload
+        if not self._pending_import_lock.acquire(blocking=False):
+            return {"success": False, "message": "待入库队列正在执行，请稍后重试"}
+        try:
+            result = self._pending_coordinator().cancel_scan_wait()
+            return {"success": bool(result.get("accepted")), **result}
+        finally:
+            self._pending_import_lock.release()
 
     def api_external_catchup_control(
         self, payload: Optional[Dict[str, Any]] = None
