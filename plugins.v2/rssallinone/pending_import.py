@@ -1097,6 +1097,17 @@ class PendingImportCoordinator:
             details["switches_restored_at"] = utc_now()
         else:
             details["switch_restore_skipped_at"] = utc_now()
+        if final_state == "completed":
+            try:
+                details["post_scan_task"] = {
+                    **self.scanner.start_emby_task("Extract MediaInfo"),
+                    "triggered_at": utc_now(),
+                }
+                details.pop("post_scan_task_error", None)
+            except Exception as error:
+                details["post_scan_task_error"] = str(error)
+                details["post_scan_task_error_at"] = utc_now()
+                self.notify("RSS一条龙 MediaInfo 任务启动失败", str(error))
         details.pop("restore_final_state", None)
         batch.update({
             "state": final_state,

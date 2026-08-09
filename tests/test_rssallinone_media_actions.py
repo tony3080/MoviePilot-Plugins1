@@ -88,6 +88,7 @@ class MediaActionServiceTest(unittest.TestCase):
     def test_active_batch_only_blocks_cards_still_owned_by_queue(self) -> None:
         imported = {"id": "done", "state": "imported"}
         another_imported = {"id": "done-2", "state": "imported"}
+        existing = {"id": "already-present", "state": "existing"}
         importing = {"id": "active", "state": "importing"}
 
         self.assertEqual(
@@ -119,7 +120,7 @@ class MediaActionServiceTest(unittest.TestCase):
             ),
         )
         self.assertIn(
-            "完成入库",
+            "已存在或已入库",
             self.service.pending_batch_action_error(
                 "delete_both", [importing]
             ),
@@ -133,6 +134,12 @@ class MediaActionServiceTest(unittest.TestCase):
         self.assertEqual(
             self.service.pending_batch_action_error(
                 "delete_source", [imported]
+            ),
+            "",
+        )
+        self.assertEqual(
+            self.service.pending_batch_action_error(
+                "delete_source", [existing]
             ),
             "",
         )

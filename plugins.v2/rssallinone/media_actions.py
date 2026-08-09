@@ -63,8 +63,8 @@ class MediaActionService:
             if not item:
                 return "媒体记录不存在"
             media_id = str(item.get("id") or "").strip()
-            if str(item.get("state") or "") != "imported":
-                return "批次运行期间只能删除已经完成入库的卡片"
+            if str(item.get("state") or "") not in {"existing", "imported"}:
+                return "批次运行期间只能删除已存在或已入库的卡片"
             if media_id == current:
                 return "当前正在处理的卡片不能删除"
             if media_id in watched:

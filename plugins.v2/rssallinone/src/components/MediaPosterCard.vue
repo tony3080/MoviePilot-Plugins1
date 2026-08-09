@@ -50,6 +50,10 @@ const sizeText = computed(() => formatSize(Number(props.item.size || details.val
 const isImported = computed(() => props.mode === 'imported')
 const showDelete = computed(() => props.mode === 'pending')
 const showEdit = computed(() => !isImported.value)
+const isRolledBack = computed(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back')
+const hasFailureMarker = computed(() => !isRolledBack.value && Boolean(
+  props.item.failure_message || props.item.recognition_error,
+))
 const status = computed(() => {
   if (props.mode === 'qb') {
     if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
@@ -133,12 +137,12 @@ function usableSourceUrl(value) {
       </div>
 
       <div class="poster-left-actions" @click.stop>
-        <VTooltip v-if="item.rolled_back" text="已回退">
+        <VTooltip v-if="isRolledBack" text="已回退">
           <template #activator="{ props: tooltipProps }">
             <span v-bind="tooltipProps" class="corner-badge rollback">R</span>
           </template>
         </VTooltip>
-        <VTooltip v-if="item.failure_message || item.recognition_error" :text="item.failure_message || item.recognition_error || '入库失败'">
+        <VTooltip v-if="hasFailureMarker" :text="item.failure_message || item.recognition_error || '入库失败'">
           <template #activator="{ props: tooltipProps }">
             <span v-bind="tooltipProps" class="corner-badge failure">!</span>
           </template>

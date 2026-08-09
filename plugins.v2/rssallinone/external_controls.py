@@ -284,6 +284,8 @@ class ScanSystemClient:
         self,
         task_id: str = "",
         task_name: str = "",
+        *,
+        allow_refresh_fallback: bool = True,
     ) -> Dict[str, Any]:
         target = self._emby_target()
         _status, payload = self.http.request(
@@ -319,7 +321,7 @@ class ScanSystemClient:
                 ),
                 None,
             )
-        if not selected:
+        if not selected and allow_refresh_fallback:
             refresh_tasks = [
                 task for task in tasks
                 if str(task.get("Key") or task.get("key") or "").strip().casefold()
@@ -357,6 +359,38 @@ class ScanSystemClient:
                 or last_result.get("endTimeUtc")
                 or ""
             ).strip(),
+        }
+
+    def start_emby_task(self, task_name: str) -> Dict[str, str]:
+        """Start one named Emby scheduled task without waiting for its callback."""
+
+        normalized_name = str(task_name or "").strip()
+        if not normalized_name:
+            raise ExternalControlError("未提供 Emby 计划任务名称")
+        task = self.emby_task_status(
+            task_name=normalized_name,
+            allow_refresh_fallback=False,
+        )
+        if task.get("is_running"):
+            return {
+                "task_id": str(task.get("task_id") or ""),
+                "task_name": str(task.get("task_name") or normalized_name),
+                "status": "already_running",
+            }
+        task_id = str(task.get("task_id") or "").strip()
+        if not task_id:
+            raise ExternalControlError(f"Emby 计划任务缺少 ID：{normalized_name}")
+        target = self._emby_target()
+        self.http.request(
+            "POST",
+            f"{target['host']}/emby/ScheduledTasks/Running/{quote(task_id)}?"
+            f"{urlencode({'api_key': target['api_key']})}",
+            accepted=(200, 202, 204),
+        )
+        return {
+            "task_id": task_id,
+            "task_name": str(task.get("task_name") or normalized_name),
+            "status": "started",
         }
 
     def request_emby_refresh(self) -> Dict[str, str]:

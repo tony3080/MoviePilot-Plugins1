@@ -645,6 +645,10 @@ const sizeText = computed$3(() => formatSize(Number(props.item.size || details.v
 const isImported = computed$3(() => props.mode === 'imported');
 const showDelete = computed$3(() => props.mode === 'pending');
 const showEdit = computed$3(() => !isImported.value);
+const isRolledBack = computed$3(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back');
+const hasFailureMarker = computed$3(() => !isRolledBack.value && Boolean(
+  props.item.failure_message || props.item.recognition_error,
+));
 const status = computed$3(() => {
   if (props.mode === 'qb') {
     if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
@@ -752,7 +756,7 @@ return (_ctx, _cache) => {
           class: "poster-left-actions",
           onClick: _cache[2] || (_cache[2] = _withModifiers(() => {}, ["stop"]))
         }, [
-          (__props.item.rolled_back)
+          (isRolledBack.value)
             ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
                 key: 0,
                 text: "已回退"
@@ -763,7 +767,7 @@ return (_ctx, _cache) => {
                 _: 1
               }))
             : _createCommentVNode$3("", true),
-          (__props.item.failure_message || __props.item.recognition_error)
+          (hasFailureMarker.value)
             ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
                 key: 1,
                 text: __props.item.failure_message || __props.item.recognition_error || '入库失败'
@@ -962,7 +966,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-75e3e28c"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-f0b5012f"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 

@@ -76,6 +76,7 @@ class FakeScanner:
 
     def __init__(self):
         self.refreshes = 0
+        self.post_scan_tasks = []
         self.status_calls = 0
         self.task_status = {
             "host": "http://emby",
@@ -105,6 +106,10 @@ class FakeScanner:
     def emby_task_status(self, _task_id="", _task_name=""):
         self.status_calls += 1
         return dict(self.task_status)
+
+    def start_emby_task(self, task_name):
+        self.post_scan_tasks.append(task_name)
+        return {"task_id": "post-scan", "task_name": task_name, "status": "started"}
 
 
 class FakeCd2:
@@ -380,6 +385,7 @@ class PendingImportTest(unittest.TestCase):
             })
             self.assertTrue(result["accepted"])
             self.assertEqual(controls.restored, 1)
+            self.assertEqual(scanner.post_scan_tasks, ["Extract MediaInfo"])
             self.assertIsNone(store.latest_active_import_batch())
 
     def test_manual_run_skips_external_switches_but_still_refreshes_emby(self):
@@ -1049,6 +1055,7 @@ class FakeExternalHttp:
         self.catchup_saved_object = None
         self.scan_switch = True
         self.refreshes = 0
+        self.started_task_url = ""
 
     def request(self, method, url, **kwargs):
         if url.endswith("/api/v1/login/access-token"):
@@ -1085,19 +1092,31 @@ class FakeExternalHttp:
         if "/emby/Library/Refresh?" in url:
             self.refreshes += 1
             return 204, None
+        if "/emby/ScheduledTasks/Running/" in url:
+            self.started_task_url = url
+            return 204, None
         if "/emby/ScheduledTasks?" in url:
-            return 200, [{
-                "Id": "actual-task",
-                "Name": "Scan media library",
-                "Key": "RefreshLibrary",
-                "State": "Running",
-                "CurrentProgressPercentage": 25,
-                "LastExecutionResult": {
-                    "Status": "Completed",
-                    "StartTimeUtc": "2026-08-08T00:00:00Z",
-                    "EndTimeUtc": "2026-08-08T00:30:00Z",
+            return 200, [
+                {
+                    "Id": "actual-task",
+                    "Name": "Scan media library",
+                    "Key": "RefreshLibrary",
+                    "State": "Running",
+                    "CurrentProgressPercentage": 25,
+                    "LastExecutionResult": {
+                        "Status": "Completed",
+                        "StartTimeUtc": "2026-08-08T00:00:00Z",
+                        "EndTimeUtc": "2026-08-08T00:30:00Z",
+                    },
                 },
-            }]
+                {
+                    "Id": "extract-mediainfo",
+                    "Name": "Extract MediaInfo",
+                    "Key": "MediaInfoExtractTask",
+                    "State": "Idle",
+                    "LastExecutionResult": {},
+                },
+            ]
         raise AssertionError(f"unexpected request: {method} {url}")
 
 
@@ -1121,6 +1140,9 @@ class ExternalControlTest(unittest.TestCase):
         self.assertEqual(target["node_name"], "Emby01")
         self.assertEqual(target["task_id"], "actual-task")
         self.assertEqual(http.refreshes, 1)
+        started = scanner.start_emby_task("Extract MediaInfo")
+        self.assertEqual(started["status"], "started")
+        self.assertIn("/emby/ScheduledTasks/Running/extract-mediainfo?", http.started_task_url)
 
 
 if __name__ == "__main__":

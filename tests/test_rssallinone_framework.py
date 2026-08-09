@@ -520,6 +520,14 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("{ title: '入库中', value: 'importing' }", app_page)
         self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
 
+    def test_rollback_card_uses_rollback_marker_before_failure_marker(self) -> None:
+        card = (
+            PLUGIN_DIR / "src" / "components" / "MediaPosterCard.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("props.item.state === 'rolled_back'", card)
+        self.assertIn("!isRolledBack.value", card)
+        self.assertIn('class="corner-badge rollback">R</span>', card)
+
     def test_file_manager_page_contract(self) -> None:
         app_page = (
             PLUGIN_DIR / "src" / "components" / "AppPage.vue"
