@@ -1615,11 +1615,15 @@ class QbSyncService:
             and task_rule
         ):
             try:
-                realtime_mappings = file_mappings or build_realtime_source_mappings(
-                    downloader_id=downloader.name,
-                    info_hash=info_hash,
-                    media_id=media_id,
-                    files=local_torrent_files,
+                realtime_mappings = (
+                    bind_local_source_paths(file_mappings, local_torrent_files)
+                    if file_mappings
+                    else build_realtime_source_mappings(
+                        downloader_id=downloader.name,
+                        info_hash=info_hash,
+                        media_id=media_id,
+                        files=local_torrent_files,
+                    )
                 )
                 file_mappings, media_source_path, realtime_hardlink = (
                     create_realtime_hardlinks(
@@ -2002,6 +2006,56 @@ def build_realtime_source_mappings(
             "details": {},
         })
     return mappings
+
+
+def bind_local_source_paths(
+    mappings: Sequence[Dict[str, Any]],
+    files: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Bind planned names to source paths verified by the local filesystem scan."""
+
+    updated = copy.deepcopy(list(mappings or []))
+    local_files = list(files or [])
+    if not updated or not local_files:
+        return updated
+
+    by_index: Dict[int, Dict[str, Any]] = {}
+    by_name: Dict[str, List[Dict[str, Any]]] = {}
+    by_basename: Dict[str, List[Dict[str, Any]]] = {}
+    for fallback_index, item in enumerate(local_files):
+        source_path = str(item.get("current_source_path") or "").strip()
+        if not source_path:
+            continue
+        try:
+            file_index = int(item.get("index", fallback_index))
+        except (TypeError, ValueError):
+            file_index = fallback_index
+        by_index[file_index] = item
+        name = str(item.get("name") or "").replace("\\", "/").casefold()
+        if name:
+            by_name.setdefault(name, []).append(item)
+            by_basename.setdefault(PurePosixPath(name).name, []).append(item)
+
+    for fallback_index, mapping in enumerate(updated):
+        try:
+            file_index = int(mapping.get("file_index", fallback_index))
+        except (TypeError, ValueError):
+            file_index = fallback_index
+        relative = str(
+            mapping.get("source_relative_path") or ""
+        ).replace("\\", "/").casefold()
+        candidate = by_index.get(file_index)
+        if candidate is None and len(by_name.get(relative, [])) == 1:
+            candidate = by_name[relative][0]
+        basename = PurePosixPath(relative).name if relative else ""
+        if candidate is None and len(by_basename.get(basename, [])) == 1:
+            candidate = by_basename[basename][0]
+        source_path = str(
+            (candidate or {}).get("current_source_path") or ""
+        ).strip()
+        if source_path:
+            mapping["current_source_path"] = source_path
+    return updated
 
 
 def create_realtime_hardlinks(

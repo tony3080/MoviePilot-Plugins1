@@ -1057,7 +1057,8 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                         "title": "Movie.2026.REMUX-CHD",
                         "state": "uploading",
                         "category": "chd",
-                        "content_path": str(source.parent),
+                        "save_path": str(source_root),
+                        "content_path": str(source),
                         "progress": 1.0,
                         "size": source.stat().st_size,
                     }]
@@ -1079,7 +1080,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                     return {
                         "expected_files": [{
                             "file_index": 0,
-                            "source_name": "Movie/Movie.2026.mkv",
+                            "source_name": "Movie.2026.mkv",
                             "new_rel": "CHD Movie (2026) {tmdbid=42}/CHD Movie.mkv",
                             "relative_path": "CHD Movie (2026) {tmdbid=42}/CHD Movie.mkv",
                             "inventory_relative_path": "CHD Movie (2026) {tmdbid=42}/CHD Movie.strm",
@@ -1142,7 +1143,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertTrue(linked_file.samefile(source))
             self.assertEqual(
                 Path(media["source_path"]).resolve(),
-                (link_root / "Movie").resolve(),
+                linked_file.resolve(),
             )
             self.assertEqual(
                 media["details"]["source_identity"]["kind"],
@@ -1150,7 +1151,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             )
             self.assertEqual(
                 Path(media["details"]["source_identity"]["qb_source_path"]).resolve(),
-                source.parent.resolve(),
+                source.resolve(),
             )
             self.assertEqual(
                 media["details"]["rss_source"]["detail_url_masked"],
