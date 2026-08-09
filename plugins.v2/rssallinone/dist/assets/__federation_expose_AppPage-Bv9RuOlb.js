@@ -641,6 +641,13 @@ const mediaCategory = computed$3(() => props.item.media_category || details.valu
 const plannedName = computed$3(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '');
 const sizeText = computed$3(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)));
 const isImported = computed$3(() => props.mode === 'imported');
+const inventoryIncomplete = computed$3(() => {
+  if (!isImported.value || totalFiles.value <= 0) return false
+  const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || '';
+  const folderExists = folderStatus === 'exists'
+    || ['exists', 'partial'].includes(props.item.inventory_state);
+  return !folderExists || existsCount.value < totalFiles.value
+});
 const showDelete = computed$3(() => props.mode === 'pending');
 const showEdit = computed$3(() => !isImported.value);
 const isRolledBack = computed$3(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back');
@@ -676,6 +683,7 @@ const inventoryText = computed$3(() => {
 });
 const inventoryClass = computed$3(() => {
   if (inventoryText.value === '目录冲突') return 'inventory-warning'
+  if (inventoryIncomplete.value) return 'inventory-missing'
   return inventoryText.value.startsWith('目录已存在') ? 'inventory-ok' : 'inventory-missing'
 });
 
@@ -721,7 +729,7 @@ return (_ctx, _cache) => {
   const _component_VCard = _resolveComponent$3("VCard");
 
   return (_openBlock$3(), _createBlock$3(_component_VCard, {
-    class: _normalizeClass(["media-poster-card", { selected: __props.selected }]),
+    class: _normalizeClass(["media-poster-card", { selected: __props.selected, 'inventory-incomplete': inventoryIncomplete.value }]),
     elevation: "0",
     onClick: _cache[7] || (_cache[7] = $event => (emit('toggle', __props.item)))
   }, {
@@ -952,6 +960,19 @@ return (_ctx, _cache) => {
                     ]),
                     _: 1
                   }, 8, ["text"]))
+                : _createCommentVNode$3("", true),
+              (inventoryIncomplete.value)
+                ? (_openBlock$3(), _createBlock$3(_component_VChip, {
+                    key: 4,
+                    size: "x-small",
+                    variant: "flat",
+                    class: "info-chip inventory-incomplete-chip"
+                  }, {
+                    default: _withCtx$3(() => [...(_cache[8] || (_cache[8] = [
+                      _createTextVNode$3(" 库存不完整 ", -1)
+                    ]))]),
+                    _: 1
+                  }))
                 : _createCommentVNode$3("", true)
             ])
           ]),
@@ -1004,7 +1025,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-7526eb52"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-8b7db404"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 
@@ -2473,7 +2494,6 @@ async function refreshSelectedInventory() {
     } else {
       successMessage.value = response.message || '库存复查完成';
     }
-    clearSelection();
     await loadActive();
   } catch (error) {
     errorMessage.value = error?.message || '批量库存复查失败';
@@ -3631,6 +3651,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-e1aea232"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-62ed0d79"]]);
 
 export { AppPage as default };

@@ -913,7 +913,6 @@ async function refreshSelectedInventory() {
     } else {
       successMessage.value = response.message || '库存复查完成'
     }
-    clearSelection()
     await loadActive()
   } catch (error) {
     errorMessage.value = error?.message || '批量库存复查失败'

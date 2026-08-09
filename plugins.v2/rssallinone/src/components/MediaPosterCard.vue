@@ -48,6 +48,13 @@ const mediaCategory = computed(() => props.item.media_category || details.value.
 const plannedName = computed(() => details.value.inventory_plan?.expected_directory || props.item.target_name || '')
 const sizeText = computed(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)))
 const isImported = computed(() => props.mode === 'imported')
+const inventoryIncomplete = computed(() => {
+  if (!isImported.value || totalFiles.value <= 0) return false
+  const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || ''
+  const folderExists = folderStatus === 'exists'
+    || ['exists', 'partial'].includes(props.item.inventory_state)
+  return !folderExists || existsCount.value < totalFiles.value
+})
 const showDelete = computed(() => props.mode === 'pending')
 const showEdit = computed(() => !isImported.value)
 const isRolledBack = computed(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back')
@@ -83,6 +90,7 @@ const inventoryText = computed(() => {
 })
 const inventoryClass = computed(() => {
   if (inventoryText.value === '目录冲突') return 'inventory-warning'
+  if (inventoryIncomplete.value) return 'inventory-missing'
   return inventoryText.value.startsWith('目录已存在') ? 'inventory-ok' : 'inventory-missing'
 })
 
@@ -122,7 +130,7 @@ function usableSourceUrl(value) {
 <template>
   <VCard
     class="media-poster-card"
-    :class="{ selected }"
+    :class="{ selected, 'inventory-incomplete': inventoryIncomplete }"
     elevation="0"
     @click="emit('toggle', item)"
   >
@@ -203,6 +211,9 @@ function usableSourceUrl(value) {
               <VChip v-bind="tooltipProps" size="x-small" variant="flat" class="info-chip customization-chip">{{ customizationLabel }}</VChip>
             </template>
           </VTooltip>
+          <VChip v-if="inventoryIncomplete" size="x-small" variant="flat" class="info-chip inventory-incomplete-chip">
+            库存不完整
+          </VChip>
         </div>
       </div>
       <div class="source-slot">
@@ -244,6 +255,10 @@ function usableSourceUrl(value) {
 }
 
 .media-poster-card:hover { transform: translateY(-2px); }
+.media-poster-card.inventory-incomplete {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 2px rgba(220,38,38,.42), 0 8px 20px rgba(127,29,29,.2);
+}
 .media-poster-card.selected {
   border-color: #22d3ee;
   box-shadow: 0 0 0 3px rgba(34,211,238,.48), 0 8px 22px rgba(8,145,178,.24);
@@ -316,6 +331,7 @@ button.corner-badge { cursor: pointer; }
 .resolution-chip { border-color: rgba(8,145,178,.30) !important; background: rgba(8,145,178,.20) !important; color: #22d3ee !important; }
 .category-chip { border-color: rgba(139,92,246,.30) !important; background: rgba(139,92,246,.20) !important; color: #a78bfa !important; }
 .customization-chip { border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
+.inventory-incomplete-chip { border-color: #b91c1c !important; background: #dc2626 !important; color: #fff !important; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
 .source-name,
 .target-name {

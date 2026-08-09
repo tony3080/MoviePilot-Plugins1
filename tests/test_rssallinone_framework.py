@@ -557,6 +557,21 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 3", card)
         self.assertIn("align-items: stretch", app_page)
 
+    def test_imported_inventory_warning_and_refresh_selection_contract(self) -> None:
+        card = (
+            PLUGIN_DIR / "src" / "components" / "MediaPosterCard.vue"
+        ).read_text(encoding="utf-8")
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("'inventory-incomplete': inventoryIncomplete", card)
+        self.assertIn("库存不完整", card)
+        self.assertIn("background: #dc2626 !important", card)
+        refresh_block = app_page.split(
+            "async function refreshSelectedInventory()", 1
+        )[1].split("async function saveManualIdentify", 1)[0]
+        self.assertNotIn("clearSelection()", refresh_block)
+
     def test_file_manager_page_contract(self) -> None:
         app_page = (
             PLUGIN_DIR / "src" / "components" / "AppPage.vue"
