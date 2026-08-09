@@ -1349,6 +1349,146 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(history["status"], "processed")
             self.assertTrue(history["payload"]["completion_processed"])
 
+    def test_completed_state_with_zero_progress_stays_in_qb_management(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "FALSECOMPLETE",
+                    "title": "False.Complete.2026",
+                    "state": "completed",
+                    "category": "movie",
+                    "content_path": "/downloads/false-complete.mkv",
+                    "progress": 0.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, import_enabled=True)
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-falsecomplete",
+                "content_key": "qb-main:falsecomplete",
+                "title": "False.Complete.2026",
+                "status": "queued",
+                "payload": {"info_hash": "falsecomplete"},
+            })
+
+            qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+            ).refresh_item("qb-main", "falsecomplete")
+
+            self.assertIsNotNone(store.get_torrent_snapshot(
+                "qb-main", "falsecomplete"
+            ))
+            self.assertEqual(store.list_media()["total"], 0)
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "falsecomplete"
+            )
+            self.assertEqual(history["status"], "queued")
+            self.assertFalse(bool(
+                history["payload"].get("completion_processed")
+            ))
+
+    def test_initial_rss_recognition_waits_for_completion_callback(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "CALLBACKONLY",
+                    "title": "Callback.Only.2026",
+                    "state": "pausedUP",
+                    "category": "movie",
+                    "content_path": "/downloads/callback-only.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(store, import_enabled=False)
+            store.upsert_rss_history({
+                "task_id": "rss-task",
+                "source_key": "source-callbackonly",
+                "content_key": "qb-main:callbackonly",
+                "title": "Callback.Only.2026",
+                "status": "queued",
+                "payload": {"info_hash": "callbackonly"},
+            })
+            service = qb_sync.QbSyncService(store=store, gateway=Gateway())
+
+            service.refresh_item(
+                "qb-main",
+                "callbackonly",
+                allow_completion_transition=False,
+            )
+            self.assertIsNotNone(store.get_torrent_snapshot(
+                "qb-main", "callbackonly"
+            ))
+
+            result = service.refresh_item(
+                "qb-main",
+                "callbackonly",
+                completion_confirmed=True,
+            )
+            self.assertTrue(result["completed"])
+            self.assertIsNone(store.get_torrent_snapshot(
+                "qb-main", "callbackonly"
+            ))
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "callbackonly"
+            )
+            self.assertEqual(history["status"], "processed")
+            self.assertTrue(history["payload"]["completion_processed"])
+
     def test_sync_only_recognizes_rss_task_downloader_category_pairs(self) -> None:
         class Gateway:
             recognitions = []

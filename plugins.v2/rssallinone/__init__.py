@@ -50,7 +50,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.21"
+    plugin_version = "0.13.22"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -657,6 +657,7 @@ class RssAllInOne(_PluginBase):
                 downloader_id,
                 info_hash,
                 schedule_delete=True,
+                completion_confirmed=True,
             )
             completed = bool(item.get("completed"))
             moved = bool(item.get("transitioned_to_library"))
@@ -1560,7 +1561,11 @@ class RssAllInOne(_PluginBase):
                 self._dispatch_rss_queue_locked()
 
     def _recognize_rss_qb_item(self, downloader_id: str, info_hash: str) -> None:
-        self._qb_sync_service().refresh_item(downloader_id, info_hash)
+        self._qb_sync_service().refresh_item(
+            downloader_id,
+            info_hash,
+            allow_completion_transition=False,
+        )
 
     def _start_qb_refresh(
         self,

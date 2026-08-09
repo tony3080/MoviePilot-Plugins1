@@ -809,6 +809,8 @@ class QbSyncService:
         manual_override: Optional[Dict[str, Any]] = None,
         *,
         schedule_delete: bool = False,
+        completion_confirmed: bool = False,
+        allow_completion_transition: bool = True,
     ) -> Dict[str, Any]:
         downloader_name = str(downloader_id or "").strip()
         normalized_hash = str(info_hash or "").strip().lower()
@@ -843,6 +845,8 @@ class QbSyncService:
             manual_override=manual_override,
             scope=scope,
             schedule_delete=schedule_delete,
+            completion_confirmed=completion_confirmed,
+            allow_completion_transition=allow_completion_transition,
         )
         snapshot = self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
@@ -1262,17 +1266,29 @@ class QbSyncService:
         manual_override: Optional[Dict[str, Any]] = None,
         scope: Optional[RssTaskQbScope] = None,
         schedule_delete: bool = False,
+        completion_confirmed: bool = False,
+        allow_completion_transition: bool = True,
     ) -> str:
         now = utc_now()
         info_hash = str(raw.get("hash") or "").strip().lower()
         title = str(raw.get("title") or raw.get("name") or "").strip()
         content_path = str(raw.get("content_path") or raw.get("path") or "")
-        torrent_completed = _torrent_completed(raw)
         existing = self.store.get_torrent_snapshot(downloader.name, info_hash) or {}
         existing_details = existing.get("details") or {}
         rss_history = self.store.latest_rss_history_for_torrent(
             downloader.name, info_hash
         ) or {}
+        completion_already_processed = bool(
+            (rss_history.get("payload") or {}).get("completion_processed")
+        )
+        torrent_completed = bool(
+            completion_already_processed
+            or completion_confirmed
+            or (
+                allow_completion_transition
+                and _torrent_completed(raw)
+            )
+        )
         media_id = f"qb:{downloader.name}:{info_hash}"
         task_scope = scope or RssTaskQbScope.from_tasks(
             self.store.list_all_rss_tasks()
@@ -1770,12 +1786,14 @@ def _source_url_for_torrent(
 
 
 def _torrent_completed(torrent: Dict[str, Any]) -> bool:
-    try:
-        progress = float(torrent.get("progress") or 0)
-    except (TypeError, ValueError):
-        progress = 0
-    if progress >= 99.999 or 0.999999 <= progress <= 1.0:
-        return True
+    raw_progress = torrent.get("progress")
+    if raw_progress not in (None, ""):
+        try:
+            progress = float(raw_progress)
+        except (TypeError, ValueError):
+            pass
+        else:
+            return progress >= 99.999 or 0.999999 <= progress <= 1.0
     state = str(torrent.get("state") or "").strip().casefold()
     return state in {
         "completed",
