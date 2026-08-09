@@ -177,17 +177,20 @@ class PendingImportCoordinator:
             "active_watches": len(self.store.list_import_watches(states=ACTIVE_WATCH_STATES)),
         }
 
-    def preflight(self) -> None:
+    def preflight(self, *, manage_external_switches: bool = True) -> None:
         self.config.validate()
         if not self.cd2.ready:
             raise RuntimeError("CloudDrive2 gRPC 地址或令牌未配置")
-        if not self.controls.ready:
+        if not self.scanner.ready:
+            raise RuntimeError("Emby 扫库配置不完整")
+        if manage_external_switches and not self.controls.ready:
             raise RuntimeError("追更或外部扫库联动配置不完整")
 
     def run(self, trigger_source: str) -> Dict[str, Any]:
         batch = self.store.latest_active_import_batch()
         if batch:
             state = str(batch.get("state") or "")
+            manage_external_switches = self._manages_external_switches(batch)
             if state == "waiting_scan_callback":
                 return self._supervise_scan_wait(batch)
             if state == "restore_failed":
@@ -205,14 +208,59 @@ class PendingImportCoordinator:
                 batch["resume_at"] = None
                 batch["updated_at"] = utc_now()
                 self.store.upsert_import_batch(batch)
-            if self._batch_snapshot(batch) is None:
-                self._fail_batch_without_switch_snapshot(batch)
-                return self.status()
-            if state in {"starting", "switch_snapshot_saved"}:
-                snapshot = self._batch_snapshot(batch)
-                if snapshot is None:
+            if manage_external_switches:
+                if self._batch_snapshot(batch) is None:
                     self._fail_batch_without_switch_snapshot(batch)
                     return self.status()
+                if state in {"starting", "switch_snapshot_saved"}:
+                    snapshot = self._batch_snapshot(batch)
+                    if snapshot is None:
+                        self._fail_batch_without_switch_snapshot(batch)
+                        return self.status()
+                    try:
+                        self.controls.disable(snapshot)
+                    except Exception as error:
+                        self._fail_batch_start(batch, error)
+                        raise
+                    batch.update({
+                        "state": "running",
+                        "details": {
+                            **dict(batch.get("details") or {}),
+                            "switches_disabled_at": utc_now(),
+                        },
+                        "updated_at": utc_now(),
+                    })
+                    self.store.upsert_import_batch(batch)
+                else:
+                    self.controls.ensure_disabled()
+        else:
+            if self.store.count_media_states(["pending", "importing"]) <= 0:
+                return self.status()
+            manage_external_switches = (
+                str(trigger_source or "").strip().casefold() != "manual"
+            )
+            self.preflight(manage_external_switches=manage_external_switches)
+            now = utc_now()
+            if manage_external_switches:
+                snapshot = self.controls.snapshot()
+                batch = {
+                    "id": uuid.uuid4().hex,
+                    "state": "switch_snapshot_saved",
+                    "trigger_source": str(trigger_source or "cron"),
+                    "current_media_id": "",
+                    "original_catchup_enabled": snapshot.catchup_enabled,
+                    "original_scan_enabled": snapshot.scan_enabled,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "risk_count": 0,
+                    "details": {
+                        "manage_external_switches": True,
+                        "switch_snapshot_saved_at": now,
+                    },
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                self.store.upsert_import_batch(batch)
                 try:
                     self.controls.disable(snapshot)
                 except Exception as error:
@@ -228,42 +276,24 @@ class PendingImportCoordinator:
                 })
                 self.store.upsert_import_batch(batch)
             else:
-                self.controls.ensure_disabled()
-        else:
-            if self.store.count_media_states(["pending", "importing"]) <= 0:
-                return self.status()
-            self.preflight()
-            snapshot = self.controls.snapshot()
-            now = utc_now()
-            batch = {
-                "id": uuid.uuid4().hex,
-                "state": "switch_snapshot_saved",
-                "trigger_source": str(trigger_source or "manual"),
-                "current_media_id": "",
-                "original_catchup_enabled": snapshot.catchup_enabled,
-                "original_scan_enabled": snapshot.scan_enabled,
-                "succeeded": 0,
-                "failed": 0,
-                "risk_count": 0,
-                "details": {"switch_snapshot_saved_at": now},
-                "created_at": now,
-                "updated_at": now,
-            }
-            self.store.upsert_import_batch(batch)
-            try:
-                self.controls.disable(snapshot)
-            except Exception as error:
-                self._fail_batch_start(batch, error)
-                raise
-            batch.update({
-                "state": "running",
-                "details": {
-                    **dict(batch.get("details") or {}),
-                    "switches_disabled_at": utc_now(),
-                },
-                "updated_at": utc_now(),
-            })
-            self.store.upsert_import_batch(batch)
+                batch = {
+                    "id": uuid.uuid4().hex,
+                    "state": "running",
+                    "trigger_source": "manual",
+                    "current_media_id": "",
+                    "original_catchup_enabled": None,
+                    "original_scan_enabled": None,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "risk_count": 0,
+                    "details": {
+                        "manage_external_switches": False,
+                        "switch_management_skipped_at": now,
+                    },
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                self.store.upsert_import_batch(batch)
 
         resumed = self._resume_current_card_if_needed(batch)
         if resumed == "risk":
@@ -322,8 +352,16 @@ class PendingImportCoordinator:
         batch["details"] = details
         batch["updated_at"] = utc_now()
         self.store.upsert_import_batch(batch)
+        manages_switches = self._manages_external_switches(batch)
         self._restore_and_finish(batch, final_state="completed")
-        return {"accepted": True, "message": "扫库完成回调已确认，外部开关已恢复"}
+        return {
+            "accepted": True,
+            "message": (
+                "扫库完成回调已确认，外部开关已恢复"
+                if manages_switches
+                else "扫库完成回调已确认"
+            ),
+        }
 
     def _resume_current_card_if_needed(self, batch: Dict[str, Any]) -> str:
         media_id = str(batch.get("current_media_id") or "").strip()
@@ -993,28 +1031,30 @@ class PendingImportCoordinator:
         return self.status()
 
     def _restore_and_finish(self, batch: Dict[str, Any], *, final_state: str) -> None:
-        snapshot = self._batch_snapshot(batch)
-        if snapshot is None:
-            self._fail_batch_without_switch_snapshot(batch)
-            return
         final_state = final_state if final_state in {"completed", "failed", "cancelled"} else "failed"
-        try:
-            self.controls.restore(snapshot)
-        except ExternalControlError as error:
-            details = dict(batch.get("details") or {})
-            details["restore_final_state"] = final_state
-            batch.update({
-                "state": "restore_failed",
-                "error_message": str(error),
-                "details": details,
-                "updated_at": utc_now(),
-            })
-            self.store.upsert_import_batch(batch)
-            self.notify("RSS一条龙恢复外部开关失败", str(error))
-            return
         details = dict(batch.get("details") or {})
+        if self._manages_external_switches(batch):
+            snapshot = self._batch_snapshot(batch)
+            if snapshot is None:
+                self._fail_batch_without_switch_snapshot(batch)
+                return
+            try:
+                self.controls.restore(snapshot)
+            except ExternalControlError as error:
+                details["restore_final_state"] = final_state
+                batch.update({
+                    "state": "restore_failed",
+                    "error_message": str(error),
+                    "details": details,
+                    "updated_at": utc_now(),
+                })
+                self.store.upsert_import_batch(batch)
+                self.notify("RSS一条龙恢复外部开关失败", str(error))
+                return
+            details["switches_restored_at"] = utc_now()
+        else:
+            details["switch_restore_skipped_at"] = utc_now()
         details.pop("restore_final_state", None)
-        details["switches_restored_at"] = utc_now()
         batch.update({
             "state": final_state,
             "current_media_id": "",
@@ -1024,6 +1064,13 @@ class PendingImportCoordinator:
             "updated_at": utc_now(),
         })
         self.store.upsert_import_batch(batch)
+
+    @staticmethod
+    def _manages_external_switches(batch: Dict[str, Any]) -> bool:
+        details = dict(batch.get("details") or {})
+        if "manage_external_switches" in details:
+            return bool(details.get("manage_external_switches"))
+        return True
 
     @staticmethod
     def _batch_snapshot(batch: Dict[str, Any]) -> Optional[ExternalSwitchSnapshot]:

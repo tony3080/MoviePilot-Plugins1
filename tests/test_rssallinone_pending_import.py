@@ -47,10 +47,12 @@ class FakeControls:
     ready = True
 
     def __init__(self):
+        self.snapshots = 0
         self.disabled = 0
         self.restored = 0
 
     def snapshot(self):
+        self.snapshots += 1
         return external_controls.ExternalSwitchSnapshot(True, True)
 
     def disable(self, snapshot=None):
@@ -70,6 +72,8 @@ class FakeControls:
 
 
 class FakeScanner:
+    ready = True
+
     def __init__(self):
         self.refreshes = 0
         self.status_calls = 0
@@ -359,7 +363,7 @@ class PendingImportTest(unittest.TestCase):
                 store, Path(directory) / "staging", cd2, controls, scanner
             )
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             batch = store.latest_active_import_batch()
             self.assertEqual(batch["state"], "waiting_scan_callback")
@@ -377,6 +381,52 @@ class PendingImportTest(unittest.TestCase):
             self.assertTrue(result["accepted"])
             self.assertEqual(controls.restored, 1)
             self.assertIsNone(store.latest_active_import_batch())
+
+    def test_manual_run_skips_external_switches_but_still_refreshes_emby(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            controls.ready = False
+            scanner = FakeScanner()
+            cd2 = FakeCd2({
+                "key": "upload-manual",
+                "dest_path": "/cloud/Movie/Movie.mkv",
+                "size": 1024,
+                "transferred_bytes": 0,
+                "status": "Finish",
+                "error_message": "",
+            })
+            coordinator = self.coordinator(
+                store, Path(directory) / "staging", cd2, controls, scanner
+            )
+
+            coordinator.run("manual")
+
+            batch = store.latest_active_import_batch()
+            batch_id = batch["id"]
+            self.assertEqual(batch["state"], "waiting_scan_callback")
+            self.assertFalse(batch["details"]["manage_external_switches"])
+            self.assertIsNone(batch["original_catchup_enabled"])
+            self.assertIsNone(batch["original_scan_enabled"])
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+            self.assertTrue(target.exists())
+            self.assertEqual(controls.snapshots, 0)
+            self.assertEqual(controls.disabled, 0)
+            self.assertEqual(controls.restored, 0)
+            self.assertEqual(scanner.refreshes, 1)
+
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+                "server_id": "srv1",
+                "task_id": "task1",
+            })
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["message"], "扫库完成回调已确认")
+            self.assertEqual(controls.restored, 0)
+            finished = store.get_import_batch(batch_id)
+            self.assertEqual(finished["state"], "completed")
+            self.assertIn("switch_restore_skipped_at", finished["details"])
 
     def test_completed_upload_missing_from_task_list_uses_cloud_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -412,7 +462,7 @@ class PendingImportTest(unittest.TestCase):
             )
             coordinator.config.cloud_verify_delay = 0
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertEqual(store.get_media_item("media-1")["state"], "imported")
             self.assertTrue(target.exists())
@@ -456,7 +506,7 @@ class PendingImportTest(unittest.TestCase):
             coordinator.config.cloud_verify_delay = 0
             coordinator.config.discovery_timeout = 0
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             item = store.get_media_item("media-1")
             self.assertEqual(item["state"], "imported")
@@ -499,7 +549,7 @@ class PendingImportTest(unittest.TestCase):
             coordinator.config.cloud_verify_delay = 0
             coordinator.config.discovery_timeout = 0
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertEqual(store.get_media_item("media-1")["state"], "identified")
             self.assertFalse(target.exists())
@@ -540,7 +590,7 @@ class PendingImportTest(unittest.TestCase):
             coordinator.config.cloud_verify_delay = 0
             coordinator.config.discovery_timeout = 0
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertEqual(store.get_media_item("media-1")["state"], "identified")
             self.assertFalse(target.exists())
@@ -564,7 +614,7 @@ class PendingImportTest(unittest.TestCase):
                 FakeScanner(),
             )
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertEqual(store.get_media_item("media-1")["state"], "imported")
             self.assertTrue(target.exists())
@@ -615,7 +665,7 @@ class PendingImportTest(unittest.TestCase):
             )
             coordinator.config.cloud_verify_delay = 0
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertEqual(store.get_media_item("media-1")["state"], "imported")
             self.assertTrue(target.exists())
@@ -643,7 +693,7 @@ class PendingImportTest(unittest.TestCase):
                 controls,
                 FakeScanner(),
             )
-            coordinator.run("manual")
+            coordinator.run("cron")
             result = coordinator.handle_scan_callback({
                 "event_name": "scheduledtasks.started",
                 "server_id": "srv1",
@@ -689,7 +739,7 @@ class PendingImportTest(unittest.TestCase):
                 DiscoveredTaskScanner(),
             )
             self.assertEqual(coordinator.config.callback_task_id, "task1")
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             result = coordinator.handle_scan_callback({
                 "event_name": "scheduledtasks.completed",
@@ -719,11 +769,11 @@ class PendingImportTest(unittest.TestCase):
                 controls,
                 FakeScanner(),
             )
-            coordinator.run("manual")
+            coordinator.run("cron")
             batch = store.latest_active_import_batch()
             batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
             store.upsert_import_batch(batch)
-            coordinator.run("manual")
+            coordinator.run("cron")
             self.assertIsNone(store.latest_active_import_batch())
             finished = store.get_import_batch(batch["id"])
             self.assertEqual(finished["state"], "failed")
@@ -753,12 +803,12 @@ class PendingImportTest(unittest.TestCase):
                 controls,
                 scanner,
             )
-            coordinator.run("manual")
+            coordinator.run("cron")
             batch = store.latest_active_import_batch()
             batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
             store.upsert_import_batch(batch)
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             extended = store.latest_active_import_batch()
             self.assertIsNotNone(extended)
@@ -793,7 +843,7 @@ class PendingImportTest(unittest.TestCase):
                 controls,
                 scanner,
             )
-            coordinator.run("manual")
+            coordinator.run("cron")
             batch = store.latest_active_import_batch()
             requested_at = pending_import._parse_time(batch["refresh_requested_at"])
             scanner.task_status.update({
@@ -810,7 +860,7 @@ class PendingImportTest(unittest.TestCase):
             batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
             store.upsert_import_batch(batch)
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             self.assertIsNone(store.latest_active_import_batch())
             finished = store.get_import_batch(batch["id"])
@@ -854,7 +904,7 @@ class PendingImportTest(unittest.TestCase):
                 FakeScanner(),
             )
             with self.assertRaises(RuntimeError):
-                coordinator.run("manual")
+                coordinator.run("cron")
             batch_id, state, catchup, scan = controls.observed
             self.assertEqual((state, catchup, scan), ("switch_snapshot_saved", 1, 1))
             finished = store.get_import_batch(batch_id)
@@ -878,7 +928,7 @@ class PendingImportTest(unittest.TestCase):
                 store, Path(directory) / "staging", cd2, controls, scanner
             )
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             item = store.get_media_item("media-1")
             self.assertEqual(item["state"], "identified")
@@ -907,7 +957,7 @@ class PendingImportTest(unittest.TestCase):
                 store, Path(directory) / "staging", cd2, controls, scanner
             )
 
-            coordinator.run("manual")
+            coordinator.run("cron")
 
             batch = store.latest_active_import_batch()
             self.assertEqual(batch["state"], "paused_risk")
