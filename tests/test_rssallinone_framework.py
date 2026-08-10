@@ -500,10 +500,10 @@ class RepositoryContractTest(unittest.TestCase):
         library_template = app_page[app_page.index("activeTab === 'library'"):]
         self.assertLess(
             library_template.index('v-model="mediaType"'),
-            library_template.index('class="state-filter-group"'),
+            library_template.index('v-model="mediaState"'),
         )
         self.assertLess(
-            library_template.index('class="state-filter-group"'),
+            library_template.index('v-model="mediaState"'),
             library_template.index('v-model="mediaRssTaskIds"'),
         )
 
@@ -620,7 +620,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertNotIn("{ title: '已发现', value: 'discovered' }", app_page)
         self.assertNotIn("{ title: '入库中', value: 'importing' }", app_page)
         self.assertIn("{ title: '已回退', value: 'rolled_back' }", app_page)
-        self.assertIn('<VBtnToggle\n                v-model="mediaState"', app_page)
+        self.assertIn('<VBtnToggle\n              v-model="mediaState"', app_page)
         self.assertIn(':value="option.value"', app_page)
         self.assertIn("mediaStateCounts[option.value]", app_page)
         self.assertIn("qbViewCounts.existing", app_page)
@@ -628,6 +628,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn('class="state-button-count"', app_page)
         self.assertIn("timeZone: 'Asia/Shanghai'", app_page)
         self.assertIn('formatBeijingTime(item.updated_at)', app_page)
+        self.assertEqual(
+            app_page.count('{{ formatBeijingTime(item.updated_at) }}'),
+            2,
+        )
 
     def test_rollback_card_uses_rollback_marker_before_failure_marker(self) -> None:
         card = (
@@ -651,9 +655,11 @@ class RepositoryContractTest(unittest.TestCase):
             self.assertIn(f'class="{class_name}"', card)
         self.assertIn("height: 342px", card)
         self.assertIn("flex: 1 1 48px", card)
-        self.assertIn("margin-top: auto", card)
+        self.assertIn("margin-top: 4px", card)
         self.assertIn("-webkit-line-clamp: 3", card)
-        self.assertIn("flex-basis: 100%", card)
+        self.assertIn("width: fit-content", card)
+        self.assertIn("customization.length > 12", card)
+        self.assertIn(".customization-chip-long", card)
         self.assertIn("-webkit-line-clamp: 2", card)
         self.assertIn("align-items: stretch", app_page)
 

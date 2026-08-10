@@ -209,7 +209,12 @@ function usableSourceUrl(value) {
           <VChip v-if="mediaCategory" size="x-small" variant="flat" class="info-chip category-chip">{{ mediaCategory }}</VChip>
           <VTooltip v-if="customization" :text="customization">
             <template #activator="{ props: tooltipProps }">
-              <VChip v-bind="tooltipProps" size="x-small" variant="flat" class="info-chip customization-chip">{{ customizationLabel }}</VChip>
+              <VChip
+                v-bind="tooltipProps"
+                size="x-small"
+                variant="flat"
+                :class="['info-chip', 'customization-chip', { 'customization-chip-long': customization.length > 12 }]"
+              >{{ customizationLabel }}</VChip>
             </template>
           </VTooltip>
           <VChip v-if="inventoryIncomplete" size="x-small" variant="flat" class="info-chip inventory-incomplete-chip">
@@ -331,7 +336,8 @@ button.corner-badge { cursor: pointer; }
 .tag-purple, .season-chip { border-color: rgba(124,58,237,.30) !important; background: rgba(124,58,237,.20) !important; color: #a78bfa !important; }
 .resolution-chip { border-color: rgba(8,145,178,.30) !important; background: rgba(8,145,178,.20) !important; color: #22d3ee !important; }
 .category-chip { border-color: rgba(139,92,246,.30) !important; background: rgba(139,92,246,.20) !important; color: #a78bfa !important; }
-.customization-chip { width: 100%; flex-basis: 100%; border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
+.customization-chip { width: fit-content; max-width: 100%; border-color: rgba(13,148,136,.45) !important; background: rgba(13,148,136,.25) !important; color: #5eead4 !important; }
+.customization-chip-long { width: 100%; flex-basis: 100%; }
 .customization-chip :deep(.v-chip__content) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .inventory-incomplete-chip { border-color: #b91c1c !important; background: #dc2626 !important; color: #fff !important; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
@@ -367,9 +373,8 @@ button.corner-badge { cursor: pointer; }
   display: flex;
   min-height: 27px;
   flex: 0 0 27px;
-  align-items: flex-end;
-  margin-top: auto;
-  padding-top: 7px;
+  align-items: flex-start;
+  margin-top: 4px;
 }
 .inventory-line { overflow: hidden; font-size: .78rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-ok { color: rgb(var(--v-theme-success)); }

@@ -1307,28 +1307,25 @@ onBeforeUnmount(() => {
               hide-details
               class="filter-control media-type-filter"
             />
-            <div class="state-filter-group" role="group" aria-label="状态">
-              <span class="filter-label">状态</span>
-              <VBtnToggle
-                v-model="mediaState"
-                mandatory
-                divided
-                density="compact"
-                variant="outlined"
-                color="primary"
-                class="state-filter-buttons"
+            <VBtnToggle
+              v-model="mediaState"
+              mandatory
+              divided
+              density="compact"
+              variant="outlined"
+              color="primary"
+              class="state-filter-buttons"
+              aria-label="状态"
+            >
+              <VBtn
+                v-for="option in mediaStateOptions"
+                :key="option.value"
+                :value="option.value"
               >
-                <VBtn
-                  v-for="option in mediaStateOptions"
-                  :key="option.value"
-                  :value="option.value"
-                  size="small"
-                >
-                  <span>{{ option.title }}</span>
-                  <span class="state-button-count">{{ Number(mediaStateCounts[option.value] || 0) }}</span>
-                </VBtn>
-              </VBtnToggle>
-            </div>
+                <span>{{ option.title }}</span>
+                <span class="state-button-count">{{ Number(mediaStateCounts[option.value] || 0) }}</span>
+              </VBtn>
+            </VBtnToggle>
             <VSelect
               v-model="mediaRssTaskIds"
               :items="rssTaskFilterOptions"
@@ -1478,6 +1475,7 @@ onBeforeUnmount(() => {
             density="compact"
             variant="outlined"
             color="primary"
+            class="state-filter-buttons"
           >
             <VBtn value="existing">
               <span>已存在</span>
@@ -1610,7 +1608,11 @@ onBeforeUnmount(() => {
           hide-default-footer
           class="data-table"
           no-data-text="暂无 RSS 历史"
-        />
+        >
+          <template #item.updated_at="{ item }">
+            {{ formatBeijingTime(item.updated_at) }}
+          </template>
+        </VDataTable>
         <VDataTable
           v-else
           :headers="siteHeaders"
@@ -2048,22 +2050,8 @@ onBeforeUnmount(() => {
   flex-basis: 170px;
 }
 
-.state-filter-group {
-  display: flex;
-  flex: 1 1 520px;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.filter-label {
-  flex: 0 0 auto;
-  color: rgba(var(--v-theme-on-surface), 0.68);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
 .state-filter-buttons {
+  flex: 0 1 auto;
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -2095,9 +2083,9 @@ onBeforeUnmount(() => {
 }
 
 .rss-task-filter {
-  flex: 1 1 320px;
-  min-width: 240px;
-  max-width: 520px;
+  flex: 0 1 300px;
+  min-width: 220px;
+  max-width: 340px;
 }
 
 .section-count {
@@ -2212,9 +2200,8 @@ onBeforeUnmount(() => {
     margin-inline: 0;
   }
 
-  .state-filter-group {
+  .state-filter-buttons {
     flex-basis: 100%;
-    align-items: flex-start;
   }
 
   .rss-task-filter {
