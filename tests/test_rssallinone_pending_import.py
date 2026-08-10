@@ -185,6 +185,7 @@ class PendingImportTest(unittest.TestCase):
                 card_timeout=3,
                 poll_interval=2,
                 scan_callback_timeout=30,
+                callback_server_name="Emby01",
                 callback_server_id="srv1",
                 callback_task_id="task1",
             ),
@@ -514,6 +515,81 @@ class PendingImportTest(unittest.TestCase):
             self.assertIsNone(store.latest_active_import_batch())
             finished = store.get_import_batch(batch["id"])
             self.assertIn("scan_callback_api_confirmation", finished["details"])
+
+    def test_emby_webhook_title_and_server_name_complete_scan_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            controls = FakeControls()
+            scanner = FakeScanner()
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-emby-webhook",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                controls,
+                scanner,
+            )
+
+            coordinator.run("cron")
+            batch = store.latest_active_import_batch()
+            result = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+                "title": "Scan media library completed",
+                "description": "The scheduled task has completed.",
+                "server_name": "Emby01",
+                "server_id": "srv1",
+            })
+
+            self.assertTrue(result["accepted"])
+            self.assertIsNone(store.latest_active_import_batch())
+            finished = store.get_import_batch(batch["id"])
+            self.assertEqual(
+                finished["details"]["scan_callback"]["server_name"], "Emby01"
+            )
+
+    def test_emby_webhook_rejects_wrong_title_or_server_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, _source, _target, _inventory = self.make_store(directory)
+            coordinator = self.coordinator(
+                store,
+                Path(directory) / "staging",
+                FakeCd2({
+                    "key": "upload-wrong-webhook",
+                    "dest_path": "/cloud/Movie/Movie.mkv",
+                    "size": 1024,
+                    "transferred_bytes": 0,
+                    "status": "Finish",
+                    "error_message": "",
+                }),
+                FakeControls(),
+                FakeScanner(),
+            )
+
+            coordinator.run("cron")
+            wrong_title = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+                "title": "Extract MediaInfo",
+                "server_name": "Emby01",
+                "server_id": "srv1",
+            })
+            wrong_server = coordinator.handle_scan_callback({
+                "event_name": "scheduledtasks.completed",
+                "title": "Scan media library",
+                "server_name": "another-server",
+                "server_id": "srv1",
+            })
+
+            self.assertFalse(wrong_title["accepted"])
+            self.assertIn("Title", wrong_title["message"])
+            self.assertFalse(wrong_server["accepted"])
+            self.assertIn("Server.Name", wrong_server["message"])
+            self.assertIsNotNone(store.latest_active_import_batch())
 
     def test_identifierless_callback_does_not_finish_unconfirmed_scan(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1185,6 +1261,25 @@ class ExternalControlTest(unittest.TestCase):
         started = scanner.start_emby_task("Extract MediaInfo")
         self.assertEqual(started["status"], "started")
         self.assertIn("/emby/ScheduledTasks/Running/extract-mediainfo?", http.started_task_url)
+
+    def test_emby_scan_client_uses_direct_emby_configuration(self):
+        http = FakeExternalHttp()
+        client = external_controls.EmbyScanClient(
+            "http://emby",
+            "emby-key",
+            "影视库",
+            "server-1",
+            http=http,
+        )
+
+        task = client.emby_task_status(task_name="Scan media library")
+        refresh = client.request_emby_refresh()
+
+        self.assertEqual(task["server_id"], "server-1")
+        self.assertEqual(task["node_name"], "影视库")
+        self.assertEqual(refresh["server_id"], "server-1")
+        self.assertEqual(refresh["node_name"], "影视库")
+        self.assertEqual(http.refreshes, 1)
 
 
 if __name__ == "__main__":

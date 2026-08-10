@@ -16,7 +16,7 @@ from .external_controls import (
     ExternalControlBundle,
     ExternalControlError,
     ExternalSwitchSnapshot,
-    ScanSystemClient,
+    EmbyScanClient,
 )
 from .media_actions import MediaActionService
 
@@ -120,6 +120,7 @@ class PendingImportConfig:
     risk_cooldown: int = 1800
     risk_retry_limit: int = 3
     scan_callback_timeout: int = 7200
+    callback_server_name: str = ""
     callback_server_id: str = ""
     callback_task_id: str = ""
     callback_task_name: str = ""
@@ -135,8 +136,11 @@ class PendingImportConfig:
             raise RuntimeError("源路径路由中没有可用的硬链接根目录")
         if not str(self.cd2_dest_root or "").strip():
             raise RuntimeError("未配置 CD2 云端目标根目录")
-        if not str(self.callback_server_id or "").strip():
-            raise RuntimeError("未配置 Emby 扫库回调服务器 ID")
+        if not (
+            str(self.callback_server_name or "").strip()
+            or str(self.callback_server_id or "").strip()
+        ):
+            raise RuntimeError("至少配置 SA 扫库节点名或 Emby 服务器 ID")
         if not (
             str(self.callback_task_id or "").strip()
             or str(self.callback_task_name or "").strip()
@@ -154,7 +158,7 @@ class PendingImportCoordinator:
         config: PendingImportConfig,
         cd2: CloudDriveClient,
         controls: ExternalControlBundle,
-        scanner: ScanSystemClient,
+        scanner: EmbyScanClient,
         stop_event: Any,
         logger: Any,
         notify: Optional[Callable[[str, str], None]] = None,
@@ -329,13 +333,25 @@ class PendingImportCoordinator:
         expected_server_id = str(
             refresh_target.get("server_id") or self.config.callback_server_id or ""
         ).strip()
+        expected_server_name = str(
+            self.config.callback_server_name
+            or refresh_target.get("server_name")
+            or ""
+        ).strip()
         callback_server_id = str(event.get("server_id") or "").strip()
+        callback_server_name = str(event.get("server_name") or "").strip()
         if (
             expected_server_id
             and callback_server_id
             and callback_server_id != expected_server_id
         ):
             return {"accepted": False, "message": "回调 server_id 与配置不匹配"}
+        if (
+            expected_server_name
+            and callback_server_name
+            and callback_server_name.casefold() != expected_server_name.casefold()
+        ):
+            return {"accepted": False, "message": "回调 Server.Name 与扫库节点名不匹配"}
         expected_task_id = str(
             refresh_target.get("task_id") or self.config.callback_task_id or ""
         ).strip()
@@ -344,7 +360,20 @@ class PendingImportCoordinator:
         ).strip()
         callback_task_id = str(event.get("task_id") or "").strip()
         callback_task_name = str(event.get("task_name") or "").strip()
-        callback_has_identity = bool(callback_task_id or callback_task_name)
+        callback_title = str(event.get("title") or "").strip()
+        if callback_title and expected_task_name:
+            if expected_task_name.casefold() not in callback_title.casefold():
+                return {"accepted": False, "message": "回调 Title 不是媒体库扫库任务"}
+        callback_has_identity = bool(
+            callback_task_id
+            or callback_task_name
+            or (
+                callback_title
+                and callback_server_name
+                and expected_server_name
+                and callback_server_name.casefold() == expected_server_name.casefold()
+            )
+        )
         if callback_task_id and expected_task_id:
             if callback_task_id != expected_task_id:
                 return {"accepted": False, "message": "回调 task_id 与扫库任务不匹配"}
@@ -1005,7 +1034,11 @@ class PendingImportCoordinator:
         try:
             refresh_target = self.scanner.request_emby_refresh()
             refresh_server_id = str(refresh_target.get("server_id") or "").strip()
-            if refresh_server_id and refresh_server_id != self.config.callback_server_id:
+            if (
+                refresh_server_id
+                and self.config.callback_server_id
+                and refresh_server_id != self.config.callback_server_id
+            ):
                 raise RuntimeError("扫库节点服务器 ID 与回调服务器 ID 配置不一致")
             batch = self.store.get_import_batch(batch["id"]) or batch
             details = dict(batch.get("details") or {})

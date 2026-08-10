@@ -56,7 +56,10 @@ const defaults = {
   scan_password: '',
   scan_setting_name: '',
   scan_target_name: '',
+  emby_scan_base_url: '',
+  emby_scan_api_key: '',
   scan_callback_secret: '',
+  scan_callback_server_name: '',
   scan_callback_server_id: '',
   scan_callback_task_id: '',
   scan_callback_task_name: '',
@@ -420,8 +423,25 @@ onMounted(() => {
         </VRow>
 
         <VDivider class="settings-divider" />
-        <div class="settings-section-title">Emby 扫库完成回调</div>
+        <div class="settings-section-title">Emby 扫库与完成回调</div>
         <VRow>
+          <VCol cols="12" md="6">
+            <VTextField
+              v-model="config.emby_scan_base_url"
+              label="扫库 Emby 地址 *"
+              placeholder="http://192.168.110.31:8096"
+              hint="待入库完成后直接调用此 Emby 刷新媒体库"
+              persistent-hint
+            />
+          </VCol>
+          <VCol cols="12" md="6">
+            <VTextField
+              v-model="config.emby_scan_api_key"
+              label="扫库 Emby API Key *"
+              type="password"
+              autocomplete="new-password"
+            />
+          </VCol>
           <VCol cols="12" md="6">
             <VTextField
               v-model="config.scan_callback_secret"
@@ -432,9 +452,17 @@ onMounted(() => {
           </VCol>
           <VCol cols="12" md="6">
             <VTextField
+              v-model="config.scan_callback_server_name"
+              label="Emby 服务器名称 *"
+              hint="必须与 Emby 回调 JSON 中的 Server.Name 完全一致"
+              persistent-hint
+            />
+          </VCol>
+          <VCol cols="12" md="6">
+            <VTextField
               v-model="config.scan_callback_server_id"
-              label="Emby 服务器 ID *"
-              hint="用于确认回调来自本轮刷新的目标 Emby"
+              label="Emby 服务器 ID"
+              hint="可选；填写后还会校验回调 JSON 中的 Server.Id"
               persistent-hint
             />
           </VCol>

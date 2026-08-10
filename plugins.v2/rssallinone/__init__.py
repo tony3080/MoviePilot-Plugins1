@@ -17,7 +17,12 @@ from app.plugins import _PluginBase
 from .capabilities import runtime_capabilities
 from .clouddrive_client import CloudDriveClient
 from .database import SQLiteStore, utc_now
-from .external_controls import CatchupSwitchClient, ExternalControlBundle, ScanSystemClient
+from .external_controls import (
+    CatchupSwitchClient,
+    EmbyScanClient,
+    ExternalControlBundle,
+    ScanSystemClient,
+)
 from .file_manager import FILE_BATCH_TASK_TYPE, FileManagerError, LocalFileManagerService
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
@@ -50,7 +55,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.43"
+    plugin_version = "0.13.44"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -74,7 +79,10 @@ class RssAllInOne(_PluginBase):
     _scan_password = ""
     _scan_setting_name = ""
     _scan_target_name = ""
+    _emby_scan_base_url = ""
+    _emby_scan_api_key = ""
     _scan_callback_secret = ""
+    _scan_callback_server_name = ""
     _scan_callback_server_id = ""
     _scan_callback_task_id = ""
     _scan_callback_task_name = ""
@@ -133,7 +141,16 @@ class RssAllInOne(_PluginBase):
         self._scan_password = str(config.get("scan_password") or "").strip()
         self._scan_setting_name = str(config.get("scan_setting_name") or "").strip()
         self._scan_target_name = str(config.get("scan_target_name") or "").strip()
+        self._emby_scan_base_url = str(
+            config.get("emby_scan_base_url") or ""
+        ).strip()
+        self._emby_scan_api_key = str(
+            config.get("emby_scan_api_key") or ""
+        ).strip()
         self._scan_callback_secret = str(config.get("scan_callback_secret") or "").strip()
+        self._scan_callback_server_name = str(
+            config.get("scan_callback_server_name") or ""
+        ).strip()
         self._scan_callback_server_id = str(
             config.get("scan_callback_server_id") or ""
         ).strip()
@@ -874,7 +891,8 @@ class RssAllInOne(_PluginBase):
         logger.info(
             "RSS一条龙：收到 Emby 计划任务回调，"
             f"event={event.get('event_name') or '<empty>'}，"
-            f"task={event.get('task_name') or event.get('task_id') or '<empty>'}，"
+            f"title={event.get('title') or event.get('task_name') or '<empty>'}，"
+            f"server={event.get('server_name') or event.get('server_id') or '<empty>'}，"
             f"accepted={bool(result.get('accepted'))}，"
             f"message={result.get('message') or ''}"
         )
@@ -1720,11 +1738,9 @@ class RssAllInOne(_PluginBase):
         }
         capabilities["scanner"] = {
             "ready": bool(
-                self._scan_base_url
-                and self._scan_username
-                and self._scan_password
-                and self._scan_setting_name
-                and self._scan_target_name
+                self._emby_scan_base_url
+                and self._emby_scan_api_key
+                and self._scan_callback_server_name
                 and self._scan_callback_secret
             ),
             "phase": "refresh_callback_restore",
@@ -1801,6 +1817,7 @@ class RssAllInOne(_PluginBase):
             scan_callback_timeout=self._bounded_int(
                 self._runtime_config.get("scan_callback_timeout"), 7200, 300, 43200
             ),
+            callback_server_name=self._scan_callback_server_name,
             callback_server_id=self._scan_callback_server_id,
             callback_task_id=self._scan_callback_task_id,
             callback_task_name=self._scan_callback_task_name,
@@ -1808,18 +1825,24 @@ class RssAllInOne(_PluginBase):
         catchup = CatchupSwitchClient(
             self._catchup_base_url, self._catchup_page_id, self._catchup_token
         )
-        scanner = ScanSystemClient(
+        scan_switch = ScanSystemClient(
             self._scan_base_url,
             self._scan_username,
             self._scan_password,
             self._scan_setting_name,
             self._scan_target_name,
         )
+        scanner = EmbyScanClient(
+            self._emby_scan_base_url,
+            self._emby_scan_api_key,
+            self._scan_callback_server_name,
+            self._scan_callback_server_id,
+        )
         return PendingImportCoordinator(
             store=self._require_store(),
             config=config,
             cd2=CloudDriveClient(self._cd2_grpc_addr, self._cd2_token),
-            controls=ExternalControlBundle(catchup, scanner),
+            controls=ExternalControlBundle(catchup, scan_switch),
             scanner=scanner,
             stop_event=self._stop_event,
             logger=logger,
@@ -1954,6 +1977,16 @@ class RssAllInOne(_PluginBase):
                 or server.get("id")
                 or ""
             ),
+            "server_name": str(
+                source.get("server_name")
+                or server.get("Name")
+                or server.get("name")
+                or ""
+            ),
+            "title": str(source.get("Title") or source.get("title") or ""),
+            "description": str(
+                source.get("Description") or source.get("description") or ""
+            ),
             "task_id": str(
                 source.get("task_id") or task.get("Id") or task.get("id") or ""
             ),
@@ -2071,7 +2104,10 @@ class RssAllInOne(_PluginBase):
             "scan_password": "",
             "scan_setting_name": "",
             "scan_target_name": "",
+            "emby_scan_base_url": "",
+            "emby_scan_api_key": "",
             "scan_callback_secret": "",
+            "scan_callback_server_name": "",
             "scan_callback_server_id": "",
             "scan_callback_task_id": "",
             "scan_callback_task_name": "",

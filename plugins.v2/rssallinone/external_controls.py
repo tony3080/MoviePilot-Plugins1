@@ -151,7 +151,7 @@ class CatchupSwitchClient:
 
 
 class ScanSystemClient:
-    """Control the external scan switch and request the target Emby refresh."""
+    """Control the external SA scan switch."""
 
     def __init__(
         self,
@@ -339,6 +339,7 @@ class ScanSystemClient:
         return {
             "host": target["host"],
             "node_name": target["node_name"],
+            "server_name": str(target.get("server_name") or target["node_name"]),
             "server_id": target["server_id"],
             "task_id": str(selected.get("Id") or selected.get("id") or "").strip(),
             "task_name": str(selected.get("Name") or selected.get("name") or "").strip(),
@@ -409,6 +410,7 @@ class ScanSystemClient:
         return {
             "host": target["host"],
             "node_name": target["node_name"],
+            "server_name": str(target.get("server_name") or target["node_name"]),
             "server_id": target["server_id"],
             "task_id": str(task.get("task_id") or ""),
             "task_name": str(task.get("task_name") or ""),
@@ -425,6 +427,40 @@ class ScanSystemClient:
             "api_key": api_key,
             "node_name": str(node.get("name") or self.target_name),
             "server_id": str(node.get("server_id") or node.get("serverId") or ""),
+        }
+
+
+class EmbyScanClient(ScanSystemClient):
+    """Refresh and inspect Emby without reading or changing the SA service."""
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        server_name: str = "",
+        server_id: str = "",
+        *,
+        http: Optional[JsonHttpClient] = None,
+    ):
+        self.base_url = str(base_url or "").rstrip("/")
+        self.api_key = str(api_key or "").strip()
+        self.server_name = str(server_name or "").strip()
+        self.server_id = str(server_id or "").strip()
+        self.http = http or JsonHttpClient()
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.base_url and self.api_key and self.server_name)
+
+    def _emby_target(self) -> Dict[str, str]:
+        if not self.ready:
+            raise ExternalControlError("Emby 扫库地址、API Key 或服务器名称未配置")
+        return {
+            "host": self.base_url,
+            "api_key": self.api_key,
+            "node_name": self.server_name,
+            "server_name": self.server_name,
+            "server_id": self.server_id,
         }
 
 

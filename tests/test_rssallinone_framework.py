@@ -12,6 +12,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import ANY
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -721,6 +722,9 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("外部扫库控制（SA）", config)
         self.assertIn("catchup_base_url", config)
         self.assertIn("scan_base_url", config)
+        self.assertIn("emby_scan_base_url", config)
+        self.assertIn("emby_scan_api_key", config)
+        self.assertIn("scan_callback_server_name", config)
         self.assertNotIn("external/catchup/control", config)
         self.assertNotIn("external/scan/control", config)
         self.assertIn("external/catchup/control", app_page)
@@ -948,6 +952,24 @@ class PluginLifecycleTest(unittest.TestCase):
                     {
                         "Event": "scheduledtasks.completed",
                         "task_id": "scan",
+                    },
+                )
+                self.assertEqual(
+                    plugin._normalize_emby_callback({
+                        "Event": "scheduledtasks.completed",
+                        "Title": "Scan media library",
+                        "Description": "The scheduled task has completed.",
+                        "Server": {"Name": "影视库", "Id": "server-1"},
+                    }),
+                    {
+                        "event_name": "scheduledtasks.completed",
+                        "event_time": ANY,
+                        "server_id": "server-1",
+                        "server_name": "影视库",
+                        "title": "Scan media library",
+                        "description": "The scheduled task has completed.",
+                        "task_id": "",
+                        "task_name": "",
                     },
                 )
                 service_ids = {item["id"] for item in plugin.get_service()}

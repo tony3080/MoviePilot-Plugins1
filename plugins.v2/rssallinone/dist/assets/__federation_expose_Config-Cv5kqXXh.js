@@ -77,7 +77,10 @@ const defaults = {
   scan_password: '',
   scan_setting_name: '',
   scan_target_name: '',
+  emby_scan_base_url: '',
+  emby_scan_api_key: '',
   scan_callback_secret: '',
+  scan_callback_server_name: '',
   scan_callback_server_id: '',
   scan_callback_task_id: '',
   scan_callback_task_name: '',
@@ -179,7 +182,7 @@ return (_ctx, _cache) => {
       color: "transparent"
     }, {
       default: _withCtx(() => [
-        _cache[29] || (_cache[29] = _createElementVNode("div", { class: "text-h6 ms-3" }, "RSS一条龙配置", -1)),
+        _cache[32] || (_cache[32] = _createElementVNode("div", { class: "text-h6 ms-3" }, "RSS一条龙配置", -1)),
         _createVNode(_component_VSpacer),
         _createVNode(_component_VTooltip, { text: "保存" }, {
           activator: _withCtx(({ props: tooltipProps }) => [
@@ -217,19 +220,19 @@ return (_ctx, _cache) => {
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VTab, { value: "general" }, {
-          default: _withCtx(() => [...(_cache[30] || (_cache[30] = [
+          default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
             _createTextVNode("常规", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "cd2" }, {
-          default: _withCtx(() => [...(_cache[31] || (_cache[31] = [
+          default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
             _createTextVNode("CloudDrive2", -1)
           ]))]),
           _: 1
         }),
         _createVNode(_component_VTab, { value: "external" }, {
-          default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
+          default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
             _createTextVNode("外部联动", -1)
           ]))]),
           _: 1
@@ -239,7 +242,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VWindow, {
       modelValue: section.value,
-      "onUpdate:modelValue": _cache[28] || (_cache[28] = $event => ((section).value = $event)),
+      "onUpdate:modelValue": _cache[31] || (_cache[31] = $event => ((section).value = $event)),
       class: "config-window"
     }, {
       default: _withCtx(() => [
@@ -290,14 +293,14 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VCol, { cols: "12" }, {
                   default: _withCtx(() => [
                     _createElementVNode("div", _hoisted_2, [
-                      _cache[34] || (_cache[34] = _createElementVNode("div", { class: "text-subtitle-2" }, "源路径路由", -1)),
+                      _cache[37] || (_cache[37] = _createElementVNode("div", { class: "text-subtitle-2" }, "源路径路由", -1)),
                       _createVNode(_component_VBtn, {
                         size: "small",
                         variant: "text",
                         "prepend-icon": "mdi-plus",
                         onClick: addRoute
                       }, {
-                        default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
+                        default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
                           _createTextVNode(" 添加路由 ", -1)
                         ]))]),
                         _: 1
@@ -308,7 +311,7 @@ return (_ctx, _cache) => {
                       class: "route-table"
                     }, {
                       default: _withCtx(() => [
-                        _cache[35] || (_cache[35] = _createElementVNode("thead", null, [
+                        _cache[38] || (_cache[38] = _createElementVNode("thead", null, [
                           _createElementVNode("tr", null, [
                             _createElementVNode("th", null, "启用"),
                             _createElementVNode("th", null, "名称"),
@@ -404,7 +407,7 @@ return (_ctx, _cache) => {
         }),
         _createVNode(_component_VWindowItem, { value: "cd2" }, {
           default: _withCtx(() => [
-            _cache[37] || (_cache[37] = _createElementVNode("div", { class: "settings-section-title" }, "CloudDrive2 连接与路径", -1)),
+            _cache[40] || (_cache[40] = _createElementVNode("div", { class: "settings-section-title" }, "CloudDrive2 连接与路径", -1)),
             _createVNode(_component_VRow, null, {
               default: _withCtx(() => [
                 _createVNode(_component_VCol, {
@@ -472,7 +475,7 @@ return (_ctx, _cache) => {
                 }),
                 _createVNode(_component_VCol, { cols: "12" }, {
                   default: _withCtx(() => [
-                    _cache[36] || (_cache[36] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, "自动使用的本地硬链接根目录", -1)),
+                    _cache[39] || (_cache[39] = _createElementVNode("div", { class: "text-caption text-medium-emphasis mb-2" }, "自动使用的本地硬链接根目录", -1)),
                     _createElementVNode("div", _hoisted_3, [
                       (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(stagingRoots.value, (root) => {
                         return (_openBlock(), _createBlock(_component_VChip, {
@@ -615,7 +618,7 @@ return (_ctx, _cache) => {
         }),
         _createVNode(_component_VWindowItem, { value: "external" }, {
           default: _withCtx(() => [
-            _cache[38] || (_cache[38] = _createElementVNode("div", { class: "settings-section-title" }, "追更控制（Emby）", -1)),
+            _cache[41] || (_cache[41] = _createElementVNode("div", { class: "settings-section-title" }, "追更控制（Emby）", -1)),
             _createVNode(_component_VRow, null, {
               default: _withCtx(() => [
                 _createVNode(_component_VCol, {
@@ -665,7 +668,7 @@ return (_ctx, _cache) => {
               _: 1
             }),
             _createVNode(_component_VDivider, { class: "settings-divider" }),
-            _cache[39] || (_cache[39] = _createElementVNode("div", { class: "settings-section-title" }, "外部扫库控制（SA）", -1)),
+            _cache[42] || (_cache[42] = _createElementVNode("div", { class: "settings-section-title" }, "外部扫库控制（SA）", -1)),
             _createVNode(_component_VRow, null, {
               default: _withCtx(() => [
                 _createVNode(_component_VCol, {
@@ -743,7 +746,7 @@ return (_ctx, _cache) => {
               _: 1
             }),
             _createVNode(_component_VDivider, { class: "settings-divider" }),
-            _cache[40] || (_cache[40] = _createElementVNode("div", { class: "settings-section-title" }, "Emby 扫库完成回调", -1)),
+            _cache[43] || (_cache[43] = _createElementVNode("div", { class: "settings-section-title" }, "Emby 扫库与完成回调", -1)),
             _createVNode(_component_VRow, null, {
               default: _withCtx(() => [
                 _createVNode(_component_VCol, {
@@ -752,8 +755,39 @@ return (_ctx, _cache) => {
                 }, {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
+                      modelValue: config.value.emby_scan_base_url,
+                      "onUpdate:modelValue": _cache[23] || (_cache[23] = $event => ((config.value.emby_scan_base_url) = $event)),
+                      label: "扫库 Emby 地址 *",
+                      placeholder: "http://192.168.110.31:8096",
+                      hint: "待入库完成后直接调用此 Emby 刷新媒体库",
+                      "persistent-hint": ""
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
+                      modelValue: config.value.emby_scan_api_key,
+                      "onUpdate:modelValue": _cache[24] || (_cache[24] = $event => ((config.value.emby_scan_api_key) = $event)),
+                      label: "扫库 Emby API Key *",
+                      type: "password",
+                      autocomplete: "new-password"
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_callback_secret,
-                      "onUpdate:modelValue": _cache[23] || (_cache[23] = $event => ((config.value.scan_callback_secret) = $event)),
+                      "onUpdate:modelValue": _cache[25] || (_cache[25] = $event => ((config.value.scan_callback_secret) = $event)),
                       label: "回调密钥 *",
                       type: "password",
                       autocomplete: "new-password"
@@ -767,10 +801,25 @@ return (_ctx, _cache) => {
                 }, {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
+                      modelValue: config.value.scan_callback_server_name,
+                      "onUpdate:modelValue": _cache[26] || (_cache[26] = $event => ((config.value.scan_callback_server_name) = $event)),
+                      label: "Emby 服务器名称 *",
+                      hint: "必须与 Emby 回调 JSON 中的 Server.Name 完全一致",
+                      "persistent-hint": ""
+                    }, null, 8, ["modelValue"])
+                  ]),
+                  _: 1
+                }),
+                _createVNode(_component_VCol, {
+                  cols: "12",
+                  md: "6"
+                }, {
+                  default: _withCtx(() => [
+                    _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_callback_server_id,
-                      "onUpdate:modelValue": _cache[24] || (_cache[24] = $event => ((config.value.scan_callback_server_id) = $event)),
-                      label: "Emby 服务器 ID *",
-                      hint: "用于确认回调来自本轮刷新的目标 Emby",
+                      "onUpdate:modelValue": _cache[27] || (_cache[27] = $event => ((config.value.scan_callback_server_id) = $event)),
+                      label: "Emby 服务器 ID",
+                      hint: "可选；填写后还会校验回调 JSON 中的 Server.Id",
                       "persistent-hint": ""
                     }, null, 8, ["modelValue"])
                   ]),
@@ -783,7 +832,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_callback_task_id,
-                      "onUpdate:modelValue": _cache[25] || (_cache[25] = $event => ((config.value.scan_callback_task_id) = $event)),
+                      "onUpdate:modelValue": _cache[28] || (_cache[28] = $event => ((config.value.scan_callback_task_id) = $event)),
                       label: "Emby 扫库任务 ID",
                       hint: "任务 ID 与任务名称至少填写一项；优先使用 ID",
                       "persistent-hint": ""
@@ -798,7 +847,7 @@ return (_ctx, _cache) => {
                   default: _withCtx(() => [
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.scan_callback_task_name,
-                      "onUpdate:modelValue": _cache[26] || (_cache[26] = $event => ((config.value.scan_callback_task_name) = $event)),
+                      "onUpdate:modelValue": _cache[29] || (_cache[29] = $event => ((config.value.scan_callback_task_name) = $event)),
                       label: "Emby 扫库任务名称",
                       hint: "任务 ID 与任务名称至少填写一项",
                       "persistent-hint": ""
@@ -827,7 +876,7 @@ return (_ctx, _cache) => {
                               default: _withCtx(() => [
                                 _createVNode(_component_VTextField, {
                                   modelValue: config.value.scan_callback_timeout,
-                                  "onUpdate:modelValue": _cache[27] || (_cache[27] = $event => ((config.value.scan_callback_timeout) = $event)),
+                                  "onUpdate:modelValue": _cache[30] || (_cache[30] = $event => ((config.value.scan_callback_timeout) = $event)),
                                   modelModifiers: { number: true },
                                   label: "扫库状态检查间隔（秒）",
                                   hint: "到达间隔后查询 Emby；仍在扫库则按相同间隔继续等待",
@@ -860,6 +909,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-c22d7879"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9f550139"]]);
 
 export { Config as default };
