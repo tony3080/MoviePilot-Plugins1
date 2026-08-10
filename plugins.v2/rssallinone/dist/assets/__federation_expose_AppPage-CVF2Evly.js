@@ -581,8 +581,9 @@ const _hoisted_9$1 = {
   key: 0,
   class: "size-label"
 };
-const _hoisted_10$1 = { class: "target-slot" };
-const _hoisted_11$1 = { class: "inventory-slot" };
+const _hoisted_10$1 = { class: "destination-block" };
+const _hoisted_11$1 = { class: "target-slot" };
+const _hoisted_12$1 = { class: "inventory-slot" };
 
 const {computed: computed$3} = await importShared('vue');
 
@@ -996,25 +997,27 @@ return (_ctx, _cache) => {
               : _createCommentVNode$3("", true)
           ]),
           _createElementVNode$3("div", _hoisted_10$1, [
-            (plannedName.value && __props.item.recognition_state !== 'unidentified')
-              ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
-                  key: 0,
-                  text: plannedName.value
-                }, {
-                  activator: _withCtx$3(({ props: tooltipProps }) => [
-                    _createElementVNode$3("p", _mergeProps$1(tooltipProps, { class: "target-name" }), _toDisplayString$3(plannedName.value), 17)
-                  ]),
-                  _: 1
-                }, 8, ["text"]))
-              : _createCommentVNode$3("", true)
-          ]),
-          _createElementVNode$3("div", _hoisted_11$1, [
-            (plannedName.value)
-              ? (_openBlock$3(), _createElementBlock$2("p", {
-                  key: 0,
-                  class: _normalizeClass(["inventory-line", inventoryClass.value])
-                }, _toDisplayString$3(inventoryText.value), 3))
-              : _createCommentVNode$3("", true)
+            _createElementVNode$3("div", _hoisted_11$1, [
+              (plannedName.value && __props.item.recognition_state !== 'unidentified')
+                ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
+                    key: 0,
+                    text: plannedName.value
+                  }, {
+                    activator: _withCtx$3(({ props: tooltipProps }) => [
+                      _createElementVNode$3("p", _mergeProps$1(tooltipProps, { class: "target-name" }), _toDisplayString$3(plannedName.value), 17)
+                    ]),
+                    _: 1
+                  }, 8, ["text"]))
+                : _createCommentVNode$3("", true)
+            ]),
+            _createElementVNode$3("div", _hoisted_12$1, [
+              (plannedName.value)
+                ? (_openBlock$3(), _createElementBlock$2("p", {
+                    key: 0,
+                    class: _normalizeClass(["inventory-line", inventoryClass.value])
+                  }, _toDisplayString$3(inventoryText.value), 3))
+                : _createCommentVNode$3("", true)
+            ])
           ])
         ]),
         _: 1
@@ -1026,7 +1029,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-bfd3a89d"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-0492706f"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 

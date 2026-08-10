@@ -232,15 +232,17 @@ function usableSourceUrl(value) {
       <div class="size-slot">
         <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
       </div>
-      <div class="target-slot">
-        <VTooltip v-if="plannedName && item.recognition_state !== 'unidentified'" :text="plannedName">
-          <template #activator="{ props: tooltipProps }">
-            <p v-bind="tooltipProps" class="target-name">{{ plannedName }}</p>
-          </template>
-        </VTooltip>
-      </div>
-      <div class="inventory-slot">
-        <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+      <div class="destination-block">
+        <div class="target-slot">
+          <VTooltip v-if="plannedName && item.recognition_state !== 'unidentified'" :text="plannedName">
+            <template #activator="{ props: tooltipProps }">
+              <p v-bind="tooltipProps" class="target-name">{{ plannedName }}</p>
+            </template>
+          </VTooltip>
+        </div>
+        <div class="inventory-slot">
+          <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+        </div>
       </div>
     </VCardText>
   </VCard>
@@ -362,11 +364,14 @@ button.corner-badge { cursor: pointer; }
   margin-top: 6px;
 }
 .size-label { width: fit-content; max-width: 100%; padding: 2px 6px; border: 1px solid #4b5563; border-radius: 4px; background: #374151; color: #fff; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.destination-block {
+  min-width: 0;
+  margin-top: auto;
+}
 .target-slot {
   min-height: 36px;
   max-height: 58px;
-  flex: 1 1 48px;
-  margin-top: 7px;
+  margin-top: 8px;
 }
 .target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.4; -webkit-line-clamp: 3; }
 .inventory-slot {
