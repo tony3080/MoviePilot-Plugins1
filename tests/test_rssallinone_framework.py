@@ -653,18 +653,18 @@ class RepositoryContractTest(unittest.TestCase):
             "target-slot", "inventory-slot",
         ):
             self.assertIn(f'class="{class_name}"', card)
-        self.assertIn("height: 342px", card)
-        self.assertIn("flex: 1 1 48px", card)
+        self.assertIn("height: auto", card)
+        self.assertIn("flex: 0 0 auto", card)
         self.assertIn("margin-top: 4px", card)
         self.assertIn('class="destination-block"', card)
         self.assertIn(".destination-block", card)
-        self.assertIn("margin-top: auto", card)
+        self.assertIn('v-if="plannedName" class="destination-block"', card)
         self.assertIn("-webkit-line-clamp: 3", card)
         self.assertIn("width: fit-content", card)
         self.assertIn("customization.length > 12", card)
         self.assertIn(".customization-chip-long", card)
         self.assertIn("-webkit-line-clamp: 2", card)
-        self.assertIn("align-items: stretch", app_page)
+        self.assertIn("align-items: start", app_page)
 
     def test_imported_inventory_warning_and_refresh_selection_contract(self) -> None:
         card = (

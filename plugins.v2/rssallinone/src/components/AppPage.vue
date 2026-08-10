@@ -2124,7 +2124,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 20px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .sub-tabs {

@@ -222,26 +222,26 @@ function usableSourceUrl(value) {
           </VChip>
         </div>
       </div>
-      <div class="source-slot">
-        <VTooltip v-if="sourceName" :text="sourceName">
+      <div v-if="sourceName" class="source-slot">
+        <VTooltip :text="sourceName">
           <template #activator="{ props: tooltipProps }">
             <p v-bind="tooltipProps" class="source-name">源: {{ sourceName }}</p>
           </template>
         </VTooltip>
       </div>
-      <div class="size-slot">
-        <span v-if="sizeText" class="size-label">大小: {{ sizeText }}</span>
+      <div v-if="sizeText" class="size-slot">
+        <span class="size-label">大小: {{ sizeText }}</span>
       </div>
-      <div class="destination-block">
+      <div v-if="plannedName" class="destination-block">
         <div class="target-slot">
-          <VTooltip v-if="plannedName && item.recognition_state !== 'unidentified'" :text="plannedName">
+          <VTooltip v-if="item.recognition_state !== 'unidentified'" :text="plannedName">
             <template #activator="{ props: tooltipProps }">
               <p v-bind="tooltipProps" class="target-name">{{ plannedName }}</p>
             </template>
           </VTooltip>
         </div>
         <div class="inventory-slot">
-          <p v-if="plannedName" class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
+          <p class="inventory-line" :class="inventoryClass">{{ inventoryText }}</p>
         </div>
       </div>
     </VCardText>
@@ -251,7 +251,7 @@ function usableSourceUrl(value) {
 <style scoped>
 .media-poster-card {
   display: flex;
-  height: 100%;
+  height: auto;
   flex-direction: column;
   overflow: hidden;
   border: 3px solid transparent;
@@ -288,9 +288,7 @@ button.corner-badge { cursor: pointer; }
 .version-chip { position: absolute; right: 10px; bottom: 10px; }
 .card-body {
   display: flex;
-  flex: 1 1 auto;
-  height: 342px;
-  min-height: 342px;
+  flex: 0 0 auto;
   flex-direction: column;
   padding: 12px 14px 14px;
 }
@@ -350,34 +348,26 @@ button.corner-badge { cursor: pointer; }
   -webkit-box-orient: vertical;
 }
 .source-slot {
-  min-height: 36px;
   max-height: 54px;
-  flex: 1 1 48px;
   margin-top: 8px;
 }
 .source-name { color: rgba(var(--v-theme-on-surface), .58); font-size: .78rem; line-height: 1.4; -webkit-line-clamp: 3; }
 .size-slot {
   display: flex;
-  min-height: 22px;
-  flex: 0 0 22px;
   align-items: flex-start;
   margin-top: 6px;
 }
 .size-label { width: fit-content; max-width: 100%; padding: 2px 6px; border: 1px solid #4b5563; border-radius: 4px; background: #374151; color: #fff; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
 .destination-block {
   min-width: 0;
-  margin-top: auto;
+  margin-top: 8px;
 }
 .target-slot {
-  min-height: 36px;
   max-height: 58px;
-  margin-top: 8px;
 }
 .target-name { color: rgb(var(--v-theme-info)); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .78rem; line-height: 1.4; -webkit-line-clamp: 3; }
 .inventory-slot {
   display: flex;
-  min-height: 27px;
-  flex: 0 0 27px;
   align-items: flex-start;
   margin-top: 4px;
 }

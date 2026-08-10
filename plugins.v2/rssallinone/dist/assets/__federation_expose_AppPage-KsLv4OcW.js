@@ -575,13 +575,19 @@ const _hoisted_3$2 = {
 const _hoisted_4$2 = { class: "title-slot" };
 const _hoisted_5$2 = { class: "tags-slot" };
 const _hoisted_6$2 = { class: "chip-row" };
-const _hoisted_7$2 = { class: "source-slot" };
-const _hoisted_8$1 = { class: "size-slot" };
-const _hoisted_9$1 = {
+const _hoisted_7$2 = {
   key: 0,
-  class: "size-label"
+  class: "source-slot"
 };
-const _hoisted_10$1 = { class: "destination-block" };
+const _hoisted_8$1 = {
+  key: 1,
+  class: "size-slot"
+};
+const _hoisted_9$1 = { class: "size-label" };
+const _hoisted_10$1 = {
+  key: 2,
+  class: "destination-block"
+};
 const _hoisted_11$1 = { class: "target-slot" };
 const _hoisted_12$1 = { class: "inventory-slot" };
 
@@ -978,47 +984,43 @@ return (_ctx, _cache) => {
                 : _createCommentVNode$3("", true)
             ])
           ]),
-          _createElementVNode$3("div", _hoisted_7$2, [
-            (sourceName.value)
-              ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
-                  key: 0,
-                  text: sourceName.value
-                }, {
+          (sourceName.value)
+            ? (_openBlock$3(), _createElementBlock$2("div", _hoisted_7$2, [
+                _createVNode$3(_component_VTooltip, { text: sourceName.value }, {
                   activator: _withCtx$3(({ props: tooltipProps }) => [
                     _createElementVNode$3("p", _mergeProps$1(tooltipProps, { class: "source-name" }), "源: " + _toDisplayString$3(sourceName.value), 17)
                   ]),
                   _: 1
-                }, 8, ["text"]))
-              : _createCommentVNode$3("", true)
-          ]),
-          _createElementVNode$3("div", _hoisted_8$1, [
-            (sizeText.value)
-              ? (_openBlock$3(), _createElementBlock$2("span", _hoisted_9$1, "大小: " + _toDisplayString$3(sizeText.value), 1))
-              : _createCommentVNode$3("", true)
-          ]),
-          _createElementVNode$3("div", _hoisted_10$1, [
-            _createElementVNode$3("div", _hoisted_11$1, [
-              (plannedName.value && __props.item.recognition_state !== 'unidentified')
-                ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
-                    key: 0,
-                    text: plannedName.value
-                  }, {
-                    activator: _withCtx$3(({ props: tooltipProps }) => [
-                      _createElementVNode$3("p", _mergeProps$1(tooltipProps, { class: "target-name" }), _toDisplayString$3(plannedName.value), 17)
-                    ]),
-                    _: 1
-                  }, 8, ["text"]))
-                : _createCommentVNode$3("", true)
-            ]),
-            _createElementVNode$3("div", _hoisted_12$1, [
-              (plannedName.value)
-                ? (_openBlock$3(), _createElementBlock$2("p", {
-                    key: 0,
+                }, 8, ["text"])
+              ]))
+            : _createCommentVNode$3("", true),
+          (sizeText.value)
+            ? (_openBlock$3(), _createElementBlock$2("div", _hoisted_8$1, [
+                _createElementVNode$3("span", _hoisted_9$1, "大小: " + _toDisplayString$3(sizeText.value), 1)
+              ]))
+            : _createCommentVNode$3("", true),
+          (plannedName.value)
+            ? (_openBlock$3(), _createElementBlock$2("div", _hoisted_10$1, [
+                _createElementVNode$3("div", _hoisted_11$1, [
+                  (__props.item.recognition_state !== 'unidentified')
+                    ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
+                        key: 0,
+                        text: plannedName.value
+                      }, {
+                        activator: _withCtx$3(({ props: tooltipProps }) => [
+                          _createElementVNode$3("p", _mergeProps$1(tooltipProps, { class: "target-name" }), _toDisplayString$3(plannedName.value), 17)
+                        ]),
+                        _: 1
+                      }, 8, ["text"]))
+                    : _createCommentVNode$3("", true)
+                ]),
+                _createElementVNode$3("div", _hoisted_12$1, [
+                  _createElementVNode$3("p", {
                     class: _normalizeClass(["inventory-line", inventoryClass.value])
-                  }, _toDisplayString$3(inventoryText.value), 3))
-                : _createCommentVNode$3("", true)
-            ])
-          ])
+                  }, _toDisplayString$3(inventoryText.value), 3)
+                ])
+              ]))
+            : _createCommentVNode$3("", true)
         ]),
         _: 1
       })
@@ -1029,7 +1031,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-0492706f"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-58e55de6"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 
@@ -3718,6 +3720,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-2c203fba"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-7555b0f5"]]);
 
 export { AppPage as default };
