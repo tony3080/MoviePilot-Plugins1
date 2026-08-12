@@ -28,6 +28,10 @@ TMDB_MARKER_PATTERN = re.compile(
 )
 YEAR_SUFFIX_PATTERN = re.compile(r"\s*\(\d{4}\)\s*$")
 SEPARATOR_PATTERN = re.compile(r"[\s._-]+")
+SEASON_DIRECTORY_PATTERN = re.compile(
+    r"^(?:season\s*0*(\d+)|s\s*0*(\d+)|第\s*0*(\d+)\s*季)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -244,6 +248,7 @@ class LocalInventoryChecker:
         tmdb_id: object = None,
         expected_directory: object = "",
         media_title: object = "",
+        alternate_titles: Sequence[object] = (),
         folder: Optional[InventoryFolder] = None,
         plan_errors: Sequence[Dict[str, Any]] = (),
         total_files: Optional[int] = None,
@@ -284,7 +289,13 @@ class LocalInventoryChecker:
         inventory_index = self._strm_index(located.path)
         title = str(located.title or media_title or "").strip()
         for expected in normalized:
-            result = self._check_one(located, inventory_index, expected, title)
+            result = self._check_one(
+                located,
+                inventory_index,
+                expected,
+                title,
+                alternate_titles,
+            )
             details["files"].append(result)
             if result["inventory_exists"]:
                 details["exists_count"] += 1
@@ -396,6 +407,7 @@ class LocalInventoryChecker:
         inventory_index: Dict[str, Any],
         expected: Dict[str, Any],
         media_title: str,
+        alternate_titles: Sequence[object] = (),
     ) -> Dict[str, Any]:
         inventory_relative = PurePosixPath(expected["inventory_relative_path"])
         inside_media = _inside_media_directory(inventory_relative, folder.path.name)
@@ -405,10 +417,19 @@ class LocalInventoryChecker:
         if len(exact_matches) > 1:
             return cls._ambiguous_result(expected, exact_matches, "exact_relative_path")
 
-        expected_feature = _feature_key(inventory_relative.stem, media_title)
+        expected_feature = _feature_key(
+            inventory_relative.stem,
+            media_title,
+            alternate_titles,
+        )
         feature_matches = [
             item for item in inventory_index["files"]
-            if _feature_key(item.stem, media_title) == expected_feature
+            if _same_inventory_scope(
+                inside_media,
+                item.relative_to(folder.path),
+            )
+            and _feature_key(item.stem, media_title, alternate_titles)
+            == expected_feature
         ]
         if len(feature_matches) == 1:
             return cls._exists_result(expected, feature_matches[0], "filename_features")
@@ -462,6 +483,14 @@ class LocalInventoryChecker:
         ]
 
 
+def inventory_title_for_tmdb_folder(folder: InventoryFolder) -> str:
+    """Return the stable library title only when TMDB identity locked the folder."""
+
+    if not str(folder.match_method or "").startswith("tmdb_id"):
+        return ""
+    return str(folder.title or "").strip()
+
+
 def _tmdb_ids(name: str) -> List[int]:
     result = []
     for match in TMDB_MARKER_PATTERN.finditer(str(name or "")):
@@ -484,14 +513,61 @@ def _inside_media_directory(path: PurePosixPath, folder_name: str) -> PurePosixP
     return path
 
 
-def _feature_key(value: str, media_title: str) -> str:
+def _feature_key(
+    value: str,
+    media_title: str,
+    alternate_titles: Sequence[object] = (),
+) -> str:
     normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
     normalized = SEPARATOR_PATTERN.sub(" ", normalized).strip()
-    title = unicodedata.normalize("NFKC", str(media_title or "")).casefold()
-    title = SEPARATOR_PATTERN.sub(" ", title).strip()
-    if title:
-        normalized = normalized.replace(title, "", 1).strip(" -._")
+    titles = [media_title, *list(alternate_titles or [])]
+    for raw_title in titles:
+        title = unicodedata.normalize("NFKC", str(raw_title or "")).casefold()
+        title = SEPARATOR_PATTERN.sub(" ", title).strip()
+        if not title:
+            continue
+        stripped = _strip_title_prefix(normalized, title)
+        if stripped != normalized:
+            normalized = stripped
+            break
     return SEPARATOR_PATTERN.sub(" ", normalized).strip()
+
+
+def _strip_title_prefix(value: str, title: str) -> str:
+    """Remove only a complete leading media title, never a middle occurrence."""
+
+    prefixes = (title, f"[{title}]", f"【{title}】")
+    for prefix in prefixes:
+        if value == prefix:
+            return ""
+        if value.startswith(f"{prefix} "):
+            return value[len(prefix):].strip()
+    return value
+
+
+def _same_inventory_scope(
+    expected: PurePosixPath,
+    candidate: PurePosixPath,
+) -> bool:
+    """Keep fallback filename matching inside the same TV season."""
+
+    expected_season = _season_from_parent(expected.parent)
+    candidate_season = _season_from_parent(candidate.parent)
+    if expected_season is not None:
+        return candidate_season == expected_season
+    if candidate_season is not None:
+        return False
+    return expected.parent.as_posix().casefold() == candidate.parent.as_posix().casefold()
+
+
+def _season_from_parent(parent: PurePosixPath) -> Optional[int]:
+    for part in reversed(parent.parts):
+        match = SEASON_DIRECTORY_PATTERN.fullmatch(part.strip())
+        if not match:
+            continue
+        value = next((item for item in match.groups() if item is not None), None)
+        return int(value) if value is not None else None
+    return None
 
 
 def _with_strm_suffix(path: PurePosixPath) -> PurePosixPath:

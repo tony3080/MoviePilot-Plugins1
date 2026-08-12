@@ -53,12 +53,13 @@ class MediaActionServiceTest(unittest.TestCase):
         state: str = "identified",
         media_type: str = "tv",
         category: str = "国产剧",
+        title: str = "测试剧",
     ):
         self.store.upsert_media_item({
             "id": media_id,
             "state": state,
             "media_type": media_type,
-            "title": "测试剧",
+            "title": title,
             "source_name": "Test.Show.S01",
             "source_path": str(self.root / "source"),
             "downloader_id": "qb-main",
@@ -641,12 +642,13 @@ class MediaActionServiceTest(unittest.TestCase):
         second.write_bytes(b"episode-two")
         inventory_root = self.root / "inventory"
         category_root = inventory_root / "国产剧"
-        media_directory = "测试剧 (2026) - {tmdbid=42}"
-        existing = category_root / media_directory / "Season 1" / "测试剧 - S01E01.strm"
+        media_directory = "百花杀 (2026) - {tmdbid=42}"
+        planned_directory = "东风信 (2026) - {tmdbid=42}"
+        existing = category_root / media_directory / "Season 1" / "百花杀 - S01E01.strm"
         existing.parent.mkdir(parents=True)
         existing.write_text("cloud://episode-one", encoding="utf-8")
-        first_rel = f"{media_directory}/Season 1/测试剧 - S01E01.mkv"
-        second_rel = f"{media_directory}/Season 1/测试剧 - S01E02.mkv"
+        first_rel = f"{planned_directory}/Season 1/东风信 - S01E01.mkv"
+        second_rel = f"{planned_directory}/Season 1/东风信 - S01E02.mkv"
         self.add_item("hash-refresh", [
             {
                 "source_relative_path": "E01.mkv",
@@ -662,7 +664,7 @@ class MediaActionServiceTest(unittest.TestCase):
                 "new_rel": second_rel,
                 "inventory_path": category_root / PurePosixPath(second_rel).with_suffix(".strm"),
             },
-        ], state="imported")
+        ], state="imported", title="东风信")
         library_layout = layout.LibraryLayout(str(inventory_root), [])
 
         result = media_actions.MediaInventoryRefreshService(
@@ -674,6 +676,9 @@ class MediaActionServiceTest(unittest.TestCase):
         self.assertEqual(result["total_files"], 2)
         item = self.store.get_media_item("hash-refresh")
         self.assertEqual(item["state"], "imported")
+        self.assertEqual(item["title"], "百花杀")
+        self.assertEqual(item["details"]["recognized_title"], "东风信")
+        self.assertEqual(item["details"]["inventory_title"], "百花杀")
         self.assertEqual(item["details"]["inventory"]["exists_count"], 1)
         self.assertEqual(
             item["details"]["inventory"]["refresh_mode"],

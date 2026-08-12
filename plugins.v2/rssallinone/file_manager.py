@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
-from .inventory import LocalInventoryChecker
+from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
 from .qb_sync import MoviePilotQbGateway, build_source_target_mappings
 
@@ -283,6 +283,8 @@ class LocalFileManagerService:
 
         media_type = ""
         media_title = ""
+        recognized_media_title = ""
+        inventory_title = ""
         tmdb_id = None
         season = override.get("season")
         category = str(override.get("category") or "").strip()
@@ -295,6 +297,7 @@ class LocalFileManagerService:
         if media:
             media_type = self.gateway.media_type(media)
             media_title = str(getattr(media, "title", "") or "")
+            recognized_media_title = media_title
             tmdb_id = getattr(media, "tmdb_id", None)
             season = getattr(media, "season", None)
             if season is None:
@@ -321,7 +324,7 @@ class LocalFileManagerService:
                     tmdb_id,
                     inventory_plan.get("expected_directory") or "",
                 )
-                inventory_title = str(folder.title or "").strip()
+                inventory_title = inventory_title_for_tmdb_folder(folder)
                 if (
                     folder.status == "exists"
                     and inventory_title
@@ -345,6 +348,7 @@ class LocalFileManagerService:
                     tmdb_id=tmdb_id,
                     expected_directory=inventory_plan.get("expected_directory") or "",
                     media_title=inventory_title or media_title,
+                    alternate_titles=[recognized_media_title],
                     folder=folder,
                     plan_errors=inventory_plan.get("plan_errors") or [],
                     total_files=inventory_plan.get("total_files"),
@@ -352,6 +356,11 @@ class LocalFileManagerService:
                 inventory["category"] = path_plan.get("category") or category
                 inventory["group"] = path_plan.get("group") or ""
                 inventory["layout_errors"] = path_plan.get("errors") or []
+                if inventory_title:
+                    media_title = inventory_title
+                    media_payload = details.get("media") or {}
+                    if isinstance(media_payload, dict):
+                        details["media"] = {**media_payload, "title": media_title}
                 mappings = build_source_target_mappings(
                     downloader_id=self.SOURCE_DOWNLOADER,
                     info_hash=source_hash,
@@ -382,6 +391,8 @@ class LocalFileManagerService:
             failure_code = "recognition_failed"
             failure_message = "MoviePilot 未识别到可靠媒体信息"
 
+        details["recognized_title"] = recognized_media_title
+        details["inventory_title"] = inventory_title
         previous = self.store.get_media_item(media_id) or existing or {}
         self.store.upsert_media_item({
             "id": media_id,

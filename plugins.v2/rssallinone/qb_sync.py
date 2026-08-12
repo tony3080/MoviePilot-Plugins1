@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from .database import SQLiteStore, utc_now
-from .inventory import LocalInventoryChecker
+from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
 from .rss_feed import mask_url
 
@@ -907,6 +907,8 @@ class QbSyncService:
         now = utc_now()
         media_type = ""
         media_title = ""
+        recognized_media_title = ""
+        inventory_title = ""
         tmdb_id = override.get("tmdb_id") or None
         season = override.get("season")
         category = str(override.get("category") or "").strip()
@@ -922,6 +924,7 @@ class QbSyncService:
         if media:
             media_type = self.gateway.media_type(media)
             media_title = str(getattr(media, "title", "") or "")
+            recognized_media_title = media_title
             tmdb_id = getattr(media, "tmdb_id", None)
             season = getattr(media, "season", None)
             if season is None:
@@ -948,7 +951,7 @@ class QbSyncService:
                     tmdb_id,
                     inventory_plan.get("expected_directory") or "",
                 )
-                inventory_title = str(folder.title or "").strip()
+                inventory_title = inventory_title_for_tmdb_folder(folder)
                 if (
                     folder.status == "exists"
                     and inventory_title
@@ -972,6 +975,7 @@ class QbSyncService:
                     tmdb_id=tmdb_id,
                     expected_directory=inventory_plan.get("expected_directory") or "",
                     media_title=inventory_title or media_title,
+                    alternate_titles=[recognized_media_title],
                     folder=folder,
                     plan_errors=inventory_plan.get("plan_errors") or [],
                     total_files=inventory_plan.get("total_files"),
@@ -979,6 +983,11 @@ class QbSyncService:
                 inventory_details["category"] = path_plan.get("category") or category
                 inventory_details["group"] = path_plan.get("group") or ""
                 inventory_details["layout_errors"] = path_plan.get("errors") or []
+                if inventory_title:
+                    media_title = inventory_title
+                    media_payload = details.get("media") or {}
+                    if isinstance(media_payload, dict):
+                        details["media"] = {**media_payload, "title": media_title}
                 refreshed_mappings = build_source_target_mappings(
                     downloader_id=downloader_id,
                     info_hash=info_hash,
@@ -1020,6 +1029,8 @@ class QbSyncService:
             "inventory": inventory_details,
             "file_mappings": refreshed_mappings,
             "manual_override": override,
+            "recognized_title": recognized_media_title,
+            "inventory_title": inventory_title,
         })
         previous_state = str(item.get("state") or "")
         if previous_state == "pending_import" and state in {"identified", "existing"}:
@@ -1420,11 +1431,14 @@ class QbSyncService:
         path_plan: Dict[str, Any] = {}
         file_mappings: List[Dict[str, Any]] = []
         mapping_refresh_succeeded = False
+        recognized_media_title = ""
+        inventory_title = ""
         if media:
             media_type = self.gateway.media_type(media)
             media_payload = self.gateway.media_payload(media)
             meta_payload = self.gateway.meta_payload(meta)
             media_title = str(getattr(media, "title", "") or "")
+            recognized_media_title = media_title
             media_year = str(getattr(media, "year", "") or "")
             tmdb_id = getattr(media, "tmdb_id", None)
             season = getattr(media, "season", None)
@@ -1467,7 +1481,7 @@ class QbSyncService:
                         tmdb_id,
                         inventory_plan.get("expected_directory") or "",
                     )
-                    inventory_title = str(folder.title or "").strip()
+                    inventory_title = inventory_title_for_tmdb_folder(folder)
                     if (
                         folder.status == "exists"
                         and inventory_title
@@ -1494,6 +1508,7 @@ class QbSyncService:
                                 inventory_plan.get("expected_directory") or ""
                             ),
                             media_title=inventory_title or media_title,
+                            alternate_titles=[recognized_media_title],
                             folder=folder,
                             plan_errors=inventory_plan.get("plan_errors") or [],
                             total_files=inventory_plan.get("total_files"),
@@ -1521,6 +1536,10 @@ class QbSyncService:
                         "scope": "mp_library_path",
                         "error": str(error),
                     }
+                if inventory_title:
+                    media_title = inventory_title
+                    if isinstance(media_payload, dict):
+                        media_payload = {**media_payload, "title": media_title}
                 media_state = (
                     "existing" if inventory_state == "exists" else "identified"
                 )
@@ -1557,6 +1576,8 @@ class QbSyncService:
             "file_mappings": file_mappings,
             "manual_override": override,
             "automatic_category": automatic_category,
+            "recognized_title": recognized_media_title,
+            "inventory_title": inventory_title,
             "rss_source": {
                 "task_id": str(rss_history.get("task_id") or ""),
                 "source_key": str(rss_history.get("source_key") or ""),

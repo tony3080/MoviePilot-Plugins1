@@ -144,6 +144,87 @@ class LocalInventoryCheckerTest(unittest.TestCase):
             self.assertEqual(details["files"][0]["new_rel"].split("/")[-1],
                              "库存中文标题 - S01E03 - 2160p WEB-DL.mkv")
 
+    def test_tmdb_folder_matches_changed_title_by_exact_episode_features(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_root = root / "百花杀 (2026) - {tmdbid=286506}"
+            inventory_file = (
+                media_root
+                / "Season 1"
+                / "百花杀 - S01E01 - 第 1 集 - 1080p.strm"
+            )
+            inventory_file.parent.mkdir(parents=True)
+            inventory_file.write_text("cloud://episode-1", encoding="utf-8")
+            checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
+
+            state, details = checker.check(
+                "tv",
+                [{
+                    "source_name": "Dong.Feng.Xin.S01E01.mkv",
+                    "relative_path": (
+                        "东风信 (2026) - {tmdbid=286506}/Season 01/"
+                        "东风信 - S01E01 - 第 1 集 - 1080p.mkv"
+                    ),
+                }],
+                tmdb_id=286506,
+                expected_directory="东风信 (2026) - {tmdbid=286506}",
+                media_title="百花杀",
+                alternate_titles=["东风信"],
+            )
+
+            self.assertEqual(state, "exists")
+            self.assertEqual(details["folder"]["match_method"], "tmdb_id")
+            self.assertEqual(details["folder"]["title"], "百花杀")
+            self.assertEqual(
+                details["files"][0]["match_method"], "filename_features"
+            )
+
+    def test_feature_match_rejects_extra_version_and_other_season(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            media_root = root / "百花杀 (2026) - {tmdbid=286506}"
+            extra_version = (
+                media_root
+                / "Season 1"
+                / "百花杀 - S01E01 - 第 1 集 - 1080p - 纯净版.strm"
+            )
+            other_season = (
+                media_root
+                / "Season 2"
+                / "百花杀 - S01E01 - 第 1 集 - 1080p.strm"
+            )
+            extra_version.parent.mkdir(parents=True)
+            other_season.parent.mkdir(parents=True)
+            extra_version.write_text("cloud://extra", encoding="utf-8")
+            other_season.write_text("cloud://wrong-season", encoding="utf-8")
+            checker = inventory.LocalInventoryChecker.from_config(f"tv => {root}")
+
+            state, details = checker.check(
+                "tv",
+                [{
+                    "relative_path": (
+                        "东风信 (2026) - {tmdbid=286506}/Season 01/"
+                        "东风信 - S01E01 - 第 1 集 - 1080p.mkv"
+                    ),
+                }],
+                tmdb_id=286506,
+                media_title="百花杀",
+                alternate_titles=["东风信"],
+            )
+
+            self.assertEqual(state, "missing")
+            self.assertEqual(details["exists_count"], 0)
+
+    def test_feature_key_only_removes_a_leading_complete_title(self) -> None:
+        self.assertEqual(
+            inventory._feature_key("[百花杀].S01E01.1080p", "百花杀"),
+            "s01e01 1080p",
+        )
+        self.assertEqual(
+            inventory._feature_key("版本.百花杀.S01E01.1080p", "百花杀"),
+            "版本 百花杀 s01e01 1080p",
+        )
+
     def test_duplicate_tmdb_directories_are_ambiguous(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -761,6 +842,16 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             first = store.get_torrent_snapshot("qb-main", "abc123")
             self.assertEqual(first["inventory_state"], "exists")
             self.assertEqual(first["recognition_state"], "identified")
+            self.assertEqual(first["media_title"], "库存中文标题")
+            self.assertEqual(
+                first["details"]["recognized_title"], "Example Movie"
+            )
+            self.assertEqual(
+                first["details"]["inventory_title"], "库存中文标题"
+            )
+            self.assertEqual(
+                first["details"]["media"]["title"], "库存中文标题"
+            )
             self.assertEqual(
                 first["source_url_masked"],
                 "https://pt.example/details.php?id=42",

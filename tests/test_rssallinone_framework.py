@@ -1023,6 +1023,32 @@ class PluginLifecycleTest(unittest.TestCase):
                     module.MoviePilotQbGateway.resume_torrents = original_resume_torrents
                 self.assertEqual(resumed, [("qb-main", ["pause-me"])])
 
+                stable_store = plugin._store
+                resumed.clear()
+
+                def list_torrents_during_reload(_downloader):
+                    plugin._store = None
+                    return [{
+                        "hash": "reload-race",
+                        "category": "movie",
+                        "state": "pausedDL",
+                        "progress": 0.1,
+                    }]
+
+                module.MoviePilotQbGateway.list_torrents = staticmethod(
+                    list_torrents_during_reload
+                )
+                module.MoviePilotQbGateway.resume_torrents = staticmethod(
+                    lambda downloader, hashes: resumed.append((downloader, hashes)) or True
+                )
+                try:
+                    plugin._scheduled_rss_start("movies")
+                finally:
+                    plugin._store = stable_store
+                    module.MoviePilotQbGateway.list_torrents = original_list_torrents
+                    module.MoviePilotQbGateway.resume_torrents = original_resume_torrents
+                self.assertEqual(resumed, [("qb-main", ["reload-race"])])
+
                 class MissingTorrentService:
                     @staticmethod
                     def find_torrent_downloader(_info_hash):

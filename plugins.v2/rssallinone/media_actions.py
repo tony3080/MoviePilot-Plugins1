@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .database import SQLiteStore, utc_now
 from .domain import can_transition
-from .inventory import LocalInventoryChecker
+from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
 
 
@@ -854,12 +854,24 @@ class MediaInventoryRefreshService:
             raise MediaActionError("文件映射中没有可用于库存复查的目标路径")
 
         checker = LocalInventoryChecker([])
+        folder = checker.locate_root(
+            inventory_base,
+            item.get("tmdb_id"),
+            expected_directory,
+        )
+        inventory_title = inventory_title_for_tmdb_folder(folder)
+        item_details = dict(item.get("details") or {})
+        recognized_title = str(
+            item_details.get("recognized_title") or item.get("title") or ""
+        )
         inventory_state, inventory_details = checker.check_root(
             inventory_base,
             expected_files,
             tmdb_id=item.get("tmdb_id"),
             expected_directory=expected_directory,
-            media_title=item.get("title") or "",
+            media_title=inventory_title or item.get("title") or "",
+            alternate_titles=[recognized_title],
+            folder=folder,
             total_files=len(expected_files),
         )
         inventory_details.update({
@@ -894,7 +906,17 @@ class MediaInventoryRefreshService:
         details = dict(updated_item.get("details") or {})
         details["inventory"] = inventory_details
         details["file_mappings"] = persisted_mappings
-        updated_item.update({"details": details, "updated_at": utc_now()})
+        if inventory_title:
+            details["recognized_title"] = recognized_title
+            details["inventory_title"] = inventory_title
+            media_payload = details.get("media") or {}
+            if isinstance(media_payload, dict):
+                details["media"] = {**media_payload, "title": inventory_title}
+        updated_item.update({
+            "title": inventory_title or item.get("title") or "",
+            "details": details,
+            "updated_at": utc_now(),
+        })
         self.store.upsert_media_item(updated_item)
         return {
             "item": self.store.get_media_item(identity),

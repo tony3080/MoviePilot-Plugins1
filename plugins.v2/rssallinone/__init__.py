@@ -55,7 +55,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.44"
+    plugin_version = "0.13.45"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1260,13 +1260,14 @@ class RssAllInOne(_PluginBase):
 
     def _scheduled_rss_start(self, task_id: str) -> None:
         """Resume paused, incomplete qB tasks for one RSS task."""
-        if not self._rss_enabled or not self._store:
+        store = self._store
+        if not self._rss_enabled or not store:
             return
         task_id = str(task_id or "").strip()
         task = next(
             (
                 item
-                for item in self._store.list_all_rss_tasks()
+                for item in store.list_all_rss_tasks()
                 if str(item.get("id") or "").strip() == task_id
             ),
             None,
@@ -1290,7 +1291,7 @@ class RssAllInOne(_PluginBase):
                 info_hash = str(raw.get("hash") or raw.get("info_hash") or "").strip().lower()
                 if not info_hash or self._torrent_is_completed(raw):
                     continue
-                snapshot = self._store.get_torrent_snapshot(downloader, info_hash)
+                snapshot = store.get_torrent_snapshot(downloader, info_hash)
                 if str((snapshot or {}).get("inventory_state") or "").strip() == "exists":
                     continue
                 state = str(raw.get("state") or "").strip().casefold()
