@@ -77,6 +77,30 @@ class ChineseTitleTest(unittest.TestCase):
         self.assertFalse(rss_rename.has_meaningful_chinese("Movie-国配-特效.mkv"))
         self.assertTrue(rss_rename.has_meaningful_chinese("[沙丘].Movie.mkv"))
 
+    def test_technical_chinese_labels_do_not_count_as_a_title(self):
+        self.assertFalse(rss_rename.has_meaningful_chinese(
+            "Movie.REMUX.杜比视界.高帧率.简体中文字幕.C版.mkv"
+        ))
+
+    def test_technical_rule_replacements_do_not_block_chinese_prefix(self):
+        value = rss_rename.transform_name(
+            "Movie.DoVi.HFR.mkv",
+            is_file=True,
+            rules=rss_rename.parse_rename_rules(
+                "DoVi => 杜比视界\nHFR => 高帧率"
+            ),
+            chinese_title="沙丘：第二部",
+        )
+
+        self.assertEqual(
+            value,
+            "[沙丘：第二部].Movie.杜比视界.高帧率.mkv",
+        )
+
+    def test_technical_brackets_are_not_selected_as_rss_title(self):
+        title = "[杜比视界][高帧率][简体中文字幕][沙丘：第二部 / Dune]"
+        self.assertEqual(rss_rename.extract_chinese_title(title), "沙丘：第二部")
+
 
 class RenamePlanTest(unittest.TestCase):
     def test_files_are_planned_before_deep_to_shallow_directories(self):
@@ -162,6 +186,41 @@ class RenameExecutionTest(unittest.TestCase):
         self.assertEqual(result["status"], "renamed")
         self.assertEqual([call[0] for call in gateway.calls], ["file", "folder"])
         self.assertEqual(result["final_files"][0]["name"], "[电影].Root/[电影].Movie.mkv")
+
+    def test_executor_waits_for_qb_file_list_before_renaming(self):
+        class Gateway:
+            def __init__(self):
+                self.reads = 0
+                self.calls = []
+
+            def list_torrent_files(self, _server, _info_hash):
+                self.reads += 1
+                if self.reads < 3:
+                    return []
+                return [{"index": 0, "name": "Movie.mkv", "size": 1}]
+
+            def rename_torrent_file(self, _server, _hash, old, new):
+                self.calls.append((old, new))
+
+            def rename_torrent_folder(self, *_args):
+                raise AssertionError("single-file torrent has no folder rename")
+
+        sleeps = []
+        gateway = Gateway()
+        result = rss_rename.QbSourceRenameService(
+            gateway, sleeper=sleeps.append
+        ).apply(
+            object(),
+            "abc123",
+            rss_title="[电影 / Movie][2026]",
+            rename_enabled=False,
+            rename_rules="",
+            add_chinese_title=True,
+        )
+
+        self.assertEqual(result["status"], "renamed")
+        self.assertEqual(sleeps, [1, 1])
+        self.assertEqual(gateway.calls, [("Movie.mkv", "[电影].Movie.mkv")])
 
 
 if __name__ == "__main__":

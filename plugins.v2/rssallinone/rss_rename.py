@@ -11,9 +11,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 CHINESE_TEXT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 NOISE_WORDS = {
-    "国语", "国配", "中字", "双语", "简体", "繁体", "内封", "字幕", "章节",
-    "特效", "特效字幕", "remux", "web-dl", "web", "蓝光", "原盘",
-    "c版", "s版", "u版",
+    "国语", "国配", "國語", "國配", "粤语", "普通话", "双语", "多语",
+    "国粤双语", "中英双语", "中字", "简中", "繁中", "简繁", "简体", "繁体",
+    "简体中文", "繁体中文", "中文字幕", "内封", "字幕", "章节", "特效",
+    "特效字幕", "杜比视界", "杜比全景声", "高帧率", "高质量", "纯净版",
+    "导演剪辑版", "加长版", "终极版", "未删减版", "重制版", "国版",
+    "remux", "web-dl", "web", "蓝光", "原盘", "c版", "s版", "u版",
 }
 LABEL_ONLY_PATTERN = re.compile(
     r"(?:^|[-_.\[\]()（）\s])(?:国语|国配|中字|双语|简体|繁体|内封|字幕|章节|特效|特效字幕)(?=$|[-_.\[\]()（）\s])",
@@ -103,12 +106,7 @@ def extract_chinese_title(rss_title: object) -> str:
             ).strip(" ._-[]")
             if not candidate or not CHINESE_TEXT.search(candidate):
                 continue
-            normalized = re.sub(r"[\s._-]+", "", candidate).casefold()
-            if not normalized or normalized in NOISE_WORDS:
-                continue
-            if all(word.casefold() in NOISE_WORDS for word in re.findall(
-                r"[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9-]+", candidate
-            )):
+            if not has_meaningful_chinese(candidate):
                 continue
             candidates.append(candidate)
     if not candidates:
@@ -129,10 +127,8 @@ def has_meaningful_chinese(value: object) -> bool:
     cleaned = LABEL_ONLY_PATTERN.sub(" ", str(value or ""))
     for noise in sorted(NOISE_WORDS, key=len, reverse=True):
         cleaned = re.sub(re.escape(noise), " ", cleaned, flags=re.IGNORECASE)
-    for segment in re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]+", cleaned):
-        if segment.casefold() not in NOISE_WORDS:
-            return True
-    return False
+    cleaned = re.sub(r"第\s*\d+\s*[季集部期]", " ", cleaned)
+    return bool(CHINESE_TEXT.search(cleaned))
 
 
 def transform_name(
@@ -248,7 +244,7 @@ class QbSourceRenameService:
         if not enabled:
             return self._result("skipped", chinese_title, rules, [], [], [])
         try:
-            files = self.gateway.list_torrent_files(server, info_hash)
+            files = self._wait_for_files(server, info_hash)
         except Exception as error:
             return self._result(
                 "failed", chinese_title, rules, [], [], [],
@@ -321,6 +317,16 @@ class QbSourceRenameService:
             final_files,
             error=read_error,
         )
+
+    def _wait_for_files(self, server: Any, info_hash: str) -> List[Any]:
+        files: List[Any] = []
+        for attempt in range(4):
+            files = list(self.gateway.list_torrent_files(server, info_hash) or [])
+            if files:
+                return files
+            if attempt < 3:
+                self.sleeper(1)
+        return files
 
     def _safe_list(self, server: Any, info_hash: str) -> Tuple[List[Any], str]:
         try:
