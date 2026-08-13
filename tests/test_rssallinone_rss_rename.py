@@ -209,19 +209,21 @@ class RenameExecutionTest(unittest.TestCase):
         class Gateway:
             def __init__(self):
                 self.calls = []
-                self.reads = 0
+                self.files = [{"index": 0, "name": "Root/Movie.mkv", "size": 1}]
 
             def list_torrent_files(self, _server, _info_hash):
-                self.reads += 1
-                if self.reads == 1:
-                    return [{"index": 0, "name": "Root/Movie.mkv", "size": 1}]
-                return [{"index": 0, "name": "[电影].Root/[电影].Movie.mkv", "size": 1}]
+                return self.files
 
             def rename_torrent_file(self, _server, _hash, old, new):
                 self.calls.append(("file", old, new))
+                self.files[0]["name"] = new
 
             def rename_torrent_folder(self, _server, _hash, old, new):
                 self.calls.append(("folder", old, new))
+                prefix = f"{old}/"
+                self.files[0]["name"] = (
+                    f"{new}/{self.files[0]['name'][len(prefix):]}"
+                )
 
         gateway = Gateway()
         result = rss_rename.QbSourceRenameService(gateway).apply(
@@ -237,20 +239,147 @@ class RenameExecutionTest(unittest.TestCase):
         self.assertEqual([call[0] for call in gateway.calls], ["file", "folder"])
         self.assertEqual(result["final_files"][0]["name"], "[电影].Root/[电影].Movie.mkv")
 
+    def test_executor_waits_for_file_rename_before_renaming_folder(self):
+        class Gateway:
+            def __init__(self):
+                self.calls = []
+                self.files = [{"index": 0, "name": "Root-CHD/Movie-CHD.mkv"}]
+                self.pending_file = None
+                self.file_polls = 0
+
+            def list_torrent_files(self, _server, _info_hash):
+                if self.pending_file:
+                    self.file_polls += 1
+                    if self.file_polls >= 3:
+                        self.files[0]["name"] = self.pending_file
+                        self.pending_file = None
+                return self.files
+
+            def rename_torrent_file(self, _server, _hash, old, new):
+                self.calls.append(("file", old, new))
+                self.pending_file = new
+
+            def rename_torrent_folder(self, _server, _hash, old, new):
+                self.calls.append(("folder", old, new))
+                prefix = f"{old}/"
+                self.files[0]["name"] = (
+                    f"{new}/{self.files[0]['name'][len(prefix):]}"
+                )
+
+        gateway = Gateway()
+        result = rss_rename.QbSourceRenameService(
+            gateway, sleeper=lambda _seconds: None
+        ).apply(
+            object(),
+            "abc123",
+            rss_title="",
+            rename_enabled=True,
+            rename_rules="CHD => REMUX-C版",
+            add_chinese_title=False,
+        )
+
+        self.assertEqual(result["status"], "renamed")
+        self.assertEqual([call[0] for call in gateway.calls], ["file", "folder"])
+        self.assertEqual(
+            result["final_files"][0]["name"],
+            "Root-REMUX-C版/Movie-REMUX-C版.mkv",
+        )
+
+    def test_executor_fails_when_qb_reports_success_without_applying_rename(self):
+        class Gateway:
+            files = [{"index": 0, "name": "Movie-CHD.mkv"}]
+
+            def list_torrent_files(self, _server, _info_hash):
+                return self.files
+
+            @staticmethod
+            def rename_torrent_file(_server, _hash, _old, _new):
+                return None
+
+            @staticmethod
+            def rename_torrent_folder(*_args):
+                return None
+
+        result = rss_rename.QbSourceRenameService(
+            Gateway(), sleeper=lambda _seconds: None
+        ).apply(
+            object(),
+            "abc123",
+            rss_title="",
+            rename_enabled=True,
+            rename_rules="CHD => REMUX-C版",
+            add_chinese_title=False,
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("改名未落地", result["error"])
+
+    def test_marker_stage_uses_verified_base_name_and_keeps_fixed_order(self):
+        class Gateway:
+            def __init__(self):
+                self.files = [{"index": 0, "name": "Root-CHD/Movie-CHD.mkv"}]
+
+            def list_torrent_files(self, _server, _info_hash):
+                return self.files
+
+            def rename_torrent_file(self, _server, _hash, old, new):
+                for item in self.files:
+                    if item["name"] == old:
+                        item["name"] = new
+
+            def rename_torrent_folder(self, _server, _hash, old, new):
+                prefix = f"{old}/"
+                for item in self.files:
+                    if item["name"].startswith(prefix):
+                        item["name"] = f"{new}/{item['name'][len(prefix):]}"
+
+        gateway = Gateway()
+        service = rss_rename.QbSourceRenameService(
+            gateway, sleeper=lambda _seconds: None
+        )
+        base = service.apply(
+            object(),
+            "abc123",
+            rss_title="[电影 / Movie]",
+            rename_enabled=True,
+            rename_rules="CHD => REMUX-C版",
+            add_chinese_title=True,
+        )
+        markers = service.apply(
+            object(),
+            "abc123",
+            rss_title="",
+            rename_enabled=False,
+            rename_rules="",
+            add_chinese_title=False,
+            add_cn=True,
+            add_fx=True,
+        )
+
+        self.assertEqual(base["status"], "renamed")
+        self.assertEqual(markers["status"], "renamed")
+        self.assertEqual(
+            markers["final_files"][0]["name"],
+            "[电影].Root-国配-特效-REMUX-C版/"
+            "[电影].Movie-国配-特效-REMUX-C版.mkv",
+        )
+
     def test_executor_waits_for_qb_file_list_before_renaming(self):
         class Gateway:
             def __init__(self):
                 self.reads = 0
                 self.calls = []
+                self.current_name = "Movie.mkv"
 
             def list_torrent_files(self, _server, _info_hash):
                 self.reads += 1
                 if self.reads < 3:
                     return []
-                return [{"index": 0, "name": "Movie.mkv", "size": 1}]
+                return [{"index": 0, "name": self.current_name, "size": 1}]
 
             def rename_torrent_file(self, _server, _hash, old, new):
                 self.calls.append((old, new))
+                self.current_name = new
 
             def rename_torrent_folder(self, *_args):
                 raise AssertionError("single-file torrent has no folder rename")

@@ -297,25 +297,33 @@ class QbSourceRenameService:
         completed: List[Tuple[str, str, str]] = []
         try:
             for old_path, new_path in file_ops:
-                self.gateway.rename_torrent_file(server, info_hash, old_path, new_path)
+                self._rename_and_confirm(
+                    server,
+                    info_hash,
+                    kind="file",
+                    old_path=old_path,
+                    new_path=new_path,
+                )
                 completed.append(("file", old_path, new_path))
             for old_path, new_path in directory_ops:
-                renamed = False
-                last_error: Optional[Exception] = None
-                for attempt in range(3):
-                    try:
-                        self.gateway.rename_torrent_folder(
-                            server, info_hash, old_path, new_path
-                        )
-                        renamed = True
-                        completed.append(("folder", old_path, new_path))
-                        break
-                    except Exception as error:
-                        last_error = error
-                        if attempt < 2:
-                            self.sleeper(0.2)
-                if not renamed:
-                    raise last_error or RssRenameError(f"目录改名失败：{old_path}")
+                self._rename_and_confirm(
+                    server,
+                    info_hash,
+                    kind="folder",
+                    old_path=old_path,
+                    new_path=new_path,
+                )
+                completed.append(("folder", old_path, new_path))
+            expected_paths = _expected_paths_after_renames(
+                files,
+                file_ops=file_ops,
+                directory_ops=directory_ops,
+            )
+            final_files = self._wait_for_expected_paths(
+                server,
+                info_hash,
+                expected_paths,
+            )
         except Exception as error:
             rollback_errors = self._rollback(server, info_hash, completed)
             final_files, read_error = self._safe_list(server, info_hash)
@@ -327,15 +335,107 @@ class QbSourceRenameService:
                 rollback_errors=rollback_errors,
             )
 
-        final_files, read_error = self._safe_list(server, info_hash)
         return self._result(
-            "failed" if read_error else "renamed",
+            "renamed",
             chinese_title,
             rules,
             file_ops,
             directory_ops,
             final_files,
-            error=read_error,
+        )
+
+    def _rename_and_confirm(
+        self,
+        server: Any,
+        info_hash: str,
+        *,
+        kind: str,
+        old_path: str,
+        new_path: str,
+    ) -> None:
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                if kind == "file":
+                    self.gateway.rename_torrent_file(
+                        server, info_hash, old_path, new_path
+                    )
+                else:
+                    self.gateway.rename_torrent_folder(
+                        server, info_hash, old_path, new_path
+                    )
+            except Exception as error:
+                last_error = error
+            if self._wait_for_path_change(
+                server,
+                info_hash,
+                kind=kind,
+                old_path=old_path,
+                new_path=new_path,
+            ):
+                return
+            if attempt < 2:
+                self.sleeper(0.2)
+        label = "文件" if kind == "file" else "目录"
+        detail = f"：{last_error}" if last_error else ""
+        raise RssRenameError(
+            f"qB {label}改名未落地：{old_path} -> {new_path}{detail}"
+        )
+
+    def _wait_for_path_change(
+        self,
+        server: Any,
+        info_hash: str,
+        *,
+        kind: str,
+        old_path: str,
+        new_path: str,
+    ) -> bool:
+        old_identity = old_path.casefold()
+        new_identity = new_path.casefold()
+        for poll in range(5):
+            try:
+                paths = _file_path_identities(
+                    self.gateway.list_torrent_files(server, info_hash)
+                )
+            except Exception:
+                paths = set()
+            if kind == "file":
+                changed = new_identity in paths and old_identity not in paths
+            else:
+                old_prefix = f"{old_identity}/"
+                new_prefix = f"{new_identity}/"
+                changed = (
+                    any(path.startswith(new_prefix) for path in paths)
+                    and not any(path.startswith(old_prefix) for path in paths)
+                )
+            if changed:
+                return True
+            if poll < 4:
+                self.sleeper(0.2)
+        return False
+
+    def _wait_for_expected_paths(
+        self,
+        server: Any,
+        info_hash: str,
+        expected_paths: Sequence[str],
+    ) -> List[Any]:
+        expected = {path.casefold() for path in expected_paths}
+        final_files: List[Any] = []
+        for poll in range(6):
+            final_files = list(
+                self.gateway.list_torrent_files(server, info_hash) or []
+            )
+            if _file_path_identities(final_files) == expected:
+                return final_files
+            if poll < 5:
+                self.sleeper(0.2)
+        actual = sorted(_file_path_identities(final_files))
+        missing = sorted(expected - set(actual))
+        raise RssRenameError(
+            "qB 改名结果与计划不一致"
+            + (f"，缺少：{missing[0]}" if missing else "")
         )
 
     def _wait_for_files(self, server: Any, info_hash: str) -> List[Any]:
@@ -462,6 +562,33 @@ def build_rename_plan(
     )
     _preflight_conflicts(directory_ops, "目录", list(directories))
     return file_ops, directory_ops
+
+
+def _file_path_identities(files: Iterable[Any]) -> set[str]:
+    return {
+        str(_file_payload(item).get("name") or "").casefold()
+        for item in files or []
+        if str(_file_payload(item).get("name") or "")
+    }
+
+
+def _expected_paths_after_renames(
+    files: Iterable[Any],
+    *,
+    file_ops: Sequence[Tuple[str, str]],
+    directory_ops: Sequence[Tuple[str, str]],
+) -> List[str]:
+    file_map = {old.casefold(): new for old, new in file_ops}
+    paths = []
+    for item in files or []:
+        path = str(_file_payload(item).get("name") or "")
+        path = file_map.get(path.casefold(), path)
+        for old_dir, new_dir in directory_ops:
+            old_prefix = f"{old_dir}/"
+            if path.casefold().startswith(old_prefix.casefold()):
+                path = f"{new_dir}/{path[len(old_prefix):]}"
+        paths.append(path)
+    return paths
 
 
 def _file_payload(item: Any) -> Dict[str, Any]:
