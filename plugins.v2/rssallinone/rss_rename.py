@@ -13,6 +13,7 @@ CHINESE_TEXT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 NOISE_WORDS = {
     "国语", "国配", "國語", "國配", "粤语", "普通话", "双语", "多语",
     "国粤双语", "中英双语", "中字", "简中", "繁中", "简繁", "简体", "繁体",
+    "简英双语", "繁英双语", "简日双语", "繁日双语", "简粤双语", "繁粤双语",
     "简体中文", "繁体中文", "中文字幕", "内封", "字幕", "章节", "特效",
     "特效字幕", "杜比视界", "杜比全景声", "高帧率", "高质量", "纯净版",
     "导演剪辑版", "加长版", "终极版", "未删减版", "重制版", "国版",
@@ -24,8 +25,19 @@ LABEL_ONLY_PATTERN = re.compile(
 )
 REGEX_RULE_PATTERN = re.compile(r"^/(.*)/([a-zA-Z]*)$")
 TECHNICAL_TITLE_SUFFIX = re.compile(
-    r"(?:原盘|remux|web(?:-dl)?|蓝光|国语|国配|國語|國配|"
-    r"双语|多语|简体|繁体|中字|字幕|特效|内封|音轨|章节)",
+    r"(?:CC\s*标准收藏版|标准收藏版|criterion(?:\s+collection)?|"
+    r"4\s*[Kk]|UHD|BluRay|原盘|remux|web(?:-dl)?|蓝光|国语|国配|國語|國配|"
+    r"双语|多语|简体|繁体|中字|字幕|特效|内封|音轨|章节|"
+    r"导演剪辑版|剧场(?:剪辑)?版|完整修正版|修复版|主演\s*[:：]?|类型\s*[:：]?)",
+    re.IGNORECASE,
+)
+LEADING_RELEASE_BADGE = re.compile(
+    r"^\s*【(?=[^】]*(?:原盘|remux))[^】]*】\s*",
+    re.IGNORECASE,
+)
+TECHNICAL_EDITION_SUFFIX = re.compile(
+    r"\s+(?:国|美|英|韩|日|德|意大利|意|澳|法|加|西班牙|西|港|台)"
+    r"[^/|\[\]]{0,24}?版(?=\s*(?:4\s*[Kk]|UHD|BluRay|蓝光|原盘|REMUX))",
     re.IGNORECASE,
 )
 
@@ -99,7 +111,9 @@ def extract_chinese_title(rss_title: object) -> str:
     title = re.sub(r"<!\[CDATA\[|\]\]>", "", str(rss_title or ""), flags=re.IGNORECASE)
     candidates: List[str] = []
     for bracket in _top_level_brackets(title):
-        for raw_candidate in re.split(r"\s*(?:/|\|)\s*", bracket):
+        bracket = LEADING_RELEASE_BADGE.sub("", bracket)
+        bracket = re.split(r"\s*\|\s*", bracket, maxsplit=1)[0]
+        for raw_candidate in re.split(r"\s*/\s*", bracket):
             raw_candidate = _trim_technical_title_suffix(raw_candidate)
             candidate = re.sub(
                 r"\([^)]*\)|（[^）]*）", "", raw_candidate
@@ -116,11 +130,17 @@ def extract_chinese_title(rss_title: object) -> str:
 
 
 def _trim_technical_title_suffix(value: str) -> str:
-    for separator in re.finditer(r"\s{2,}", str(value or "")):
-        suffix = value[separator.end():]
-        if TECHNICAL_TITLE_SUFFIX.search(suffix):
-            return value[:separator.start()]
-    return value
+    text = str(value or "").strip()
+    cutoffs = []
+    edition = TECHNICAL_EDITION_SUFFIX.search(text)
+    if edition:
+        cutoffs.append(edition.start())
+    for match in TECHNICAL_TITLE_SUFFIX.finditer(text):
+        if match.start() == 0 or text[match.start() - 1].isspace():
+            cutoffs.append(match.start())
+    if cutoffs:
+        return text[:min(cutoffs)].rstrip(" ._-：:")
+    return text
 
 
 def has_meaningful_chinese(value: object) -> bool:

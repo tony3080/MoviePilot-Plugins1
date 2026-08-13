@@ -101,6 +101,56 @@ class ChineseTitleTest(unittest.TestCase):
         title = "[杜比视界][高帧率][简体中文字幕][沙丘：第二部 / Dune]"
         self.assertEqual(rss_rename.extract_chinese_title(title), "沙丘：第二部")
 
+    def test_extracts_ubits_title_before_subtitle_slashes(self):
+        title = (
+            "Sentimental Value 2025 Criterion Collection UHD BluRay "
+            "2160p REMUX-UBits[情感价值 CC标准收藏版 4K UHD原盘 REMUX "
+            "简体/繁体/简英双语/繁英双语]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "情感价值")
+
+    def test_extracts_ubits_title_before_single_spaced_technical_text(self):
+        title = (
+            "An American Affair 2009 USA BluRay-UBits"
+            "[美国情事 蓝光原盘 REMUX 简体/繁体/简英双语/繁英双语]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "美国情事")
+
+    def test_removes_ubits_release_counter_badge(self):
+        title = (
+            "Tom Jones 1963 CC BluRay-UBits"
+            "[【原盘Remux 00139】汤姆·琼斯 / 汤姆琼斯 CC标准收藏版]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "汤姆·琼斯")
+
+    def test_extracts_ubits_title_before_type_section(self):
+        title = (
+            "Kneecap 2024 BluRay-UBits"
+            "[膝盖骨乐队 | 类型：剧情 喜剧 英版原盘 REMUX 内封简繁字幕]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "膝盖骨乐队")
+
+    def test_extracts_ubits_title_before_regional_edition(self):
+        title = (
+            "What Dreams May Come 1998 UHD BluRay-UBits"
+            "[美梦成真 美Shout Factory版 4K UHD原盘 REMUX 简体/繁体]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "美梦成真")
+
+    def test_extracts_chd_title_before_descriptive_regional_edition(self):
+        title = (
+            "Sense and Sensibility 1995 USA 30th Anniv V2 BluRay-CHD"
+            "[理智与情感 美三十周年纪念版原盘REMUX "
+            "国{东方联合VCD}英双语 简繁双语四字幕]"
+        )
+
+        self.assertEqual(rss_rename.extract_chinese_title(title), "理智与情感")
+
 
 class RenamePlanTest(unittest.TestCase):
     def test_files_are_planned_before_deep_to_shallow_directories(self):
