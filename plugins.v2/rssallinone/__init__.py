@@ -55,7 +55,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.48"
+    plugin_version = "0.13.49"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -102,6 +102,7 @@ class RssAllInOne(_PluginBase):
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
+        self._last_emby_callback_probe: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
 
@@ -335,6 +336,18 @@ class RssAllInOne(_PluginBase):
                 "POST",
                 "接收 Emby 扫库完成回调",
                 auth="none",
+            ),
+            self._api(
+                "/emby/scheduledtasks/last",
+                self.api_emby_scheduled_last,
+                "GET",
+                "读取最近一次 Emby 回调诊断",
+            ),
+            self._api(
+                "/emby/scheduledtasks/callbacks",
+                self.api_emby_scheduled_callbacks,
+                "GET",
+                "读取 Emby 回调诊断记录",
             ),
             self._api("/media/refresh", self.api_media_refresh, "POST", "刷新入库管理媒体记录"),
             self._api(
@@ -880,14 +893,44 @@ class RssAllInOne(_PluginBase):
         payload: Optional[Union[Dict[str, Any], List[Any], str]] = None,
         secret: str = "",
     ) -> Dict[str, Any]:
+        self._last_emby_callback_probe = {
+            "received_at": utc_now(),
+            "payload_type": type(payload).__name__,
+            "payload": self._redact_emby_callback_payload(payload),
+        }
         data = self._coerce_emby_callback_payload(payload)
+        self._last_emby_callback_probe["coerced"] = (
+            self._redact_emby_callback_payload(data)
+        )
+        active_batch = self._require_store().latest_active_import_batch()
+        self._last_emby_callback_probe["batch_id"] = str(
+            (active_batch or {}).get("id") or ""
+        )
         if not self._scan_callback_secret:
-            return {"success": False, "message": "尚未配置扫库回调密钥"}
+            result = {"success": False, "message": "尚未配置扫库回调密钥"}
+            return self._finish_emby_callback_probe(result, persist=False)
         supplied_secret = str(secret or data.get("secret") or "").strip()
         if self._scan_callback_secret and supplied_secret != self._scan_callback_secret:
-            return {"success": False, "message": "扫库回调密钥不正确"}
+            result = {"success": False, "message": "扫库回调密钥不正确"}
+            return self._finish_emby_callback_probe(result, persist=False)
         event = self._normalize_emby_callback(data)
+        self._last_emby_callback_probe["event"] = deepcopy(event)
         result = self._pending_coordinator().handle_scan_callback(event)
+        if active_batch:
+            batch = self._require_store().get_import_batch(
+                str(active_batch.get("id") or "")
+            )
+            if batch:
+                details = dict(batch.get("details") or {})
+                details["last_scan_callback_attempt"] = {
+                    "received_at": utc_now(),
+                    "event": deepcopy(event),
+                    "accepted": bool(result.get("accepted")),
+                    "message": str(result.get("message") or ""),
+                }
+                batch["details"] = details
+                batch["updated_at"] = utc_now()
+                self._require_store().upsert_import_batch(batch)
         logger.info(
             "RSS一条龙：收到 Emby 计划任务回调，"
             f"event={event.get('event_name') or '<empty>'}，"
@@ -896,7 +939,30 @@ class RssAllInOne(_PluginBase):
             f"accepted={bool(result.get('accepted'))}，"
             f"message={result.get('message') or ''}"
         )
-        return {"success": bool(result.get("accepted")), **result}
+        return self._finish_emby_callback_probe(
+            {"success": bool(result.get("accepted")), **result}
+        )
+
+    def api_emby_scheduled_last(self) -> Dict[str, Any]:
+        persisted = self._require_store().list_emby_callback_events(limit=1)
+        if persisted["items"]:
+            return {"success": True, "item": persisted["items"][0]}
+        if not self._last_emby_callback_probe:
+            return {"success": True, "item": None, "message": "尚未收到 Emby 回调"}
+        return {
+            "success": True,
+            "item": deepcopy(self._last_emby_callback_probe),
+        }
+
+    def api_emby_scheduled_callbacks(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        return {
+            "success": True,
+            **self._require_store().list_emby_callback_events(offset, limit),
+        }
 
     def api_media_refresh(
         self, payload: Optional[Dict[str, Any]] = None
@@ -1922,6 +1988,28 @@ class RssAllInOne(_PluginBase):
     @staticmethod
     def _coerce_emby_callback_payload(payload: Any) -> Dict[str, Any]:
         if isinstance(payload, dict):
+            event_keys = {"Event", "event", "NotificationType", "event_type"}
+            if any(key in payload for key in event_keys):
+                return payload
+            wrapper_keys = (
+                "data",
+                "Data",
+                "payload",
+                "Payload",
+                "body",
+                "Body",
+                "json",
+                "Json",
+            )
+            for key in wrapper_keys:
+                if key not in payload:
+                    continue
+                parsed = RssAllInOne._coerce_emby_callback_payload(payload.get(key))
+                if parsed:
+                    outer = {
+                        name: value for name, value in payload.items() if name != key
+                    }
+                    return {**parsed, **outer}
             return payload
         if isinstance(payload, list):
             for item in payload:
@@ -1929,10 +2017,12 @@ class RssAllInOne(_PluginBase):
                 if parsed:
                     return parsed
             return {}
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="replace")
         if not isinstance(payload, str):
             return {}
 
-        text = payload.strip()
+        text = payload.lstrip("\ufeff").strip()
         if not text:
             return {}
         try:
@@ -1946,8 +2036,58 @@ class RssAllInOne(_PluginBase):
 
         form = parse_qs(text, keep_blank_values=True)
         if form:
-            return {key: values[-1] if values else "" for key, values in form.items()}
+            parsed_form = {
+                key: values[-1] if values else "" for key, values in form.items()
+            }
+            nested = RssAllInOne._coerce_emby_callback_payload(parsed_form)
+            if nested:
+                return nested
+            return parsed_form
         return {"raw": text}
+
+    def _redact_emby_callback_payload(self, payload: Any) -> Any:
+        sensitive_keys = {"secret", "apikey", "api_key", "token", "authorization"}
+        if isinstance(payload, dict):
+            return {
+                str(key): (
+                    "<redacted>"
+                    if str(key).strip().casefold() in sensitive_keys
+                    else self._redact_emby_callback_payload(value)
+                )
+                for key, value in payload.items()
+            }
+        if isinstance(payload, list):
+            return [self._redact_emby_callback_payload(value) for value in payload]
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="replace")
+        if isinstance(payload, str) and self._scan_callback_secret:
+            return payload.replace(self._scan_callback_secret, "<redacted>")
+        return payload
+
+    def _finish_emby_callback_probe(
+        self,
+        result: Dict[str, Any],
+        *,
+        persist: bool = True,
+    ) -> Dict[str, Any]:
+        response = deepcopy(result)
+        accepted = bool(response.get("accepted") or response.get("success"))
+        self._last_emby_callback_probe["result"] = deepcopy(response)
+        record = {
+            **deepcopy(self._last_emby_callback_probe),
+            "accepted": accepted,
+            "message": str(response.get("message") or ""),
+        }
+        if persist:
+            try:
+                callback_id = self._require_store().record_emby_callback_event(
+                    record,
+                    keep=50,
+                )
+                self._last_emby_callback_probe["id"] = callback_id
+            except Exception as error:
+                logger.warning(f"RSS一条龙：保存 Emby 回调诊断失败：{error}")
+        return response
 
     @staticmethod
     def _normalize_emby_callback(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1969,6 +2109,8 @@ class RssAllInOne(_PluginBase):
             "event_time": str(
                 source.get("Timestamp")
                 or source.get("timestamp")
+                or source.get("Date")
+                or source.get("date")
                 or source.get("event_time")
                 or utc_now()
             ),

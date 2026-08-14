@@ -884,9 +884,35 @@ class QbSyncService:
         downloader_id = str(item.get("downloader_id") or "").strip()
         info_hash = str(item.get("info_hash") or "").strip().lower()
         saved_mappings = self.store.list_file_mappings(downloader_id, info_hash)
+        repaired_sources = _repair_saved_local_source_paths(item, saved_mappings)
+        if repaired_sources:
+            saved_mappings = self.store.replace_file_mappings(
+                downloader_id,
+                info_hash,
+                saved_mappings,
+            )
         local_files = _saved_local_torrent_files(item, saved_mappings)
         if not local_files:
             raise RuntimeError("已保存的本地媒体文件不存在，无法重新识别")
+
+        refreshed_source_path = _refreshed_item_source_path(item, local_files)
+        if refreshed_source_path:
+            previous_source_path = str(item.get("source_path") or "").strip()
+            item["source_path"] = refreshed_source_path
+            details_for_source = copy.deepcopy(item.get("details") or {})
+            source_identity = dict(details_for_source.get("source_identity") or {})
+            source_identity["source_path"] = refreshed_source_path
+            details_for_source["source_identity"] = source_identity
+            torrent_details = dict(details_for_source.get("torrent") or {})
+            for key in ("content_path", "path"):
+                current_value = str(torrent_details.get(key) or "").strip()
+                if current_value == previous_source_path or (
+                    current_value and not Path(current_value).expanduser().exists()
+                ):
+                    torrent_details[key] = refreshed_source_path
+            if torrent_details:
+                details_for_source["torrent"] = torrent_details
+            item["details"] = details_for_source
 
         details = copy.deepcopy(item.get("details") or {})
         stored_override = details.get("manual_override") or {}
@@ -2316,6 +2342,102 @@ def _saved_local_torrent_files(
     if result:
         return sorted(result, key=lambda value: int(value["index"]))
     return _discover_local_torrent_files(item.get("source_path") or "")
+
+
+def _repair_saved_local_source_paths(
+    item: Dict[str, Any],
+    mappings: Sequence[Dict[str, Any]],
+) -> bool:
+    """Repair a renamed local source only when its replacement is unambiguous."""
+
+    changed = False
+    claimed: set[str] = set()
+    for mapping in mappings or []:
+        current_text = str(mapping.get("current_source_path") or "").strip()
+        if not current_text:
+            continue
+        current = Path(current_text).expanduser()
+        try:
+            if current.is_file():
+                claimed.add(os.path.normcase(str(current.resolve(strict=True))))
+                continue
+        except OSError:
+            pass
+
+        parent = current.parent
+        try:
+            if not parent.is_dir():
+                continue
+            candidates = [
+                path for path in parent.iterdir()
+                if path.is_file()
+                and path.suffix.casefold() == current.suffix.casefold()
+                and os.path.normcase(str(path.resolve(strict=False))) not in claimed
+            ]
+        except OSError:
+            continue
+
+        try:
+            expected_size = int(mapping.get("file_size") or 0)
+        except (TypeError, ValueError):
+            expected_size = 0
+        if expected_size > 0:
+            size_matches = []
+            for candidate in candidates:
+                try:
+                    if candidate.stat().st_size == expected_size:
+                        size_matches.append(candidate)
+                except OSError:
+                    continue
+            candidates = size_matches
+        if len(candidates) != 1:
+            continue
+
+        replacement = candidates[0].resolve(strict=True)
+        mapping["current_source_path"] = str(replacement)
+        relative_text = str(mapping.get("source_relative_path") or "").replace(
+            "\\", "/"
+        )
+        relative = PurePosixPath(relative_text)
+        mapping["source_relative_path"] = (
+            relative.with_name(replacement.name).as_posix()
+            if relative_text and relative.name
+            else replacement.name
+        )
+        mapping_details = dict(mapping.get("details") or {})
+        mapping_details.update({
+            "source_path_repaired_from": current_text,
+            "source_path_repaired_at": utc_now(),
+        })
+        mapping["details"] = mapping_details
+        claimed.add(os.path.normcase(str(replacement)))
+        changed = True
+    return changed
+
+
+def _refreshed_item_source_path(
+    item: Dict[str, Any],
+    files: Sequence[Dict[str, Any]],
+) -> str:
+    source_text = str(item.get("source_path") or "").strip()
+    if not source_text or len(files) != 1:
+        return ""
+    source = Path(source_text).expanduser()
+    try:
+        if source.exists():
+            return ""
+    except OSError:
+        pass
+    actual_text = str(files[0].get("current_source_path") or "").strip()
+    if not actual_text:
+        return ""
+    actual = Path(actual_text).expanduser()
+    try:
+        if not actual.is_file():
+            return ""
+        return str(actual.resolve(strict=True))
+    except OSError:
+        return ""
 
 
 def _saved_local_recognition_title(

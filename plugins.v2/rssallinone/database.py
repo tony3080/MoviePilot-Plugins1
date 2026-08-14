@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def utc_now() -> str:
@@ -245,6 +245,22 @@ class SQLiteStore:
                         details_json TEXT NOT NULL DEFAULT '{}',
                         created_at TEXT NOT NULL
                     );
+
+                    CREATE TABLE IF NOT EXISTS emby_callback_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        batch_id TEXT NOT NULL DEFAULT '',
+                        payload_type TEXT NOT NULL DEFAULT '',
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        coerced_json TEXT NOT NULL DEFAULT '{}',
+                        event_json TEXT NOT NULL DEFAULT '{}',
+                        result_json TEXT NOT NULL DEFAULT '{}',
+                        accepted INTEGER NOT NULL DEFAULT 0,
+                        message TEXT NOT NULL DEFAULT '',
+                        received_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_emby_callback_events_received
+                        ON emby_callback_events(received_at DESC, id DESC);
                     """
                 )
                 self._migrate_v2(connection)
@@ -252,6 +268,7 @@ class SQLiteStore:
                 self._migrate_v4(connection)
                 self._migrate_v5(connection)
                 self._migrate_v6(connection)
+                self._migrate_v7(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -401,6 +418,39 @@ class SQLiteStore:
                 "ALTER TABLE background_tasks ADD COLUMN task_name TEXT NOT NULL DEFAULT ''"
             )
 
+    @staticmethod
+    def _migrate_v7(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS emby_callback_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL DEFAULT '',
+                payload_type TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                coerced_json TEXT NOT NULL DEFAULT '{}',
+                event_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                accepted INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT '',
+                received_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_emby_callback_events_received
+                ON emby_callback_events(received_at DESC, id DESC);
+            """
+        )
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(emby_callback_events)"
+            ).fetchall()
+        }
+        if "result_json" not in columns:
+            connection.execute(
+                "ALTER TABLE emby_callback_events "
+                "ADD COLUMN result_json TEXT NOT NULL DEFAULT '{}'"
+            )
+
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
             integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -423,6 +473,7 @@ class SQLiteStore:
             "import_watches": "import_watches",
             "import_batches": "import_batches",
             "file_mappings": "file_mappings",
+            "emby_callbacks": "emby_callback_events",
         }
         with self.connection() as connection:
             counts = {
@@ -1891,6 +1942,51 @@ class SQLiteStore:
                    WHERE state NOT IN ('queued', 'running')"""
             ).rowcount or 0)
         return {"deleted": deleted, "running": running}
+
+    def record_emby_callback_event(
+        self,
+        record: Dict[str, Any],
+        *,
+        keep: int = 50,
+    ) -> int:
+        received_at = str(record.get("received_at") or utc_now())
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """INSERT INTO emby_callback_events(
+                    batch_id, payload_type, payload_json, coerced_json,
+                    event_json, result_json, accepted, message,
+                    received_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(record.get("batch_id") or ""),
+                    str(record.get("payload_type") or ""),
+                    self._json_dump(record.get("payload") or {}),
+                    self._json_dump(record.get("coerced") or {}),
+                    self._json_dump(record.get("event") or {}),
+                    self._json_dump(record.get("result") or {}),
+                    int(bool(record.get("accepted"))),
+                    str(record.get("message") or ""),
+                    received_at,
+                    str(record.get("created_at") or received_at),
+                ),
+            )
+            retained = max(1, min(200, int(keep or 50)))
+            connection.execute(
+                """DELETE FROM emby_callback_events
+                   WHERE id NOT IN (
+                       SELECT id FROM emby_callback_events
+                       ORDER BY id DESC LIMIT ?
+                   )""",
+                (retained,),
+            )
+            return int(cursor.lastrowid)
+
+    def list_emby_callback_events(
+        self,
+        offset: object = 0,
+        limit: object = 50,
+    ) -> Dict[str, Any]:
+        return self._list_table("emby_callback_events", "id", offset, limit)
 
     def _list_table(
         self,

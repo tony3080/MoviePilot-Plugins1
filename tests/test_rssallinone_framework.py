@@ -157,6 +157,40 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(row["task_name"], "SKY纯净版")
             self.assertEqual(row["result"], {"total": 3, "queued": 2})
 
+    def test_emby_callback_diagnostics_are_persisted_and_capped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+
+            for index in range(55):
+                store.record_emby_callback_event(
+                    {
+                        "payload_type": "dict",
+                        "payload": {"Event": f"event-{index}"},
+                        "coerced": {"Event": f"event-{index}"},
+                        "event": {"event_name": f"event-{index}"},
+                        "result": {
+                            "accepted": False,
+                            "message": f"result-{index}",
+                        },
+                        "accepted": False,
+                        "message": f"result-{index}",
+                    },
+                    keep=50,
+                )
+
+            history = store.list_emby_callback_events()
+            self.assertEqual(history["total"], 50)
+            self.assertEqual(
+                history["items"][0]["event"]["event_name"],
+                "event-54",
+            )
+            self.assertEqual(
+                history["items"][-1]["event"]["event_name"],
+                "event-5",
+            )
+            self.assertEqual(store.counts()["emby_callbacks"], 50)
+
     def test_rss_queue_state_is_persisted_and_resumed_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")
@@ -437,7 +471,7 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertEqual(migrated["name"], "旧快照")
             self.assertEqual(migrated["present"], 1)
             self.assertEqual(migrated["inventory_state"], "unknown")
-            self.assertEqual(store.health()["schema_version"], 6)
+            self.assertEqual(store.health()["schema_version"], database.SCHEMA_VERSION)
 
 
 class RepositoryContractTest(unittest.TestCase):
@@ -923,6 +957,8 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/tasks/clear", api_paths)
                 self.assertIn("/external/catchup/control", api_paths)
                 self.assertIn("/external/scan/control", api_paths)
+                self.assertIn("/emby/scheduledtasks/last", api_paths)
+                self.assertIn("/emby/scheduledtasks/callbacks", api_paths)
                 self.assertFalse(
                     plugin.api_external_catchup_control({"action": "invalid"})[
                         "success"
@@ -954,16 +990,43 @@ class PluginLifecycleTest(unittest.TestCase):
                         "task_id": "scan",
                     },
                 )
+                wrapped_callback = {
+                    "data": json.dumps(
+                        {
+                            "Event": "scheduledtasks.completed",
+                            "Date": "2026-08-13T19:18:06.014Z",
+                            "secret": "callback-secret",
+                        }
+                    )
+                }
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload(wrapped_callback),
+                    {
+                        "Event": "scheduledtasks.completed",
+                        "Date": "2026-08-13T19:18:06.014Z",
+                        "secret": "callback-secret",
+                    },
+                )
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload(
+                        {"payload": "Event=scheduledtasks.completed&task_id=scan"}
+                    ),
+                    {
+                        "Event": "scheduledtasks.completed",
+                        "task_id": "scan",
+                    },
+                )
                 self.assertEqual(
                     plugin._normalize_emby_callback({
                         "Event": "scheduledtasks.completed",
+                        "Date": "2026-08-13T19:18:06.014Z",
                         "Title": "Scan media library",
                         "Description": "The scheduled task has completed.",
                         "Server": {"Name": "影视库", "Id": "server-1"},
                     }),
                     {
                         "event_name": "scheduledtasks.completed",
-                        "event_time": ANY,
+                        "event_time": "2026-08-13T19:18:06.014Z",
                         "server_id": "server-1",
                         "server_name": "影视库",
                         "title": "Scan media library",
@@ -972,6 +1035,32 @@ class PluginLifecycleTest(unittest.TestCase):
                         "task_name": "",
                     },
                 )
+                no_callback = plugin.api_emby_scheduled_last()
+                self.assertIsNone(no_callback["item"])
+                plugin._scan_callback_secret = "callback-secret"
+                callback_result = plugin.api_emby_scheduled_completed(
+                    {
+                        "data": json.dumps({
+                            "Event": "scheduledtasks.completed",
+                            "secret": "callback-secret",
+                        })
+                    }
+                )
+                self.assertFalse(callback_result["success"])
+                callback_probe = plugin.api_emby_scheduled_last()["item"]
+                self.assertEqual(callback_probe["payload_type"], "dict")
+                self.assertEqual(
+                    callback_probe["coerced"]["Event"],
+                    "scheduledtasks.completed",
+                )
+                self.assertEqual(
+                    callback_probe["coerced"]["secret"],
+                    "<redacted>",
+                )
+                self.assertIn("当前没有等待", callback_probe["result"]["message"])
+                callback_history = plugin.api_emby_scheduled_callbacks()
+                self.assertEqual(callback_history["total"], 1)
+                self.assertFalse(bool(callback_history["items"][0]["accepted"]))
                 service_ids = {item["id"] for item in plugin.get_service()}
                 self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)
                 self.assertIn("RssAllInOne.Start.movies", service_ids)

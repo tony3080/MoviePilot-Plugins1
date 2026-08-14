@@ -1004,6 +1004,122 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 refreshed["details"]["rss_source"]["task_id"], "rss-task"
             )
 
+    def test_library_refresh_repairs_source_renamed_after_qb_deletion(self) -> None:
+        class Meta:
+            begin_season = None
+
+            @staticmethod
+            def to_dict():
+                return {"title": "Sentimental.Value.2025"}
+
+        class Media:
+            title = "情感价值"
+            year = "2025"
+            tmdb_id = 1124566
+            season = None
+            category = "外语电影"
+
+        class Gateway:
+            recognized_titles = []
+
+            @staticmethod
+            def recognize(title):
+                Gateway.recognized_titles.append(title)
+                return Meta(), Media()
+
+            @staticmethod
+            def plan_inventory_files(_media, files, **_kwargs):
+                self.assertEqual(
+                    files[0]["name"],
+                    "[情感价值].Sentimental.Value.2025-REMUX-U版.mkv",
+                )
+                return {
+                    "expected_files": [{
+                        "file_index": 0,
+                        "source_name": files[0]["name"],
+                        "relative_path": "情感价值 (2025) {tmdbid=1124566}/情感价值.mkv",
+                        "inventory_relative_path": "情感价值 (2025) {tmdbid=1124566}/情感价值.strm",
+                        "size": files[0]["size"],
+                    }],
+                    "expected_directory": "情感价值 (2025) {tmdbid=1124566}",
+                    "inventory_target_name": "情感价值 (2025) {tmdbid=1124566}/情感价值.strm",
+                    "total_files": 1,
+                    "plan_errors": [],
+                }
+
+            @staticmethod
+            def media_payload(_media):
+                return {"title": "情感价值", "tmdb_id": 1124566}
+
+            @staticmethod
+            def meta_payload(meta):
+                return meta.to_dict()
+
+            @staticmethod
+            def media_type(_media):
+                return "movie"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "Sentimental.Value.2025"
+            source_dir.mkdir()
+            stale = source_dir / "[简英双语].Sentimental.Value.2025-REMUX-U版.mkv"
+            actual = source_dir / "[情感价值].Sentimental.Value.2025-REMUX-U版.mkv"
+            actual.write_bytes(b"video")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            media_id = "qb:qb-main:sentimental"
+            store.upsert_media_item({
+                "id": media_id,
+                "state": "identified",
+                "source_name": stale.name,
+                "source_path": str(stale),
+                "downloader_id": "qb-main",
+                "info_hash": "sentimental",
+                "details": {
+                    "manual_override": {},
+                    "source_identity": {
+                        "kind": "qb_download",
+                        "source_path": str(stale),
+                    },
+                    "torrent": {"content_path": str(stale)},
+                },
+            })
+            store.replace_file_mappings("qb-main", "sentimental", [{
+                "media_id": media_id,
+                "file_index": 0,
+                "source_relative_path": stale.name,
+                "current_source_path": str(stale),
+                "file_size": actual.stat().st_size,
+            }])
+            service = qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+                inventory_checker=inventory.LocalInventoryChecker([]),
+                library_layout=layout.LibraryLayout.from_config(
+                    str(root / "library"),
+                    [{
+                        "name": "source",
+                        "prefix": str(root),
+                        "link_roots": {"movie": str(root / "links")},
+                        "enabled": True,
+                    }],
+                ),
+            )
+
+            refreshed = service.refresh_media_from_saved_files(media_id)
+
+            self.assertEqual(Gateway.recognized_titles, [actual.name])
+            self.assertEqual(refreshed["source_name"], actual.name)
+            self.assertEqual(refreshed["source_path"], str(actual.resolve()))
+            self.assertEqual(
+                refreshed["details"]["source_identity"]["source_path"],
+                str(actual.resolve()),
+            )
+            mappings = store.list_file_mappings("qb-main", "sentimental")
+            self.assertEqual(mappings[0]["current_source_path"], str(actual.resolve()))
+            self.assertEqual(mappings[0]["source_relative_path"], actual.name)
+
     def test_database_lists_cards_by_source_filename_and_keeps_versions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "state.db")
