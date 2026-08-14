@@ -711,6 +711,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("'inventory-incomplete': inventoryIncomplete", card)
         self.assertIn("Boolean(inventory.value.refreshed_at)", card)
         self.assertIn("if (!inventoryCompared.value || totalFiles.value <= 0)", card)
+        self.assertIn("existsCount.value === totalFiles.value", card)
+        self.assertIn("if (inventoryComplete.value) return 'inventory-complete'", card)
+        self.assertIn(".inventory-complete", card)
+        self.assertIn("background: #16a34a", card)
         self.assertIn("库存不完整", card)
         self.assertIn("background: #dc2626 !important", card)
         refresh_block = app_page.split(

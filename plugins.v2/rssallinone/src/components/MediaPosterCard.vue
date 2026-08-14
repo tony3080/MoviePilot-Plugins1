@@ -49,6 +49,13 @@ const plannedName = computed(() => details.value.inventory_plan?.expected_direct
 const sizeText = computed(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)))
 const isImported = computed(() => props.mode === 'imported')
 const inventoryCompared = computed(() => isImported.value && Boolean(inventory.value.refreshed_at))
+const inventoryComplete = computed(() => {
+  if (!inventoryCompared.value || totalFiles.value <= 0) return false
+  const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || ''
+  const folderExists = folderStatus === 'exists'
+    || ['exists', 'partial'].includes(props.item.inventory_state)
+  return folderExists && existsCount.value === totalFiles.value
+})
 const inventoryIncomplete = computed(() => {
   if (!inventoryCompared.value || totalFiles.value <= 0) return false
   const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || ''
@@ -92,6 +99,7 @@ const inventoryText = computed(() => {
 const inventoryClass = computed(() => {
   if (inventoryText.value === '目录冲突') return 'inventory-warning'
   if (inventoryIncomplete.value) return 'inventory-missing'
+  if (inventoryComplete.value) return 'inventory-complete'
   return inventoryText.value.startsWith('目录已存在') ? 'inventory-ok' : 'inventory-missing'
 })
 
@@ -372,6 +380,7 @@ button.corner-badge { cursor: pointer; }
   margin-top: 4px;
 }
 .inventory-line { overflow: hidden; font-size: .78rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.inventory-complete { width: fit-content; padding: 2px 6px; border: 1px solid #15803d; border-radius: 4px; background: #16a34a; color: #fff; }
 .inventory-ok { color: rgb(var(--v-theme-success)); }
 .inventory-missing { color: rgb(var(--v-theme-error)); }
 .inventory-warning { color: rgb(var(--v-theme-warning)); }

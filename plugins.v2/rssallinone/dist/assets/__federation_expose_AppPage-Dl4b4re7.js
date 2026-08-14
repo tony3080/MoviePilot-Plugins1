@@ -649,6 +649,13 @@ const plannedName = computed$3(() => details.value.inventory_plan?.expected_dire
 const sizeText = computed$3(() => formatSize(Number(props.item.size || details.value.torrent?.size || 0)));
 const isImported = computed$3(() => props.mode === 'imported');
 const inventoryCompared = computed$3(() => isImported.value && Boolean(inventory.value.refreshed_at));
+const inventoryComplete = computed$3(() => {
+  if (!inventoryCompared.value || totalFiles.value <= 0) return false
+  const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || '';
+  const folderExists = folderStatus === 'exists'
+    || ['exists', 'partial'].includes(props.item.inventory_state);
+  return folderExists && existsCount.value === totalFiles.value
+});
 const inventoryIncomplete = computed$3(() => {
   if (!inventoryCompared.value || totalFiles.value <= 0) return false
   const folderStatus = inventory.value.folder_status || inventory.value.folder?.status || '';
@@ -692,6 +699,7 @@ const inventoryText = computed$3(() => {
 const inventoryClass = computed$3(() => {
   if (inventoryText.value === '目录冲突') return 'inventory-warning'
   if (inventoryIncomplete.value) return 'inventory-missing'
+  if (inventoryComplete.value) return 'inventory-complete'
   return inventoryText.value.startsWith('目录已存在') ? 'inventory-ok' : 'inventory-missing'
 });
 
@@ -1031,7 +1039,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-58e55de6"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-2e2caec9"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 
