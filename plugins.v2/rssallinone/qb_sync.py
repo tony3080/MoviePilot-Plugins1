@@ -1059,8 +1059,7 @@ class QbSyncService:
             "inventory_title": inventory_title,
         })
         previous_state = str(item.get("state") or "")
-        if previous_state == "pending_import" and state in {"identified", "existing"}:
-            state = previous_state
+        state = preserve_refresh_workflow_state(previous_state, state)
         previous_failure = str(item.get("failure_code") or "")
         if not failure_code and previous_failure not in {
             "recognition_failed",
@@ -2532,6 +2531,19 @@ def _valid_tmdb_id(value: object) -> bool:
         return int(value or 0) > 0
     except (TypeError, ValueError):
         return False
+
+
+def preserve_refresh_workflow_state(previous_state: object, refreshed_state: object) -> str:
+    """Keep queue and rollback states while refreshing recognition data."""
+
+    previous = str(previous_state or "").strip()
+    refreshed = str(refreshed_state or "").strip()
+    if previous in {"pending", "pending_import", "rolled_back"} and refreshed in {
+        "identified",
+        "existing",
+    }:
+        return previous
+    return refreshed
 
 
 def _normalize_manual_override(value: object) -> Dict[str, Any]:

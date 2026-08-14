@@ -10,7 +10,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
-from .qb_sync import MoviePilotQbGateway, build_source_target_mappings
+from .qb_sync import (
+    MoviePilotQbGateway,
+    build_source_target_mappings,
+    preserve_refresh_workflow_state,
+)
 
 
 FALLBACK_MEDIA_EXTENSIONS = {
@@ -394,6 +398,7 @@ class LocalFileManagerService:
         details["recognized_title"] = recognized_media_title
         details["inventory_title"] = inventory_title
         previous = self.store.get_media_item(media_id) or existing or {}
+        state = preserve_refresh_workflow_state(previous.get("state"), state)
         self.store.upsert_media_item({
             "id": media_id,
             "state": state,

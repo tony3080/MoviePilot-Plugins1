@@ -1071,11 +1071,12 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             media_id = "qb:qb-main:sentimental"
             store.upsert_media_item({
                 "id": media_id,
-                "state": "identified",
+                "state": "rolled_back",
                 "source_name": stale.name,
                 "source_path": str(stale),
                 "downloader_id": "qb-main",
                 "info_hash": "sentimental",
+                "rolled_back": True,
                 "details": {
                     "manual_override": {},
                     "source_identity": {
@@ -1110,6 +1111,8 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             refreshed = service.refresh_media_from_saved_files(media_id)
 
             self.assertEqual(Gateway.recognized_titles, [actual.name])
+            self.assertEqual(refreshed["state"], "rolled_back")
+            self.assertTrue(refreshed["rolled_back"])
             self.assertEqual(refreshed["source_name"], actual.name)
             self.assertEqual(refreshed["source_path"], str(actual.resolve()))
             self.assertEqual(
