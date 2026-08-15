@@ -994,6 +994,31 @@ class PluginLifecycleTest(unittest.TestCase):
                         "task_id": "scan",
                     },
                 )
+                multipart_callback = (
+                    "--20bff2f2-e563-4c5f-a828-ad2463187ad9\r\n"
+                    "Content-Type: application/json; charset=utf-8\r\n"
+                    "Content-Disposition: form-data; name=data\r\n\r\n"
+                    '{"Title":"影视库 上 Scan media library 已完成",'
+                    '"Description":"运行时间：52 minutes and 19 seconds",'
+                    '"Date":"2026-08-14T18:24:17.0690128Z",'
+                    '"Event":"scheduledtasks.completed",'
+                    '"Server":{"Name":"影视库",'
+                    '"Id":"8a2a124b8818407ea8cc311130655dfc"}}\r\n'
+                    "--20bff2f2-e563-4c5f-a828-ad2463187ad9--\r\n"
+                )
+                self.assertEqual(
+                    plugin._coerce_emby_callback_payload(multipart_callback),
+                    {
+                        "Title": "影视库 上 Scan media library 已完成",
+                        "Description": "运行时间：52 minutes and 19 seconds",
+                        "Date": "2026-08-14T18:24:17.0690128Z",
+                        "Event": "scheduledtasks.completed",
+                        "Server": {
+                            "Name": "影视库",
+                            "Id": "8a2a124b8818407ea8cc311130655dfc",
+                        },
+                    },
+                )
                 wrapped_callback = {
                     "data": json.dumps(
                         {

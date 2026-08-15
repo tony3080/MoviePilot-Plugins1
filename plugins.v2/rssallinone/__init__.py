@@ -7,6 +7,8 @@ import threading
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs
@@ -55,7 +57,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.51"
+    plugin_version = "0.13.52"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2025,6 +2027,10 @@ class RssAllInOne(_PluginBase):
         text = payload.lstrip("\ufeff").strip()
         if not text:
             return {}
+
+        multipart = RssAllInOne._coerce_emby_multipart_payload(text)
+        if multipart:
+            return multipart
         try:
             decoded = json.loads(text)
         except (TypeError, ValueError):
@@ -2044,6 +2050,49 @@ class RssAllInOne(_PluginBase):
                 return nested
             return parsed_form
         return {"raw": text}
+
+    @staticmethod
+    def _coerce_emby_multipart_payload(payload: str) -> Dict[str, Any]:
+        """Extract Emby's JSON `data` field from a raw multipart body."""
+
+        first_line = str(payload or "").splitlines()[0].strip()
+        if not first_line.startswith("--") or first_line.endswith("--"):
+            return {}
+        boundary = first_line[2:].strip()
+        if not boundary or any(char in boundary for char in "\r\n\x00"):
+            return {}
+        try:
+            wire = (
+                f'Content-Type: multipart/form-data; boundary="{boundary}"\r\n'
+                "MIME-Version: 1.0\r\n\r\n"
+                f"{payload}"
+            ).encode("utf-8")
+            message = BytesParser(policy=policy.default).parsebytes(wire)
+        except (TypeError, ValueError):
+            return {}
+        if not message.is_multipart():
+            return {}
+
+        fallback: Dict[str, Any] = {}
+        for part in message.iter_parts():
+            field_name = str(
+                part.get_param("name", header="content-disposition") or ""
+            ).strip()
+            raw_value = part.get_payload(decode=True)
+            if raw_value is None:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                value = raw_value.decode(charset, errors="replace")
+            except LookupError:
+                value = raw_value.decode("utf-8", errors="replace")
+            parsed = RssAllInOne._coerce_emby_callback_payload(value)
+            if field_name.casefold() in {"data", "payload", "body", "json"}:
+                if parsed:
+                    return parsed
+            elif field_name:
+                fallback[field_name] = parsed if parsed else value.strip()
+        return RssAllInOne._coerce_emby_callback_payload(fallback) if fallback else {}
 
     def _redact_emby_callback_payload(self, payload: Any) -> Any:
         sensitive_keys = {"secret", "apikey", "api_key", "token", "authorization"}
