@@ -34,10 +34,12 @@ const identifyItem = ref(null)
 const mediaState = ref('identified')
 const mediaType = ref('')
 const mediaRssTaskIds = ref([])
+const libraryMobileFiltersOpen = ref(false)
 const qbDownloaders = ref([])
 const qbDownloader = ref('')
 const qbView = ref('pending')
 const qbKeyword = ref('')
+const qbMobileFiltersOpen = ref(false)
 const qbTask = ref(null)
 const rssTestingTaskId = ref('')
 const rssRunningTaskId = ref('')
@@ -1083,6 +1085,8 @@ function rssTestColor(state) {
 watch(activeTab, async value => {
   activeLoadId += 1
   clearSelection()
+  libraryMobileFiltersOpen.value = false
+  qbMobileFiltersOpen.value = false
   rows.value = []
   total.value = 0
   loading.value = true
@@ -1294,7 +1298,10 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'library'">
         <div class="sticky-control-stack management-toolbar">
-          <div class="management-filter-row">
+          <div
+            class="management-filter-row"
+            :class="{ 'filters-expanded': libraryMobileFiltersOpen }"
+          >
             <VSelect
               v-model="mediaType"
               :items="[
@@ -1305,7 +1312,7 @@ onBeforeUnmount(() => {
               label="类型"
               density="compact"
               hide-details
-              class="filter-control media-type-filter"
+              class="filter-control media-type-filter mobile-filter-detail"
             />
             <VBtnToggle
               v-model="mediaState"
@@ -1326,6 +1333,19 @@ onBeforeUnmount(() => {
                 <span class="state-button-count">{{ Number(mediaStateCounts[option.value] || 0) }}</span>
               </VBtn>
             </VBtnToggle>
+            <VTooltip :text="libraryMobileFiltersOpen ? '收起筛选' : '展开筛选'">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  :icon="libraryMobileFiltersOpen ? 'mdi-filter-minus-outline' : 'mdi-filter-outline'"
+                  size="small"
+                  variant="tonal"
+                  class="mobile-filter-toggle"
+                  :aria-label="libraryMobileFiltersOpen ? '收起筛选' : '展开筛选'"
+                  @click="libraryMobileFiltersOpen = !libraryMobileFiltersOpen"
+                />
+              </template>
+            </VTooltip>
             <VSelect
               v-model="mediaRssTaskIds"
               :items="rssTaskFilterOptions"
@@ -1336,10 +1356,10 @@ onBeforeUnmount(() => {
               clearable
               density="compact"
               hide-details
-              class="rss-task-filter"
+              class="rss-task-filter mobile-filter-detail"
             />
             <VSpacer />
-            <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
+            <span class="management-total text-caption text-medium-emphasis">{{ total }} 项</span>
             <div class="toolbar-actions">
               <VBtn
                 v-if="pendingImportState === 'waiting_scan_callback'"
@@ -1349,8 +1369,25 @@ onBeforeUnmount(() => {
                 prepend-icon="mdi-stop-circle-outline"
                 :loading="pendingImportEndingWait"
                 :disabled="pendingImportEndingWait"
+                class="desktop-action-button"
                 @click="cancelPendingImportWait"
               >结束等待</VBtn>
+              <VTooltip v-if="pendingImportState === 'waiting_scan_callback'" text="结束等待">
+                <template #activator="{ props: tooltipProps }">
+                  <VBtn
+                    v-bind="tooltipProps"
+                    icon="mdi-stop-circle-outline"
+                    size="small"
+                    color="warning"
+                    variant="tonal"
+                    class="mobile-action-button"
+                    :loading="pendingImportEndingWait"
+                    :disabled="pendingImportEndingWait"
+                    aria-label="结束等待"
+                    @click="cancelPendingImportWait"
+                  />
+                </template>
+              </VTooltip>
               <VBtn
                 size="small"
                 color="primary"
@@ -1358,8 +1395,25 @@ onBeforeUnmount(() => {
                 prepend-icon="mdi-play"
                 :loading="pendingImportStarting"
                 :disabled="pendingImportActive || pendingImportStarting || Number(pendingImport.pending || 0) <= 0"
+                class="desktop-action-button"
                 @click="runPendingImport"
               >立即处理</VBtn>
+              <VTooltip text="立即处理">
+                <template #activator="{ props: tooltipProps }">
+                  <VBtn
+                    v-bind="tooltipProps"
+                    icon="mdi-play"
+                    size="small"
+                    color="primary"
+                    variant="tonal"
+                    class="mobile-action-button"
+                    :loading="pendingImportStarting"
+                    :disabled="pendingImportActive || pendingImportStarting || Number(pendingImport.pending || 0) <= 0"
+                    aria-label="立即处理"
+                    @click="runPendingImport"
+                  />
+                </template>
+              </VTooltip>
               <VTooltip text="刷新队列状态">
                 <template #activator="{ props: tooltipProps }">
                   <VBtn
@@ -1374,7 +1428,11 @@ onBeforeUnmount(() => {
               </VTooltip>
             </div>
           </div>
-          <div v-if="rows.length" class="selection-bar management-selection-row">
+          <div
+            v-if="rows.length"
+            class="selection-bar management-selection-row"
+            :class="{ 'has-selection': selectedKeys.length > 0 }"
+          >
           <span>已选 {{ selectedKeys.length }} 项</span>
           <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
           <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
@@ -1459,14 +1517,17 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'qb'">
         <div class="sticky-control-stack management-toolbar qb-sticky-controls">
-          <div class="management-filter-row">
+          <div
+            class="management-filter-row"
+            :class="{ 'filters-expanded': qbMobileFiltersOpen }"
+          >
           <VSelect
             v-model="qbDownloader"
             :items="[{ title: '全部节点', value: '' }, ...qbDownloaders]"
             label="QB 节点"
             density="compact"
             hide-details
-            class="filter-control"
+            class="filter-control mobile-filter-detail"
           />
           <VBtnToggle
             v-model="qbView"
@@ -1486,6 +1547,19 @@ onBeforeUnmount(() => {
               <span class="state-button-count">{{ Number(qbViewCounts.pending || 0) }}</span>
             </VBtn>
           </VBtnToggle>
+          <VTooltip :text="qbMobileFiltersOpen ? '收起筛选' : '展开筛选'">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                :icon="qbMobileFiltersOpen ? 'mdi-filter-minus-outline' : 'mdi-filter-outline'"
+                size="small"
+                variant="tonal"
+                class="mobile-filter-toggle"
+                :aria-label="qbMobileFiltersOpen ? '收起筛选' : '展开筛选'"
+                @click="qbMobileFiltersOpen = !qbMobileFiltersOpen"
+              />
+            </template>
+          </VTooltip>
           <VTextField
             v-model="qbKeyword"
             label="搜索名称或 Hash"
@@ -1493,22 +1567,39 @@ onBeforeUnmount(() => {
             density="compact"
             hide-details
             clearable
-            class="qb-search"
+            class="qb-search mobile-filter-detail"
             @keyup.enter="reloadForFilter"
             @click:clear="reloadForFilter"
           />
           <VSpacer />
-          <span class="text-caption text-medium-emphasis">{{ total }} 项</span>
+          <span class="management-total text-caption text-medium-emphasis">{{ total }} 项</span>
           <VBtn
             color="primary"
             variant="tonal"
             prepend-icon="mdi-refresh"
             :loading="qbRefreshing"
             :disabled="qbRefreshing || !overview.plugin?.enabled"
+            class="desktop-action-button"
             @click="refreshQb"
           >
             刷新识别
           </VBtn>
+          <VTooltip text="刷新识别">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                icon="mdi-refresh"
+                size="small"
+                color="primary"
+                variant="tonal"
+                class="mobile-action-button"
+                :loading="qbRefreshing"
+                :disabled="qbRefreshing || !overview.plugin?.enabled"
+                aria-label="刷新识别"
+                @click="refreshQb"
+              />
+            </template>
+          </VTooltip>
           </div>
           <VAlert
             v-if="qbTask"
@@ -1516,6 +1607,7 @@ onBeforeUnmount(() => {
             variant="tonal"
             density="compact"
             class="qb-task-status"
+            :class="{ 'qb-task-status-idle': !qbRefreshing && qbTask.state !== 'failed' }"
           >
             <div class="qb-task-line">
               <span>{{ qbRefreshing ? '正在读取 QB、识别并核对本地库存' : `任务状态：${qbTask.state}` }}</span>
@@ -1531,7 +1623,11 @@ onBeforeUnmount(() => {
               {{ qbTask.current_item }}
             </div>
           </VAlert>
-          <div v-if="rows.length" class="selection-bar management-selection-row">
+          <div
+            v-if="rows.length"
+            class="selection-bar management-selection-row"
+            :class="{ 'has-selection': selectedKeys.length > 0 }"
+          >
             <span>已选 {{ selectedKeys.length }} 项</span>
             <VBtn size="small" variant="text" @click="selectAllVisible">全选当前</VBtn>
             <VBtn size="small" variant="text" :disabled="!selectedKeys.length" @click="selectedKeys = []">取消选择</VBtn>
@@ -1907,6 +2003,11 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
+.mobile-filter-toggle,
+.mobile-action-button {
+  display: none !important;
+}
+
 .management-selection-row {
   margin-top: 8px;
   margin-bottom: 0;
@@ -2197,16 +2298,123 @@ onBeforeUnmount(() => {
 
   .sticky-control-stack {
     top: 64px;
+    max-height: none;
     margin-inline: 0;
+    overflow: visible;
+  }
+
+  .management-toolbar {
+    padding: 5px;
+  }
+
+  .management-filter-row {
+    min-height: 38px;
+    gap: 6px;
+  }
+
+  .management-filter-row > .v-spacer,
+  .management-total,
+  .desktop-action-button {
+    display: none !important;
+  }
+
+  .mobile-filter-toggle,
+  .mobile-action-button {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+  }
+
+  .mobile-filter-toggle {
+    order: 2;
   }
 
   .state-filter-buttons {
-    flex-basis: 100%;
+    width: calc(100% - 42px);
+    max-width: calc(100% - 42px);
+    flex: 1 1 calc(100% - 42px);
+    order: 1;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .state-filter-buttons::-webkit-scrollbar {
+    display: none;
+  }
+
+  .state-filter-buttons .v-btn {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding-inline: 8px;
+  }
+
+  .state-button-count {
+    min-width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    padding-inline: 4px;
+  }
+
+  .management-filter-row .mobile-filter-detail {
+    display: none !important;
+  }
+
+  .management-filter-row.filters-expanded .mobile-filter-detail {
+    display: flex !important;
+    width: 100%;
+    max-width: none;
+    flex: 1 1 100%;
+    order: 5;
   }
 
   .rss-task-filter {
     flex: 1 1 100%;
     max-width: none;
+  }
+
+  .toolbar-actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    order: 4;
+    flex-wrap: nowrap;
+  }
+
+  .management-filter-row > .mobile-action-button {
+    order: 4;
+    margin-left: auto;
+  }
+
+  .management-selection-row:not(.has-selection) {
+    display: none;
+  }
+
+  .management-selection-row.has-selection {
+    min-height: 38px;
+    margin-top: 5px;
+    padding-top: 5px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .management-selection-row.has-selection::-webkit-scrollbar {
+    display: none;
+  }
+
+  .management-selection-row.has-selection > *,
+  .management-selection-row .selection-actions,
+  .management-selection-row .selection-actions .v-btn {
+    flex: 0 0 auto;
+  }
+
+  .management-selection-row .selection-actions {
+    flex-wrap: nowrap;
+  }
+
+  .qb-task-status-idle {
+    display: none;
   }
 
   .poster-grid {

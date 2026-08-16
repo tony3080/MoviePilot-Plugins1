@@ -519,7 +519,10 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("{ flush: 'sync' }", app_page)
         self.assertGreaterEqual(app_page.count('class="sticky-control-stack'), 2)
         self.assertIn(".sticky-control-stack {\n  position: sticky;", app_page)
-        self.assertEqual(app_page.count("management-toolbar"), 3)
+        self.assertEqual(
+            app_page.count('class="sticky-control-stack management-toolbar'),
+            2,
+        )
         self.assertEqual(app_page.count('class="management-filter-row"'), 2)
         self.assertEqual(
             app_page.count('class="selection-bar management-selection-row"'),
@@ -541,6 +544,25 @@ class RepositoryContractTest(unittest.TestCase):
             library_template.index('v-model="mediaState"'),
             library_template.index('v-model="mediaRssTaskIds"'),
         )
+
+    def test_mobile_management_toolbars_stay_compact(self) -> None:
+        app_page = (
+            PLUGIN_DIR / "src" / "components" / "AppPage.vue"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            "libraryMobileFiltersOpen",
+            "qbMobileFiltersOpen",
+            "mobile-filter-detail",
+            "filters-expanded",
+            ".management-selection-row:not(.has-selection)",
+            ".management-selection-row.has-selection",
+            "overflow-x: auto;",
+            "max-height: none;",
+            "qb-task-status-idle",
+        ):
+            self.assertIn(marker, app_page)
+        self.assertGreaterEqual(app_page.count("mobile-filter-toggle"), 4)
+        self.assertEqual(app_page.count("'has-selection': selectedKeys.length > 0"), 2)
 
     def test_chinese_dashboard_task_labels_and_dragon_branding(self) -> None:
         backend = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")

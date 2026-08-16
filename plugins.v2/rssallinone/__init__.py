@@ -57,7 +57,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.52"
+    plugin_version = "0.13.53"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
