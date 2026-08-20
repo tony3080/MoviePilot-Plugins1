@@ -32,6 +32,8 @@ DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
     "rename_enabled": False,
     "download_enabled": True,
     "delete_files": False,
+    "hr_enabled": False,
+    "hr_cron": "30 3 * * *",
 }
 
 TEXT_FIELDS = (
@@ -47,6 +49,7 @@ TEXT_FIELDS = (
     "cn_keywords",
     "realtime_source_root",
     "realtime_link_root",
+    "hr_cron",
 )
 BOOLEAN_FIELDS = (
     "pause_on_add",
@@ -59,6 +62,7 @@ BOOLEAN_FIELDS = (
     "rename_enabled",
     "download_enabled",
     "delete_files",
+    "hr_enabled",
 )
 INTEGER_LIMITS = {
     "delete_after_minutes": (0, 525600),
@@ -120,6 +124,8 @@ def normalize_rss_task(item: Dict[str, Any], position: int) -> Dict[str, Any]:
     normalized_config.pop("path_mappings", None)
     for field in TEXT_FIELDS:
         normalized_config[field] = str(normalized_config.get(field) or "").strip()
+    if not normalized_config.get("hr_cron"):
+        normalized_config["hr_cron"] = DEFAULT_RSS_TASK_CONFIG["hr_cron"]
     for field in BOOLEAN_FIELDS:
         normalized_config[field] = _as_bool(normalized_config.get(field))
     for field, (minimum, maximum) in INTEGER_LIMITS.items():

@@ -1650,6 +1650,20 @@ class SQLiteStore:
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
 
+    def list_rss_history_for_task(self, task_id: object) -> List[Dict[str, Any]]:
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            return []
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM rss_history"
+                " WHERE task_id = ?"
+                " AND status != 'archived'"
+                " ORDER BY updated_at DESC",
+                (normalized_task_id,),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
     def find_rss_source_keys(
         self,
         task_id: object,

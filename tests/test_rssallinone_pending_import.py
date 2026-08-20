@@ -1130,8 +1130,10 @@ class PendingImportTest(unittest.TestCase):
             coordinator.run("cron")
 
             item = store.get_media_item("media-1")
-            self.assertEqual(item["state"], "identified")
-            self.assertEqual(item["failure_code"], "cd2_monitor_failed")
+            self.assertEqual(item["state"], "rolled_back")
+            self.assertTrue(item["rolled_back"])
+            self.assertEqual(item["failure_code"], "")
+            self.assertEqual(item["failure_message"], "")
             self.assertTrue(source.exists())
             self.assertFalse(target.exists())
             self.assertEqual(cd2.paused, ["upload-2"])

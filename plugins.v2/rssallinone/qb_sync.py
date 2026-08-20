@@ -88,6 +88,9 @@ class RssTaskQbRule:
     realtime_link_root: str
     delete_after_minutes: int
     delete_files: bool
+    hr_enabled: bool = False
+    site_id: str = ""
+    hr_cron: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -102,6 +105,9 @@ class RssTaskQbRule:
             "realtime_link_root": self.realtime_link_root,
             "delete_after_minutes": self.delete_after_minutes,
             "delete_files": self.delete_files,
+            "hr_enabled": self.hr_enabled,
+            "site_id": self.site_id,
+            "hr_cron": self.hr_cron,
         }
 
 
@@ -165,6 +171,9 @@ class RssTaskQbScope:
                     0, int(config.get("delete_after_minutes") or 0)
                 ),
                 delete_files=_as_bool(config.get("delete_files", False)),
+                hr_enabled=_as_bool(config.get("hr_enabled", False)),
+                site_id=str(config.get("site_id") or "").strip(),
+                hr_cron=str(config.get("hr_cron") or "").strip(),
             ))
         return cls(rules, ignored)
 
@@ -212,6 +221,9 @@ class RssTaskQbScope:
                 rule.realtime_link_root,
                 rule.delete_after_minutes,
                 rule.delete_files,
+                rule.hr_enabled,
+                rule.site_id,
+                rule.hr_cron,
             )
             for rule in matches
         }) == 1:
@@ -772,6 +784,20 @@ class MoviePilotQbGateway:
             return "tv"
         return ""
 
+def _task_rule_uses_hr_scan(task_rule: Optional[RssTaskQbRule]) -> bool:
+    if not task_rule or not bool(task_rule.hr_enabled):
+        return False
+    site_id = str(task_rule.site_id or "").strip()
+    if not site_id:
+        return True
+    try:
+        from .rss_execute import MoviePilotRssGateway
+        from .rss_site_labels import identify_site_kind
+
+        return identify_site_kind(MoviePilotRssGateway.site_access(site_id)) == "chd"
+    except Exception:
+        return True
+
 class QbSyncService:
     """Synchronize qB state, recognition, and inventory without mutating qB."""
 
@@ -1276,6 +1302,7 @@ class QbSyncService:
             not completed
             or not task_rule
             or task_rule.delete_after_minutes <= 0
+            or _task_rule_uses_hr_scan(task_rule)
         ):
             return {}
         due_at = (

@@ -158,6 +158,7 @@ class MediaActionService:
         *,
         failure_code: str,
         failure_message: str,
+        mark_as_rolled_back: bool = False,
     ) -> Dict[str, Any]:
         item = self.store.get_media_item(media_id)
         if not item:
@@ -208,17 +209,17 @@ class MediaActionService:
             "completed_at": utc_now(),
         }
         rolled_back.update({
-            "state": "identified",
-            "failure_code": str(failure_code or "cd2_import_failed"),
-            "failure_message": str(failure_message or "CD2 入库失败"),
-            "rolled_back": False,
+            "state": "rolled_back" if mark_as_rolled_back else "identified",
+            "failure_code": "" if mark_as_rolled_back else str(failure_code or "cd2_import_failed"),
+            "failure_message": "" if mark_as_rolled_back else str(failure_message or "CD2 入库失败"),
+            "rolled_back": bool(mark_as_rolled_back),
             "details": details,
             "updated_at": utc_now(),
         })
         self.store.upsert_media_item(rolled_back)
         return {
             "message": f"已回滚本次硬链接 {deleted} 个，缺失 {missing} 个",
-            "state": "identified",
+            "state": "rolled_back" if mark_as_rolled_back else "identified",
             "deleted": deleted,
             "missing": missing,
         }

@@ -662,6 +662,7 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("QB下载器", editor)
         self.assertIn("QB分类", editor)
         self.assertIn("完成后创建实时硬链接", editor)
+        self.assertIn("HR保护", editor)
         self.assertIn("实时硬链接源根目录", editor)
         self.assertIn("mediaRssTaskIds", app_page)
         self.assertIn("label=\"RSS任务\"", app_page)
@@ -1470,6 +1471,7 @@ class PluginLifecycleTest(unittest.TestCase):
                         item["info_hash"] == "missing-with-files"
                         for item in plugin._store.list_qb_delete_jobs()
                     ))
+
                 finally:
                     module.MoviePilotQbGateway.list_torrents = original_list
                     module.MoviePilotQbGateway.torrent_dict = original_dict
@@ -1582,6 +1584,210 @@ class PluginLifecycleTest(unittest.TestCase):
                     else:
                         sys.modules[name] = value
 
+
+    def test_chd_hr_scan_deletes_torrents_not_on_list(self) -> None:
+        app = types.ModuleType("app")
+        app.__path__ = []
+        app_log = types.ModuleType("app.log")
+        app_plugins = types.ModuleType("app.plugins")
+        app_db = types.ModuleType("app.db")
+        app_db.__path__ = []
+        app_site_oper = types.ModuleType("app.db.site_oper")
+        apscheduler = types.ModuleType("apscheduler")
+        apscheduler.__path__ = []
+        apscheduler_triggers = types.ModuleType("apscheduler.triggers")
+        apscheduler_triggers.__path__ = []
+        apscheduler_cron = types.ModuleType("apscheduler.triggers.cron")
+
+        class Logger:
+            @staticmethod
+            def error(*_args, **_kwargs):
+                return None
+
+            info = error
+            warning = error
+
+        class CronTrigger:
+            @staticmethod
+            def from_crontab(value):
+                return str(value)
+
+        class PluginBase:
+            def __init__(self, *_args, **_kwargs):
+                self._config = {}
+
+            @staticmethod
+            def get_data_path():
+                return Path(directory)
+
+        with tempfile.TemporaryDirectory() as directory:
+            app_log.logger = Logger()
+            app_plugins._PluginBase = PluginBase
+            app_site_oper.SiteOper = type("SiteOper", (), {"list": staticmethod(lambda: [])})
+            apscheduler_cron.CronTrigger = CronTrigger
+            previous = {
+                name: sys.modules.get(name)
+                for name in (
+                    "app", "app.log", "app.plugins", "app.db", "app.db.site_oper",
+                    "apscheduler", "apscheduler.triggers", "apscheduler.triggers.cron",
+                    "rssallinone",
+                )
+            }
+            try:
+                sys.modules["app"] = app
+                sys.modules["app.log"] = app_log
+                sys.modules["app.plugins"] = app_plugins
+                sys.modules["app.db"] = app_db
+                sys.modules["app.db.site_oper"] = app_site_oper
+                sys.modules["apscheduler"] = apscheduler
+                sys.modules["apscheduler.triggers"] = apscheduler_triggers
+                sys.modules["apscheduler.triggers.cron"] = apscheduler_cron
+                sys.modules.pop("rssallinone", None)
+                spec = importlib.util.spec_from_file_location(
+                    "rssallinone",
+                    PLUGIN_DIR / "__init__.py",
+                    submodule_search_locations=[str(PLUGIN_DIR)],
+                )
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["rssallinone"] = module
+                spec.loader.exec_module(module)
+                plugin = module.RssAllInOne()
+                plugin.init_plugin({"enabled": True})
+                plugin._store.replace_rss_tasks([{
+                    "id": "movies",
+                    "name": "彩虹岛",
+                    "enabled": True,
+                    "position": 0,
+                    "config": {
+                        "qb_downloader": "qb-main",
+                        "qb_category": "movie",
+                        "site_id": "12",
+                        "hr_enabled": True,
+                        "hr_cron": "30 3 * * *",
+                        "delete_after_minutes": 1,
+                        "delete_files": True,
+                    },
+                }])
+                service_ids = {item["id"] for item in plugin.get_service()}
+                self.assertIn("RssAllInOne.HrScan.movies", service_ids)
+                torrents = {
+                    "hr-hold": {"hash": "hr-hold", "progress": 1.0, "state": "pausedUP"},
+                    "hr-release": {"hash": "hr-release", "progress": 1.0, "state": "pausedUP"},
+                    "hr-noid": {"hash": "hr-noid", "progress": 1.0, "state": "pausedUP"},
+                    "hr-downloading": {"hash": "hr-downloading", "progress": 0.1, "state": "pausedDL"},
+                }
+                histories = (
+                    ("hr-hold", "571440"),
+                    ("hr-release", "599999"),
+                    ("hr-noid", ""),
+                    ("hr-downloading", "588888"),
+                )
+                for info_hash, torrent_id in histories:
+                    payload = {
+                        "downloader": "qb-main",
+                        "info_hash": info_hash,
+                    }
+                    if torrent_id:
+                        payload["torrent_id"] = torrent_id
+                    plugin._store.upsert_rss_history({
+                        "task_id": "movies",
+                        "source_key": f"{info_hash}-source",
+                        "content_key": f"qb-main:{info_hash}",
+                        "title": info_hash,
+                        "status": "processed",
+                        "payload": payload,
+                    })
+                plugin._store.schedule_qb_delete(
+                    task_id="movies",
+                    task_name="彩虹岛",
+                    downloader_id="qb-main",
+                    info_hash="hr-hold",
+                    source_path="/SSD/QB目录/REMUX/CHD/hr-hold.mkv",
+                    delete_files=True,
+                    due_at="2020-01-01T00:00:00+00:00",
+                )
+                removed = []
+                fetch_calls = []
+                original_list = module.MoviePilotQbGateway.list_torrents
+                original_dict = module.MoviePilotQbGateway.torrent_dict
+                original_remove = module.MoviePilotQbGateway.remove_torrent
+                original_site_access = module.MoviePilotRssGateway.site_access
+                original_fetch = module.MoviePilotRssGateway.fetch_site_html
+                try:
+                    module.MoviePilotQbGateway.list_torrents = staticmethod(
+                        lambda _downloader: list(torrents.values())
+                    )
+                    module.MoviePilotQbGateway.torrent_dict = staticmethod(dict)
+                    module.MoviePilotQbGateway.remove_torrent = staticmethod(
+                        lambda downloader, info_hash, delete_files: (
+                            removed.append((downloader, info_hash, delete_files))
+                            or torrents.pop(info_hash, None)
+                            or True
+                        )
+                    )
+                    module.MoviePilotRssGateway.site_access = staticmethod(
+                        lambda _site_id: types.SimpleNamespace(
+                            site_name="彩虹岛",
+                            site_url="https://ptchdbits.co/",
+                            cookie="c_secure_uid=MTc5NA%3D%3D",
+                        )
+                    )
+                    module.MoviePilotRssGateway.fetch_site_html = staticmethod(
+                        lambda _url, _access: (
+                            fetch_calls.append(_url)
+                            or "<title>CHDBits :: Hit And Runs</title>"
+                            '<a href="details.php?id=571440&amp;hit=1">hold</a>'
+                        )
+                    )
+                    plugin._scheduled_qb_deletes()
+                    self.assertEqual(removed, [])
+                    self.assertFalse(any(
+                        item["info_hash"] == "hr-hold"
+                        for item in plugin._store.list_qb_delete_jobs()
+                    ))
+                    plugin._scheduled_hr_scan("movies")
+                    fail_removed = list(removed)
+                    module.MoviePilotRssGateway.fetch_site_html = staticmethod(
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                            RuntimeError("cookie expired")
+                        )
+                    )
+                    plugin._store.upsert_rss_history({
+                        "task_id": "movies",
+                        "source_key": "hr-release-source",
+                        "content_key": "qb-main:hr-release",
+                        "title": "hr-release",
+                        "status": "processed",
+                        "payload": {
+                            "downloader": "qb-main",
+                            "info_hash": "hr-release",
+                            "torrent_id": "599999",
+                        },
+                    })
+                    torrents["hr-release"] = {
+                        "hash": "hr-release",
+                        "progress": 1.0,
+                        "state": "pausedUP",
+                    }
+                    plugin._scheduled_hr_scan("movies")
+                    self.assertEqual(removed, fail_removed)
+                    torrents.pop("hr-release", None)
+                finally:
+                    module.MoviePilotQbGateway.list_torrents = original_list
+                    module.MoviePilotQbGateway.torrent_dict = original_dict
+                    module.MoviePilotQbGateway.remove_torrent = original_remove
+                    module.MoviePilotRssGateway.site_access = original_site_access
+                    module.MoviePilotRssGateway.fetch_site_html = original_fetch
+                self.assertEqual(removed, [("qb-main", "hr-release", True)])
+                remaining = set(torrents)
+                self.assertEqual(remaining, {"hr-hold", "hr-noid", "hr-downloading"})
+                self.assertGreaterEqual(len(fetch_calls), 1)
+            finally:
+                for name, value in previous.items():
+                    if value is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = value
 
 if __name__ == "__main__":
     unittest.main()

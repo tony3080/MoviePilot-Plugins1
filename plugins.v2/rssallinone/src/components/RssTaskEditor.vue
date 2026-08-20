@@ -28,6 +28,7 @@ const booleanOptions = [
   { key: 'rename_enabled', label: '重命名' },
   { key: 'download_enabled', label: '下载' },
   { key: 'delete_files', label: '删除文件' },
+  { key: 'hr_enabled', label: 'HR保护' },
 ]
 
 const downloaderOptions = computed(() => props.downloaders.map(item => ({
@@ -79,6 +80,8 @@ function defaultConfig() {
     rename_enabled: false,
     download_enabled: true,
     delete_files: false,
+    hr_enabled: false,
+    hr_cron: '30 3 * * *',
   }
 }
 
@@ -273,6 +276,19 @@ watch(
                 label="完成后删除任务 (分钟)"
                 type="number"
                 min="0"
+                :disabled="task.config.hr_enabled"
+                :hint="task.config.hr_enabled ? '勾选 HR 后此项无效' : ''"
+                :persistent-hint="task.config.hr_enabled"
+              />
+            </VCol>
+            <VCol cols="12" md="3">
+              <VTextField
+                v-model="task.config.hr_cron"
+                label="HR扫描 CRON"
+                placeholder="30 3 * * *"
+                :disabled="!task.config.hr_enabled"
+                hint="勾选 HR 后按此 CRON 对照彩虹岛 HR 名单删除任务"
+                :persistent-hint="task.config.hr_enabled"
               />
             </VCol>
             <VCol cols="12" md="3">

@@ -979,8 +979,13 @@ class PendingImportCoordinator:
     def _rollback_card(
         self, batch: Dict[str, Any], media_id: str, code: str, message: str
     ) -> None:
+        # 真实传输说明 CD2 没有完成秒传；这类卡片回到“已回退”，不显示失败标记。
+        mark_as_rolled_back = "真实传输" in str(message or "")
         MediaActionService(self.store).rollback_monitored_import(
-            media_id, failure_code=code, failure_message=message
+            media_id,
+            failure_code=code,
+            failure_message=message,
+            mark_as_rolled_back=mark_as_rolled_back,
         )
         for watch in self.store.list_import_watches(batch_id=batch["id"], media_id=media_id):
             watch.update({"state": "rolled_back", "updated_at": utc_now()})

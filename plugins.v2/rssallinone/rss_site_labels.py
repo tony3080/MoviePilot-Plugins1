@@ -28,6 +28,10 @@ class SiteHttpError(SiteLabelError):
         super().__init__(f"站点请求 HTTP {self.status_code}")
 
 
+class ChdHrError(RuntimeError):
+    """Rainbow Island HR list request or parse failure."""
+
+
 class _ElementCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -219,6 +223,17 @@ class SiteLabelService:
             method(message)
 
 
+CHD_HR_URL = "https://ptchdbits.co/hnr.php"
+CHD_HR_DETAIL_ID_PATTERN = re.compile(
+    r"details\.php\?id=(\d+)(?:&|&amp;)hit=1",
+    re.IGNORECASE,
+)
+CHD_HR_USER_ID_PATTERN = re.compile(
+    r"userdetails\.php\?id=(\d+)",
+    re.IGNORECASE,
+)
+
+
 def identify_site_kind(access: Any) -> str:
     name = str(
         getattr(access, "site_key", "")
@@ -240,6 +255,57 @@ def identify_site_kind(access: Any) -> str:
             or host == "hdsky.me":
         return "hdsky"
     return ""
+
+
+def chd_hr_list_url(access: Any = None, html_text: str = "") -> str:
+    user_id = ""
+    cookie = str(getattr(access, "cookie", "") or "")
+    match = re.search(r"(?i)(?:^|;\s*)c_secure_uid=([^;]+)", cookie)
+    if match:
+        user_id = _decode_nexus_uid(match.group(1))
+    if not user_id:
+        found = CHD_HR_USER_ID_PATTERN.search(str(html_text or ""))
+        if found:
+            user_id = found.group(1)
+    if not user_id:
+        raise ChdHrError("彩虹岛站点身份无法确定 HR 用户 ID")
+    return f"{CHD_HR_URL}?id={user_id}"
+
+
+def parse_chd_hr_torrent_ids(page: str) -> list[str]:
+    text = str(page or "")
+    if re.search(r"未登录|takelogin\.php|该页面必须在登录后才能访问", text):
+        raise ChdHrError("彩虹岛 HR 页面未登录")
+    if "Hit And Runs" not in text and "hnr.php" not in text.casefold():
+        raise ChdHrError("彩虹岛 HR 页面内容无效")
+    unique: list[str] = []
+    seen = set()
+    for torrent_id in CHD_HR_DETAIL_ID_PATTERN.findall(text):
+        if torrent_id in seen:
+            continue
+        seen.add(torrent_id)
+        unique.append(torrent_id)
+    return unique
+
+
+def _decode_nexus_uid(value: object) -> str:
+    import base64
+    from urllib.parse import unquote
+
+    raw = unquote(str(value or "").strip())
+    if not raw:
+        return ""
+    padded = raw + ("=" * ((4 - len(raw) % 4) % 4))
+    decoded = ""
+    try:
+        decoded = base64.b64decode(padded).decode("utf-8", errors="ignore")
+    except Exception:
+        decoded = ""
+    match = re.search(r"\d+", decoded or "")
+    if match:
+        return match.group(0)
+    match = re.search(r"\d+", raw)
+    return match.group(0) if match else ""
 
 
 def parse_ubits_labels(page: str, keywords: Sequence[str]) -> Tuple[bool, bool]:

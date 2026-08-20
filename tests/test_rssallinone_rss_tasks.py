@@ -56,6 +56,8 @@ class RssTaskContractTest(unittest.TestCase):
         self.assertEqual(task["config"]["qb_downloader"], "qb-main")
         self.assertEqual(task["config"]["qb_category"], "movie")
         self.assertEqual(task["config"]["delete_after_minutes"], 0)
+        self.assertFalse(task["config"]["hr_enabled"])
+        self.assertEqual(task["config"]["hr_cron"], "30 3 * * *")
         self.assertTrue(task["config"]["pause_on_add"])
         self.assertTrue(task["config"]["realtime_hardlink_enabled"])
         self.assertEqual(

@@ -41,7 +41,8 @@ from .qb_sync import (
     RssTaskQbScope,
 )
 from .rss_feed import RssFeedError, RssPreviewService
-from .rss_execute import RSS_RUN_TASK_TYPE, RssExecutionError, RssExecutionService
+from .rss_execute import RSS_RUN_TASK_TYPE, RssExecutionError, RssExecutionService, MoviePilotRssGateway
+from .rss_site_labels import ChdHrError, chd_hr_list_url, identify_site_kind, parse_chd_hr_torrent_ids
 from .rss_tasks import normalize_rss_tasks
 
 
@@ -57,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.53"
+    plugin_version = "0.13.54"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -104,6 +105,7 @@ class RssAllInOne(_PluginBase):
         self._stop_event = threading.Event()
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
+        self._chd_hr_cache: Dict[str, Any] = {}
         self._last_emby_callback_probe: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
@@ -261,6 +263,23 @@ class RssAllInOne(_PluginBase):
                             "name": f"RSS一条龙 开始任务：{task_name}",
                             "trigger": start_trigger,
                             "func": self._scheduled_rss_start,
+                            "func_kwargs": {"task_id": task_id},
+                        })
+
+                if config.get("hr_enabled"):
+                    hr_cron = str(config.get("hr_cron") or "").strip() or "30 3 * * *"
+                    try:
+                        hr_trigger = CronTrigger.from_crontab(hr_cron)
+                    except (TypeError, ValueError) as error:
+                        logger.error(
+                            f"RSS一条龙：任务 {task_name} 的 HR CRON 无效：{error}"
+                        )
+                    else:
+                        services.append({
+                            "id": f"RssAllInOne.HrScan.{task_id}",
+                            "name": f"RSS一条龙 HR扫描：{task_name}",
+                            "trigger": hr_trigger,
+                            "func": self._scheduled_hr_scan,
                             "func_kwargs": {"task_id": task_id},
                         })
         except ImportError:
@@ -1399,6 +1418,13 @@ class RssAllInOne(_PluginBase):
                         ).strip().lower():
                             torrent = raw
                             break
+                    if self._rss_task_uses_hr_scan(self._rss_task_by_id(job.get("task_id"))):
+                        self._store.delete_qb_delete_job(job.get("id"))
+                        logger.info(
+                            "RSS一条龙：HR 扫描已接管，已取消到期删除 "
+                            f"{job.get('downloader_id')}/{job.get('info_hash')}"
+                        )
+                        continue
                     if torrent and not self._torrent_is_completed(torrent):
                         raise RuntimeError("qB 任务当前尚未完成，延后删除")
                     if torrent and not MoviePilotQbGateway.remove_torrent(
@@ -1458,6 +1484,152 @@ class RssAllInOne(_PluginBase):
         batch = status.get("batch") or {}
         if batch or status.get("importing"):
             self._start_pending_import("supervisor")
+
+    def _scheduled_hr_scan(self, task_id: str = "") -> None:
+        if not self._store or not self._qb_delete_lock.acquire(blocking=False):
+            return
+        try:
+            self._run_hr_scan(str(task_id or "").strip())
+        finally:
+            self._qb_delete_lock.release()
+
+    def _run_hr_scan(self, task_id: str) -> None:
+        task = self._rss_task_by_id(task_id)
+        if not task or not task.get("enabled"):
+            return
+        config = task.get("config") if isinstance(task.get("config"), dict) else {}
+        if not bool(config.get("hr_enabled")):
+            return
+        site_id = str(config.get("site_id") or "").strip()
+        if not site_id:
+            logger.error(f"RSS一条龙：任务 {task.get('name') or task_id} 已启用 HR，但没有站点身份")
+            return
+        try:
+            access = MoviePilotRssGateway.site_access(site_id)
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取彩虹岛站点身份失败，本轮不删除：{error}")
+            return
+        if identify_site_kind(access) != "chd":
+            logger.info(f"RSS一条龙：任务 {task.get('name') or task_id} 不是彩虹岛，已忽略 HR 扫描")
+            return
+        try:
+            hr_ids = self._chd_hr_torrent_ids(access)
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取彩虹岛 HR 列表失败，本轮不删除：{error}")
+            return
+        delete_files = bool(config.get("delete_files"))
+        downloader_default = str(config.get("qb_downloader") or "").strip()
+        seen: set[tuple[str, str]] = set()
+        for history in self._store.list_rss_history_for_task(task_id):
+            payload = history.get("payload") if isinstance(history.get("payload"), dict) else {}
+            torrent_id = str(payload.get("torrent_id") or "").strip()
+            info_hash = str(payload.get("info_hash") or "").strip().lower()
+            downloader = str(payload.get("downloader") or downloader_default).strip()
+            if not torrent_id.isdigit() or not info_hash or not downloader:
+                continue
+            key = (downloader, info_hash)
+            if key in seen:
+                continue
+            seen.add(key)
+            if torrent_id in hr_ids:
+                continue
+            try:
+                self._delete_completed_qb_torrent(
+                    downloader_id=downloader,
+                    info_hash=info_hash,
+                    delete_files=delete_files,
+                    reason="HR名单",
+                )
+            except Exception as error:
+                logger.error(
+                    "RSS一条龙：HR 扫描删除失败 "
+                    f"{downloader}/{info_hash}：{error}"
+                )
+
+    def _delete_completed_qb_torrent(
+        self,
+        *,
+        downloader_id: object,
+        info_hash: object,
+        delete_files: bool,
+        reason: str,
+    ) -> str:
+        torrent = self._find_qb_torrent(downloader_id, info_hash)
+        if torrent and not self._torrent_is_completed(torrent):
+            return "incomplete"
+        if torrent and not MoviePilotQbGateway.remove_torrent(
+            str(downloader_id or ""),
+            str(info_hash or ""),
+            bool(delete_files),
+        ):
+            raise RuntimeError("qB 删除任务返回失败")
+        if torrent and not self._confirm_qb_torrent_absent(downloader_id, info_hash):
+            raise RuntimeError("qB 删除接口已返回成功，但任务仍然存在")
+        if self._store:
+            self._store.archive_rss_history_for_torrent(downloader_id, info_hash)
+            self._store.delete_torrent_snapshot(downloader_id, info_hash)
+            self._store.delete_qb_delete_jobs_for_torrent(downloader_id, info_hash)
+        logger.info(
+            f"RSS一条龙：{reason}删除完成 {downloader_id}/{info_hash}，"
+            f"删除文件={bool(delete_files)}"
+            + ("，任务已由 qB 或用户提前移除" if not torrent else "")
+        )
+        return "missing" if not torrent else "deleted"
+
+    def _find_qb_torrent(self, downloader_id: object, info_hash: object) -> Optional[Dict[str, Any]]:
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        if not downloader or not normalized_hash:
+            return None
+        for item in MoviePilotQbGateway.list_torrents(downloader):
+            raw = MoviePilotQbGateway.torrent_dict(item)
+            if str(raw.get("hash") or "").strip().lower() == normalized_hash:
+                return raw
+        return None
+
+    def _rss_task_by_id(self, task_id: object) -> Optional[Dict[str, Any]]:
+        normalized = str(task_id or "").strip()
+        if not normalized or not self._store:
+            return None
+        return next(
+            (
+                item
+                for item in self._store.list_all_rss_tasks()
+                if str(item.get("id") or "").strip() == normalized
+            ),
+            None,
+        )
+
+    def _rss_task_uses_hr_scan(self, task: Optional[Dict[str, Any]]) -> bool:
+        if not task:
+            return False
+        config = task.get("config") if isinstance(task.get("config"), dict) else {}
+        if not bool(config.get("hr_enabled")):
+            return False
+        site_id = str(config.get("site_id") or "").strip()
+        if not site_id:
+            return True
+        try:
+            access = MoviePilotRssGateway.site_access(site_id)
+        except Exception:
+            return True
+        return identify_site_kind(access) == "chd"
+
+    def _chd_hr_torrent_ids(self, access: Any) -> set[str]:
+        try:
+            html_text = MoviePilotRssGateway.fetch_site_html(chd_hr_list_url(access), access)
+            ids = parse_chd_hr_torrent_ids(html_text)
+        except ChdHrError as error:
+            if "无法确定 HR 用户 ID" not in str(error):
+                raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+            probe = MoviePilotRssGateway.fetch_site_html("https://ptchdbits.co/hnr.php", access)
+            html_text = MoviePilotRssGateway.fetch_site_html(
+                chd_hr_list_url(access, probe), access
+            )
+            ids = parse_chd_hr_torrent_ids(html_text)
+        except Exception as error:
+            raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+        return set(ids)
 
     @staticmethod
     def _torrent_is_completed(torrent: Dict[str, Any]) -> bool:

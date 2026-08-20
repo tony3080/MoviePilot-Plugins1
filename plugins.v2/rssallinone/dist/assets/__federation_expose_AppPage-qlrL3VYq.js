@@ -47,6 +47,7 @@ const booleanOptions = [
   { key: 'rename_enabled', label: '重命名' },
   { key: 'download_enabled', label: '下载' },
   { key: 'delete_files', label: '删除文件' },
+  { key: 'hr_enabled', label: 'HR保护' },
 ];
 
 const downloaderOptions = computed$4(() => props.downloaders.map(item => ({
@@ -98,6 +99,8 @@ function defaultConfig() {
     rename_enabled: false,
     download_enabled: true,
     delete_files: false,
+    hr_enabled: false,
+    hr_cron: '30 3 * * *',
   }
 }
 
@@ -436,8 +439,28 @@ return (_ctx, _cache) => {
                                 modelModifiers: { number: true },
                                 label: "完成后删除任务 (分钟)",
                                 type: "number",
-                                min: "0"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                min: "0",
+                                disabled: task.config.hr_enabled,
+                                hint: task.config.hr_enabled ? '勾选 HR 后此项无效' : '',
+                                "persistent-hint": task.config.hr_enabled
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "hint", "persistent-hint"])
+                            ]),
+                            _: 2
+                          }, 1024),
+                          _createVNode$4(_component_VCol, {
+                            cols: "12",
+                            md: "3"
+                          }, {
+                            default: _withCtx$4(() => [
+                              _createVNode$4(_component_VTextField, {
+                                modelValue: task.config.hr_cron,
+                                "onUpdate:modelValue": $event => ((task.config.hr_cron) = $event),
+                                label: "HR扫描 CRON",
+                                placeholder: "30 3 * * *",
+                                disabled: !task.config.hr_enabled,
+                                hint: "勾选 HR 后按此 CRON 对照彩虹岛 HR 名单删除任务",
+                                "persistent-hint": task.config.hr_enabled
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "persistent-hint"])
                             ]),
                             _: 2
                           }, 1024),
@@ -561,7 +584,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-cb31c3f0"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-31d92add"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
