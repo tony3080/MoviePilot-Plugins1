@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.61"
+    plugin_version = "0.13.62"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1606,8 +1606,9 @@ class RssAllInOne(_PluginBase):
             for hist in self._store.list_all_rss_history():
                 if hist.get("task_id") != task_id:
                     continue
-                h = str(hist.get("hash") or "").strip().lower()
-                tid = str(hist.get("torrent_id") or "").strip()
+                payload = hist.get("payload") if isinstance(hist.get("payload"), dict) else {}
+                h = str(payload.get("info_hash") or "").strip().lower()
+                tid = str(payload.get("torrent_id") or "").strip()
                 if h and tid and tid.isdigit():
                     hash_to_torrent_id[h] = tid
         
