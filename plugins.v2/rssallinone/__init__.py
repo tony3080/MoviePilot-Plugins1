@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.58"
+    plugin_version = "0.13.59"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1554,46 +1554,87 @@ class RssAllInOne(_PluginBase):
         except Exception as error:
             logger.error(f"RSS一条龙：读取彩虹岛 HR 列表失败，本轮不删除：{error}")
             return
+        
+        downloader = str(config.get("qb_downloader") or "").strip()
+        category = str(config.get("qb_category") or "").strip()
+        delete_files = bool(config.get("delete_files"))
+        
+        if not downloader or not category:
+            logger.error(f"RSS一条龙：任务 {task_name} 缺少下载器或分类配置")
+            return
+        
         logger.info(
             f"RSS一条龙：HR名单读取完成，任务={task_name}，"
-            f"名单种子数={len(hr_ids)}，删除文件={bool(config.get('delete_files'))}"
+            f"名单种子数={len(hr_ids)}，删除文件={delete_files}"
         )
-        delete_files = bool(config.get("delete_files"))
-        downloader_default = str(config.get("qb_downloader") or "").strip()
+        
+        # 从 qB 读取该分类的所有种子
+        try:
+            all_torrents = MoviePilotQbGateway.list_torrents(downloader)
+        except Exception as error:
+            logger.error(f"RSS一条龙：读取 qB 种子列表失败，任务={task_name}：{error}")
+            return
+        
+        # 过滤出该分类的种子
+        category_torrents = [
+            t for t in all_torrents
+            if str(t.get("category") or "").strip() == category
+        ]
+        
+        logger.info(
+            f"RSS一条龙：qB 分类种子统计，任务={task_name}，"
+            f"分类={category}，种子总数={len(category_torrents)}"
+        )
+        
         seen: set[tuple[str, str]] = set()
         stats = {
-            "history": 0,
-            "not_completed_processed": 0,
-            "invalid": 0,
+            "qb_total": len(category_torrents),
+            "completed": 0,
+            "incomplete": 0,
+            "no_torrent_id": 0,
             "duplicate": 0,
             "candidate": 0,
             "in_hr": 0,
-            "incomplete": 0,
             "deleted": 0,
             "already_absent": 0,
             "failed": 0,
         }
-        for history in self._store.list_rss_history_for_task(task_id):
-            stats["history"] += 1
-            payload = history.get("payload") if isinstance(history.get("payload"), dict) else {}
-            if not bool(payload.get("completion_processed")):
-                stats["not_completed_processed"] += 1
+        
+        from .rss_feed import extract_torrent_id
+        
+        for torrent in category_torrents:
+            info_hash = str(torrent.get("hash") or "").strip().lower()
+            if not info_hash:
                 continue
-            torrent_id = str(payload.get("torrent_id") or "").strip()
-            info_hash = str(payload.get("info_hash") or "").strip().lower()
-            downloader = str(payload.get("downloader") or downloader_default).strip()
-            if not torrent_id.isdigit() or not info_hash or not downloader:
-                stats["invalid"] += 1
+            
+            # 检查是否完成
+            if not self._torrent_is_completed(torrent):
+                stats["incomplete"] += 1
                 continue
+            
+            stats["completed"] += 1
+            
+            # 从 comment 字段提取 torrent_id
+            comment = str(torrent.get("comment") or "").strip()
+            torrent_id = extract_torrent_id(comment)
+            
+            if not torrent_id or not torrent_id.isdigit():
+                stats["no_torrent_id"] += 1
+                continue
+            
             key = (downloader, info_hash)
             if key in seen:
                 stats["duplicate"] += 1
                 continue
             seen.add(key)
+            
             stats["candidate"] += 1
+            
             if torrent_id in hr_ids:
                 stats["in_hr"] += 1
                 continue
+            
+            # 不在 HR 名单中，删除
             try:
                 result = self._delete_completed_qb_torrent(
                     downloader_id=downloader,
@@ -1610,18 +1651,20 @@ class RssAllInOne(_PluginBase):
             except Exception as error:
                 stats["failed"] += 1
                 logger.error(
-                    "RSS一条龙：HR 扫描删除失败 "
+                    f"RSS一条龙：HR 扫描删除失败 "
                     f"{downloader}/{info_hash}：{error}"
                 )
+        
         logger.info(
             f"RSS一条龙：HR扫描结束，任务={task_name}，"
-            f"历史={stats['history']}，已完成记录={stats['history'] - stats['not_completed_processed']}，"
+            f"qB总数={stats['qb_total']}，已完成={stats['completed']}，"
             f"有效候选={stats['candidate']}，仍在HR名单={stats['in_hr']}，已删除={stats['deleted']}，"
             f"已不存在={stats['already_absent']}，未完成={stats['incomplete']}，"
-            f"无效记录={stats['invalid']}，重复={stats['duplicate']}，失败={stats['failed']}"
+            f"无种子ID={stats['no_torrent_id']}，重复={stats['duplicate']}，失败={stats['failed']}"
         )
 
-    def _delete_completed_qb_torrent(
+
+    def _delete_completed_qb_torrent()
         self,
         *,
         downloader_id: object,
