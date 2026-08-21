@@ -1600,7 +1600,21 @@ class RssAllInOne(_PluginBase):
             "failed": 0,
         }
         
-        from .rss_feed import extract_torrent_id
+        # 构建 hash -> torrent_id 映射（从 RSS 历史记录）
+        hash_to_torrent_id: dict[str, str] = {}
+        if self._store:
+            for hist in self._store.list_all_rss_history():
+                if hist.get("task_id") != task_id:
+                    continue
+                h = str(hist.get("hash") or "").strip().lower()
+                tid = str(hist.get("torrent_id") or "").strip()
+                if h and tid and tid.isdigit():
+                    hash_to_torrent_id[h] = tid
+        
+        logger.info(
+            f"RSS一条龙：RSS历史映射构建完成，任务={task_name}，"
+            f"有效映射数={len(hash_to_torrent_id)}"
+        )
         
         for torrent in category_torrents:
             info_hash = str(torrent.get("hash") or "").strip().lower()
@@ -1614,9 +1628,14 @@ class RssAllInOne(_PluginBase):
             
             stats["completed"] += 1
             
-            # 从 comment 字段提取 torrent_id
-            comment = str(torrent.get("comment") or "").strip()
-            torrent_id = extract_torrent_id(comment)
+            # 从 RSS 历史记录查询 torrent_id
+            torrent_id = hash_to_torrent_id.get(info_hash, "")
+            
+            # 如果历史中没有，尝试从 comment URL 提取
+            if not torrent_id or not torrent_id.isdigit():
+                from .rss_feed import extract_torrent_id
+                comment = str(torrent.get("comment") or "").strip()
+                torrent_id = extract_torrent_id(comment)
             
             if not torrent_id or not torrent_id.isdigit():
                 stats["no_torrent_id"] += 1
