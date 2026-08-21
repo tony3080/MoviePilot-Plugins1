@@ -1664,7 +1664,7 @@ class RssAllInOne(_PluginBase):
         )
 
 
-    def _delete_completed_qb_torrent()
+    def _delete_completed_qb_torrent(
         self,
         *,
         downloader_id: object,
