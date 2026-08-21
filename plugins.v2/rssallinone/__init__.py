@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.62"
+    plugin_version = "0.13.63"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1205,15 +1205,39 @@ class RssAllInOne(_PluginBase):
                 scope.downloader_categories(),
                 utc_now(),
             )
+            scheduler_refreshed = self._refresh_scheduler_services()
             return {
                 "success": True,
                 "message": f"已保存 {len(items)} 条 RSS 任务",
                 "items": items,
                 "total": len(items),
                 "out_of_scope": out_of_scope,
+                "scheduler_refreshed": scheduler_refreshed,
             }
         except (TypeError, ValueError) as error:
             return {"success": False, "message": str(error), "items": []}
+
+    def _refresh_scheduler_services(self) -> bool:
+        """Reload this plugin's scheduled services after task configuration changes."""
+        try:
+            from app.scheduler import Scheduler
+
+            updater = getattr(Scheduler(), "update_plugin_job", None)
+            if not callable(updater):
+                logger.warning(
+                    "RSS一条龙：当前 MoviePilot 未提供调度任务刷新接口，"
+                    "RSS CRON 将在插件重载后生效"
+                )
+                return False
+            updater(self.__class__.__name__)
+            logger.info("RSS一条龙：RSS任务保存后已刷新本插件调度任务")
+            return True
+        except Exception as error:
+            logger.warning(
+                f"RSS一条龙：保存 RSS 任务后刷新调度任务失败，"
+                f"配置已保存，重载插件后会生效：{error}"
+            )
+            return False
 
     @staticmethod
     def api_sites() -> Dict[str, Any]:
