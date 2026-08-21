@@ -1652,7 +1652,7 @@ class SQLiteStore:
 
 
     def list_all_rss_history(self) -> List[Dict[str, Any]]:
-        """"""Get all RSS history records (no pagination, no archived).""""""
+        """Get all RSS history records (no pagination, no archived)."""
         with self.connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM rss_history WHERE status != 'archived' ORDER BY created_at DESC"
