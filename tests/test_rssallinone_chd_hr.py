@@ -47,6 +47,10 @@ class ChdHrParseTest(unittest.TestCase):
             rss_site_labels.parse_chd_hr_torrent_ids(
                 "<title>登录</title><a href=\"takelogin.php\">login</a>"
             )
+        with self.assertRaises(rss_site_labels.ChdHrError):
+            rss_site_labels.parse_chd_hr_torrent_ids(
+                "<title>Some page</title><a href=\"hnr.php\">hr</a>"
+            )
 
     def test_list_url_uses_cookie_uid_or_page_uid(self) -> None:
         access = types.SimpleNamespace(cookie="c_secure_uid=MTc5NA==")

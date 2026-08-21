@@ -1689,6 +1689,8 @@ class PluginLifecycleTest(unittest.TestCase):
                     }
                     if torrent_id:
                         payload["torrent_id"] = torrent_id
+                    if info_hash != "hr-downloading":
+                        payload["completion_processed"] = True
                     plugin._store.upsert_rss_history({
                         "task_id": "movies",
                         "source_key": f"{info_hash}-source",
@@ -1747,6 +1749,10 @@ class PluginLifecycleTest(unittest.TestCase):
                     ))
                     plugin._scheduled_hr_scan("movies")
                     fail_removed = list(removed)
+                    cached_fetch_count = len(fetch_calls)
+                    plugin._scheduled_hr_scan("movies")
+                    self.assertEqual(len(fetch_calls), cached_fetch_count)
+                    plugin._chd_hr_cache.clear()
                     module.MoviePilotRssGateway.fetch_site_html = staticmethod(
                         lambda *_args, **_kwargs: (_ for _ in ()).throw(
                             RuntimeError("cookie expired")

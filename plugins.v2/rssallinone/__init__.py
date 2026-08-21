@@ -1419,6 +1419,8 @@ class RssAllInOne(_PluginBase):
                             torrent = raw
                             break
                     if self._rss_task_uses_hr_scan(self._rss_task_by_id(job.get("task_id"))):
+                        # Old jobs created before HR became an independent policy
+                        # are no longer actionable by the ordinary due-delete loop.
                         self._store.delete_qb_delete_job(job.get("id"))
                         logger.info(
                             "RSS一条龙：HR 扫描已接管，已取消到期删除 "
@@ -1522,6 +1524,8 @@ class RssAllInOne(_PluginBase):
         seen: set[tuple[str, str]] = set()
         for history in self._store.list_rss_history_for_task(task_id):
             payload = history.get("payload") if isinstance(history.get("payload"), dict) else {}
+            if not bool(payload.get("completion_processed")):
+                continue
             torrent_id = str(payload.get("torrent_id") or "").strip()
             info_hash = str(payload.get("info_hash") or "").strip().lower()
             downloader = str(payload.get("downloader") or downloader_default).strip()
@@ -1604,31 +1608,29 @@ class RssAllInOne(_PluginBase):
         if not task:
             return False
         config = task.get("config") if isinstance(task.get("config"), dict) else {}
-        if not bool(config.get("hr_enabled")):
-            return False
-        site_id = str(config.get("site_id") or "").strip()
-        if not site_id:
-            return True
-        try:
-            access = MoviePilotRssGateway.site_access(site_id)
-        except Exception:
-            return True
-        return identify_site_kind(access) == "chd"
+        return bool(config.get("hr_enabled"))
 
     def _chd_hr_torrent_ids(self, access: Any) -> set[str]:
+        beijing = timezone(timedelta(hours=8))
+        today = datetime.now(beijing).date().isoformat()
         try:
-            html_text = MoviePilotRssGateway.fetch_site_html(chd_hr_list_url(access), access)
-            ids = parse_chd_hr_torrent_ids(html_text)
+            list_url = chd_hr_list_url(access)
         except ChdHrError as error:
             if "无法确定 HR 用户 ID" not in str(error):
                 raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
             probe = MoviePilotRssGateway.fetch_site_html("https://ptchdbits.co/hnr.php", access)
-            html_text = MoviePilotRssGateway.fetch_site_html(
-                chd_hr_list_url(access, probe), access
-            )
+            list_url = chd_hr_list_url(access, probe)
+        except Exception as error:
+            raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+        cached = self._chd_hr_cache.get(list_url)
+        if isinstance(cached, dict) and cached.get("date") == today:
+            return set(cached.get("ids") or [])
+        try:
+            html_text = MoviePilotRssGateway.fetch_site_html(list_url, access)
             ids = parse_chd_hr_torrent_ids(html_text)
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+        self._chd_hr_cache[list_url] = {"date": today, "ids": set(ids)}
         return set(ids)
 
     @staticmethod

@@ -276,7 +276,11 @@ def parse_chd_hr_torrent_ids(page: str) -> list[str]:
     text = str(page or "")
     if re.search(r"未登录|takelogin\.php|该页面必须在登录后才能访问", text):
         raise ChdHrError("彩虹岛 HR 页面未登录")
-    if "Hit And Runs" not in text and "hnr.php" not in text.casefold():
+    if not re.search(
+        r"<title[^>]*>\s*CHDBits\s*::\s*Hit\s+And\s+Runs\b",
+        text,
+        re.IGNORECASE,
+    ):
         raise ChdHrError("彩虹岛 HR 页面内容无效")
     unique: list[str] = []
     seen = set()

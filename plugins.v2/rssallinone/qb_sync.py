@@ -785,18 +785,9 @@ class MoviePilotQbGateway:
         return ""
 
 def _task_rule_uses_hr_scan(task_rule: Optional[RssTaskQbRule]) -> bool:
-    if not task_rule or not bool(task_rule.hr_enabled):
-        return False
-    site_id = str(task_rule.site_id or "").strip()
-    if not site_id:
-        return True
-    try:
-        from .rss_execute import MoviePilotRssGateway
-        from .rss_site_labels import identify_site_kind
-
-        return identify_site_kind(MoviePilotRssGateway.site_access(site_id)) == "chd"
-    except Exception:
-        return True
+    # HR is a separate deletion policy. Once enabled, the normal due-delete
+    # policy must never be scheduled, even if the site identity is invalid.
+    return bool(task_rule and task_rule.hr_enabled)
 
 class QbSyncService:
     """Synchronize qB state, recognition, and inventory without mutating qB."""
