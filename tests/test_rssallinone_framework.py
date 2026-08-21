@@ -1684,10 +1684,10 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertEqual(deferred_calls, ["movies"])
                 plugin._run_hr_scan = original_run_hr_scan
                 torrents = {
-                    "hr-hold": {"hash": "hr-hold", "progress": 1.0, "state": "pausedUP"},
-                    "hr-release": {"hash": "hr-release", "progress": 1.0, "state": "pausedUP"},
-                    "hr-noid": {"hash": "hr-noid", "progress": 1.0, "state": "pausedUP"},
-                    "hr-downloading": {"hash": "hr-downloading", "progress": 0.1, "state": "pausedDL"},
+                    "hr-hold": {"hash": "hr-hold", "progress": 1.0, "state": "pausedUP", "category": "movie", "comment": "https://ptchdbits.co/details.php?id=571440"},
+                    "hr-release": {"hash": "hr-release", "progress": 1.0, "state": "pausedUP", "category": "movie", "comment": "https://ptchdbits.co/details.php?id=599999"},
+                    "hr-noid": {"hash": "hr-noid", "progress": 1.0, "state": "pausedUP", "category": "movie", "comment": ""},
+                    "hr-downloading": {"hash": "hr-downloading", "progress": 0.1, "state": "pausedDL", "category": "movie", "comment": "https://ptchdbits.co/details.php?id=588888"},
                 }
                 histories = (
                     ("hr-hold", "571440"),
