@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.55"
+    plugin_version = "0.13.56"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -106,6 +106,7 @@ class RssAllInOne(_PluginBase):
         self._rss_stop_event = threading.Event()
         self._runtime_config: Dict[str, Any] = {}
         self._chd_hr_cache: Dict[str, Any] = {}
+        self._chd_hr_url_cache: Dict[str, str] = {}
         self._last_emby_callback_probe: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
@@ -1613,8 +1614,15 @@ class RssAllInOne(_PluginBase):
     def _chd_hr_torrent_ids(self, access: Any) -> set[str]:
         beijing = timezone(timedelta(hours=8))
         today = datetime.now(beijing).date().isoformat()
+        access_key = "|".join((
+            str(getattr(access, "site_url", "") or "").strip(),
+            str(getattr(access, "site_key", "") or "").strip(),
+            str(getattr(access, "cookie", "") or "").strip(),
+        ))
+        list_url = self._chd_hr_url_cache.get(access_key, "")
         try:
-            list_url = chd_hr_list_url(access)
+            if not list_url:
+                list_url = chd_hr_list_url(access)
         except ChdHrError as error:
             if "无法确定 HR 用户 ID" not in str(error):
                 raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
@@ -1622,6 +1630,7 @@ class RssAllInOne(_PluginBase):
             list_url = chd_hr_list_url(access, probe)
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+        self._chd_hr_url_cache[access_key] = list_url
         cached = self._chd_hr_cache.get(list_url)
         if isinstance(cached, dict) and cached.get("date") == today:
             return set(cached.get("ids") or [])
