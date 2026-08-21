@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.57"
+    plugin_version = "0.13.58"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -107,6 +107,8 @@ class RssAllInOne(_PluginBase):
         self._runtime_config: Dict[str, Any] = {}
         self._chd_hr_cache: Dict[str, Any] = {}
         self._chd_hr_url_cache: Dict[str, str] = {}
+        self._hr_deferred_lock = threading.Lock()
+        self._hr_deferred_task_ids: set[str] = set()
         self._last_emby_callback_probe: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
@@ -673,6 +675,7 @@ class RssAllInOne(_PluginBase):
                 results.append(result)
         finally:
             self._qb_delete_lock.release()
+            self._drain_deferred_hr_scans()
 
         succeeded = sum(1 for item in results if item["success"])
         failed = len(results) - succeeded
@@ -1474,6 +1477,7 @@ class RssAllInOne(_PluginBase):
                     )
         finally:
             self._qb_delete_lock.release()
+            self._drain_deferred_hr_scans()
 
     def _scheduled_pending_import(self) -> None:
         self._start_pending_import("cron")
@@ -1495,13 +1499,33 @@ class RssAllInOne(_PluginBase):
             logger.info(f"RSS一条龙：HR扫描跳过，任务={task_name}，插件存储尚未就绪")
             return
         if not self._qb_delete_lock.acquire(blocking=False):
-            logger.info(f"RSS一条龙：HR扫描跳过，任务={task_name}，已有 qB 删除/HR 扫描正在执行")
+            normalized_task_id = str(task_id or "").strip()
+            with self._hr_deferred_lock:
+                already_deferred = normalized_task_id in self._hr_deferred_task_ids
+                self._hr_deferred_task_ids.add(normalized_task_id)
+            if not already_deferred:
+                logger.info(
+                    f"RSS一条龙：HR扫描延后，任务={task_name}，"
+                    "已有 qB 删除/HR 扫描正在执行，锁释放后补执行"
+                )
             return
         try:
             logger.info(f"RSS一条龙：HR扫描开始，任务={task_name}，触发方式=CRON")
             self._run_hr_scan(str(task_id or "").strip())
         finally:
             self._qb_delete_lock.release()
+            self._drain_deferred_hr_scans()
+
+    def _drain_deferred_hr_scans(self) -> None:
+        if self._stop_event.is_set():
+            return
+        with self._hr_deferred_lock:
+            task_ids = list(self._hr_deferred_task_ids)
+            self._hr_deferred_task_ids.clear()
+        for task_id in task_ids:
+            if self._stop_event.is_set():
+                return
+            self._scheduled_hr_scan(task_id)
 
     def _run_hr_scan(self, task_id: str) -> None:
         task = self._rss_task_by_id(task_id)

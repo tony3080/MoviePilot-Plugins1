@@ -1670,6 +1670,19 @@ class PluginLifecycleTest(unittest.TestCase):
                 }])
                 service_ids = {item["id"] for item in plugin.get_service()}
                 self.assertIn("RssAllInOne.HrScan.movies", service_ids)
+                deferred_calls = []
+                original_run_hr_scan = plugin._run_hr_scan
+                plugin._run_hr_scan = lambda task_id: deferred_calls.append(task_id)
+                plugin._qb_delete_lock.acquire()
+                try:
+                    plugin._scheduled_hr_scan("movies")
+                    self.assertEqual(deferred_calls, [])
+                    self.assertIn("movies", plugin._hr_deferred_task_ids)
+                finally:
+                    plugin._qb_delete_lock.release()
+                plugin._drain_deferred_hr_scans()
+                self.assertEqual(deferred_calls, ["movies"])
+                plugin._run_hr_scan = original_run_hr_scan
                 torrents = {
                     "hr-hold": {"hash": "hr-hold", "progress": 1.0, "state": "pausedUP"},
                     "hr-release": {"hash": "hr-release", "progress": 1.0, "state": "pausedUP"},
