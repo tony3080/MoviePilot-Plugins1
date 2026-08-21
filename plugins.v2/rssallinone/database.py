@@ -1650,6 +1650,14 @@ class SQLiteStore:
             ).fetchall()
         return self._result(rows, total, safe_offset, safe_limit)
 
+
+    def list_all_rss_history(self) -> List[Dict[str, Any]]:
+        """"""Get all RSS history records (no pagination, no archived).""""""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM rss_history WHERE status != 'archived' ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
     def list_rss_history_for_task(self, task_id: object) -> List[Dict[str, Any]]:
         normalized_task_id = str(task_id or "").strip()
         if not normalized_task_id:
