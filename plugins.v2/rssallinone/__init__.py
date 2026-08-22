@@ -58,7 +58,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.63"
+    plugin_version = "0.13.64"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1599,11 +1599,19 @@ class RssAllInOne(_PluginBase):
             logger.error(f"RSS一条龙：读取 qB 种子列表失败，任务={task_name}：{error}")
             return
         
-        # 过滤出该分类的种子
-        category_torrents = [
-            t for t in all_torrents
-            if str(t.get("category") or "").strip() == category
-        ]
+        # MoviePilot 新版返回 DownloaderTorrent（Pydantic 对象），旧版可能返回字典。
+        # HR 扫描后续需要多次读取字段，统一转换，避免直接调用对象的 .get。
+        category_torrents: list[dict[str, Any]] = []
+        for item in all_torrents:
+            try:
+                torrent = MoviePilotQbGateway.torrent_dict(item)
+            except (TypeError, ValueError) as error:
+                logger.warning(
+                    f"RSS一条龙：HR扫描跳过无法转换的 qB 任务，任务={task_name}：{error}"
+                )
+                continue
+            if str(torrent.get("category") or "").strip() == category:
+                category_torrents.append(torrent)
         
         logger.info(
             f"RSS一条龙：qB 分类种子统计，任务={task_name}，"
