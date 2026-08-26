@@ -187,7 +187,10 @@ class PendingImportCoordinator:
         self.config.validate()
         if not self.cd2.ready:
             raise RuntimeError("CloudDrive2 gRPC 地址或令牌未配置")
-        if not self.scanner.ready:
+        # Manual runs only process the serial import/CD2 queue. They do not
+        # touch Emby scanning or the post-scan task, so scanner settings are
+        # irrelevant for that path.
+        if manage_external_switches and not self.scanner.ready:
             raise RuntimeError("Emby 扫库配置不完整")
         if manage_external_switches and not self.controls.ready:
             raise RuntimeError("追更或外部扫库联动配置不完整")
@@ -1022,6 +1025,16 @@ class PendingImportCoordinator:
         if int(batch.get("succeeded") or 0) <= 0:
             self._restore_and_finish(batch, final_state="completed")
             return self.status()
+        # An immediate/manual run deliberately stops after the card-by-card
+        # import and CD2 monitoring. Do not request an Emby scan, wait for a
+        # callback, or trigger the post-scan MediaInfo task.
+        if not self._manages_external_switches(batch):
+            details = dict(batch.get("details") or {})
+            details["manual_post_actions_skipped_at"] = utc_now()
+            batch["details"] = details
+            self.store.upsert_import_batch(batch)
+            self._restore_and_finish(batch, final_state="completed")
+            return self.status()
         requested_at = datetime.now(timezone.utc)
         details = dict(batch.get("details") or {})
         details["waiting_scan_callback_at"] = requested_at.isoformat(timespec="seconds")
@@ -1189,7 +1202,7 @@ class PendingImportCoordinator:
             details["switches_restored_at"] = utc_now()
         else:
             details["switch_restore_skipped_at"] = utc_now()
-        if final_state == "completed":
+        if final_state == "completed" and self._manages_external_switches(batch):
             try:
                 details["post_scan_task"] = {
                     **self.scanner.start_emby_task("Extract MediaInfo"),
@@ -1200,6 +1213,8 @@ class PendingImportCoordinator:
                 details["post_scan_task_error"] = str(error)
                 details["post_scan_task_error_at"] = utc_now()
                 self.notify("RSS一条龙 MediaInfo 任务启动失败", str(error))
+        elif final_state == "completed":
+            details["post_scan_task_skipped"] = True
         details.pop("restore_final_state", None)
         batch.update({
             "state": final_state,

@@ -546,7 +546,34 @@ class SQLiteStore:
             ).fetchone()[0]
             rows = connection.execute(
                 f"""SELECT * FROM media_items {where}
-                    ORDER BY source_name COLLATE NOCASE ASC, id ASC
+                    ORDER BY
+                        COALESCE(NULLIF(title, ''), source_name) COLLATE NOCASE ASC,
+                        CASE lower(COALESCE(
+                            json_extract(details_json, '$.recognition.meta.resource_pix'),
+                            json_extract(details_json, '$.meta.resource_pix'),
+                            json_extract(details_json, '$.recognition.resource_pix'),
+                            json_extract(details_json, '$.resource_pix'),
+                            ''
+                        ))
+                            WHEN '480p' THEN 0
+                            WHEN '576p' THEN 1
+                            WHEN '720p' THEN 2
+                            WHEN '1080p' THEN 3
+                            WHEN '1440p' THEN 4
+                            WHEN '2160p' THEN 5
+                            WHEN '4k' THEN 5
+                            WHEN 'uhd' THEN 5
+                            ELSE 99
+                        END ASC,
+                        COALESCE(
+                            json_extract(details_json, '$.recognition.meta.customization'),
+                            json_extract(details_json, '$.meta.customization'),
+                            json_extract(details_json, '$.recognition.customization'),
+                            json_extract(details_json, '$.customization'),
+                            ''
+                        ) COLLATE NOCASE ASC,
+                        source_name COLLATE NOCASE ASC,
+                        id ASC
                     LIMIT ? OFFSET ?""",
                 [*params, safe_limit, safe_offset],
             ).fetchall()

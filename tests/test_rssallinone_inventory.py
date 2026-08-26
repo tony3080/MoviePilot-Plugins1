@@ -1181,6 +1181,40 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(store.list_media()["total"], 2)
             self.assertEqual(store.list_torrents()["total"], 2)
 
+    def test_database_lists_same_title_by_resolution_then_customization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            records = (
+                ("hash-1080", "1080p", "REMUX@C版"),
+                ("hash-2160-c", "2160p", "REMUX@C版"),
+                ("hash-2160-a", "2160p", "REMUX@A版"),
+            )
+            for info_hash, resolution, customization in records:
+                store.upsert_media_item({
+                    "id": f"qb:qb-main:{info_hash}",
+                    "state": "identified",
+                    "title": "Same Movie",
+                    "source_name": f"{info_hash}.mkv",
+                    "source_path": f"/downloads/{info_hash}.mkv",
+                    "downloader_id": "qb-main",
+                    "info_hash": info_hash,
+                    "tmdb_id": 42,
+                    "details": {
+                        "recognition": {
+                            "meta": {
+                                "resource_pix": resolution,
+                                "customization": customization,
+                            }
+                        }
+                    },
+                })
+
+            self.assertEqual(
+                [item["info_hash"] for item in store.list_media()["items"]],
+                ["hash-1080", "hash-2160-a", "hash-2160-c"],
+            )
+
     def test_realtime_hardlink_preserves_qb_source_and_moves_card_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

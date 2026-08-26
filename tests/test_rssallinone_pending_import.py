@@ -389,7 +389,7 @@ class PendingImportTest(unittest.TestCase):
             self.assertEqual(scanner.post_scan_tasks, ["Extract MediaInfo"])
             self.assertIsNone(store.latest_active_import_batch())
 
-    def test_manual_run_skips_external_switches_but_still_refreshes_emby(self):
+    def test_manual_run_skips_external_switches_and_emby_follow_up(self):
         with tempfile.TemporaryDirectory() as directory:
             store, _source, target, _inventory = self.make_store(directory)
             controls = FakeControls()
@@ -409,31 +409,14 @@ class PendingImportTest(unittest.TestCase):
 
             coordinator.run("manual")
 
-            batch = store.latest_active_import_batch()
-            batch_id = batch["id"]
-            self.assertEqual(batch["state"], "waiting_scan_callback")
-            self.assertFalse(batch["details"]["manage_external_switches"])
-            self.assertIsNone(batch["original_catchup_enabled"])
-            self.assertIsNone(batch["original_scan_enabled"])
+            self.assertIsNone(store.latest_active_import_batch())
             self.assertEqual(store.get_media_item("media-1")["state"], "imported")
             self.assertTrue(target.exists())
             self.assertEqual(controls.snapshots, 0)
             self.assertEqual(controls.disabled, 0)
             self.assertEqual(controls.restored, 0)
-            self.assertEqual(scanner.refreshes, 1)
-
-            result = coordinator.handle_scan_callback({
-                "event_name": "scheduledtasks.completed",
-                "server_id": "srv1",
-                "task_id": "task1",
-            })
-
-            self.assertTrue(result["accepted"])
-            self.assertEqual(result["message"], "扫库完成回调已确认")
-            self.assertEqual(controls.restored, 0)
-            finished = store.get_import_batch(batch_id)
-            self.assertEqual(finished["state"], "completed")
-            self.assertIn("switch_restore_skipped_at", finished["details"])
+            self.assertEqual(scanner.refreshes, 0)
+            self.assertEqual(scanner.post_scan_tasks, [])
 
     def test_scan_wait_can_be_cancelled_without_rolling_back_import(self):
         with tempfile.TemporaryDirectory() as directory:
