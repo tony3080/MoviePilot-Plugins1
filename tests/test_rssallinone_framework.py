@@ -48,6 +48,85 @@ class DomainContractTest(unittest.TestCase):
 
 
 class SQLiteFrameworkTest(unittest.TestCase):
+    @staticmethod
+    def _media_record(media_id: str) -> dict:
+        return {
+            "id": media_id,
+            "state": "identified",
+            "media_type": "电影",
+            "title": media_id,
+            "source_name": media_id,
+            "source_path": f"/downloads/{media_id}.mkv",
+            "downloader_id": "qb-main",
+            "info_hash": media_id,
+            "tmdb_id": None,
+            "season": None,
+            "category": "",
+            "target_name": "",
+            "details": {},
+        }
+
+    def test_concurrent_store_instances_serialize_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rssallinone.db"
+            bootstrap = database.SQLiteStore(path)
+            bootstrap.initialize()
+            errors = []
+
+            def writer(prefix: str) -> None:
+                try:
+                    store = database.SQLiteStore(path)
+                    for index in range(12):
+                        store.upsert_media_item(
+                            self._media_record(f"{prefix}-{index}")
+                        )
+                except Exception as error:  # pragma: no cover - assertion below
+                    errors.append(error)
+
+            threads = [
+                threading.Thread(target=writer, args=(f"worker-{index}",))
+                for index in range(4)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            self.assertEqual(errors, [])
+            self.assertEqual(bootstrap.counts()["media"], 48)
+
+    def test_write_retries_after_external_sqlite_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rssallinone.db"
+            bootstrap = database.SQLiteStore(path)
+            bootstrap.initialize()
+            store = database.SQLiteStore(path)
+            store._busy_timeout_ms = 30
+            store._write_retry_delays = (0.02, 0.04, 0.08)
+            blocker = sqlite3.connect(path, timeout=0.03)
+            blocker.execute("BEGIN IMMEDIATE")
+            completed = threading.Event()
+            errors = []
+
+            def writer() -> None:
+                try:
+                    store.upsert_media_item(self._media_record("retry-me"))
+                except Exception as error:  # pragma: no cover - assertion below
+                    errors.append(error)
+                finally:
+                    completed.set()
+
+            thread = threading.Thread(target=writer)
+            thread.start()
+            time.sleep(0.08)
+            blocker.commit()
+            blocker.close()
+            self.assertTrue(completed.wait(2))
+            thread.join()
+
+            self.assertEqual(errors, [])
+            self.assertIsNotNone(bootstrap.get_media_item("retry-me"))
+
     def test_schema_initializes_and_lists_empty_collections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = database.SQLiteStore(Path(directory) / "rssallinone.db")

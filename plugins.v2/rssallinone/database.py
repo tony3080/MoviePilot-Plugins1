@@ -6,10 +6,14 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+
+
+_SQLITE_WRITE_LOCK = threading.RLock()
 
 
 SCHEMA_VERSION = 7
@@ -32,13 +36,42 @@ class SQLiteStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._migration_lock = threading.Lock()
+        # Keep the instance attribute for compatibility while sharing the
+        # actual lock across store instances in this process.
+        self._write_lock = _SQLITE_WRITE_LOCK
+        self._busy_timeout_ms = 10000
+        self._write_retry_delays = (0.1, 0.25, 0.5, 1.0)
+
+    def _open_connection(self) -> sqlite3.Connection:
+        timeout_seconds = max(1.0, self._busy_timeout_ms / 1000)
+        connection = sqlite3.connect(self.path, timeout=timeout_seconds)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {int(self._busy_timeout_ms)}")
+        return connection
+
+    @staticmethod
+    def is_busy_error(error: BaseException) -> bool:
+        if not isinstance(error, sqlite3.OperationalError):
+            return False
+        message = str(error or "").casefold()
+        return "locked" in message or "busy" in message
+
+    def _retry_busy(self, operation: Any) -> Any:
+        delays = (0.0, *self._write_retry_delays)
+        for index, delay in enumerate(delays):
+            if delay:
+                time.sleep(delay)
+            try:
+                return operation()
+            except sqlite3.OperationalError as error:
+                if not self.is_busy_error(error) or index + 1 >= len(delays):
+                    raise
+        raise RuntimeError("SQLite 写入重试状态异常")
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=10)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 10000")
+        connection = self._open_connection()
         try:
             yield connection
             connection.commit()
@@ -48,9 +81,24 @@ class SQLiteStore:
         finally:
             connection.close()
 
+    @contextmanager
+    def write_connection(self) -> Iterator[sqlite3.Connection]:
+        """Serialize writes and retry transient locks from overlapping instances."""
+        with self._write_lock:
+            connection = self._open_connection()
+            try:
+                self._retry_busy(lambda: connection.execute("BEGIN IMMEDIATE"))
+                yield connection
+                self._retry_busy(connection.commit)
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._migration_lock:
+        with self._write_lock, self._migration_lock:
             with self.connection() as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(
@@ -645,7 +693,7 @@ class SQLiteStore:
         identity = str(media_id or "").strip()
         if not identity:
             return False
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 "DELETE FROM file_mappings WHERE media_id = ?",
                 (identity,),
@@ -661,7 +709,7 @@ class SQLiteStore:
         identity = str(media_id or "").strip()
         if not identity:
             return {"media": 0, "history": 0, "torrents": 0, "jobs": 0}
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             row = connection.execute(
                 "SELECT downloader_id, info_hash FROM media_items WHERE id = ?",
                 (identity,),
@@ -790,7 +838,7 @@ class SQLiteStore:
         seen_at: str,
     ) -> None:
         normalized = sorted({value for value in seen_hashes if value})
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             if normalized:
                 placeholders = ",".join("?" for _ in normalized)
                 connection.execute(
@@ -819,7 +867,7 @@ class SQLiteStore:
             for downloader, categories in (allowed_scope or {}).items()
             if str(downloader or "").strip()
         }
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             rows = connection.execute(
                 """SELECT downloader_id, info_hash, category, media_id
                    FROM torrent_snapshots WHERE present = 1"""
@@ -862,7 +910,7 @@ class SQLiteStore:
         normalized_hash = str(info_hash or "").strip().lower()
         if not downloader or not normalized_hash:
             return False
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 """DELETE FROM torrent_snapshots
                    WHERE downloader_id = ? AND info_hash = ?""",
@@ -871,7 +919,7 @@ class SQLiteStore:
         return bool(cursor.rowcount)
 
     def clear_card_data(self) -> Dict[str, int]:
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             counts = {
                 "torrents": int(connection.execute(
                     "SELECT COUNT(*) FROM torrent_snapshots"
@@ -953,7 +1001,7 @@ class SQLiteStore:
             for field in fields
             if field not in {"downloader_id", "info_hash"}
         )
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 f"""INSERT INTO torrent_snapshots({', '.join(fields)})
                     VALUES ({placeholders})
@@ -974,7 +1022,7 @@ class SQLiteStore:
             self._json_dump(record.get("details") or {}),
             record.get("created_at") or now, now,
         )
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO media_items(
                     id, state, media_type, title, source_name, source_path,
@@ -1036,7 +1084,7 @@ class SQLiteStore:
                 str(record.get("created_at") or now),
                 now,
             ))
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 "DELETE FROM file_mappings WHERE downloader_id = ? AND info_hash = ?",
                 (downloader, normalized_hash),
@@ -1120,7 +1168,7 @@ class SQLiteStore:
             now,
             record.get("finished_at"),
         )
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO import_batches(
                     id, state, trigger_source, current_media_id,
@@ -1188,7 +1236,7 @@ class SQLiteStore:
             str(record.get("batch_id") or ""),
             max(0, int(record.get("file_index") or 0)),
         )
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO import_watches(
                     id, media_id, state, local_hardlink_path,
@@ -1254,7 +1302,7 @@ class SQLiteStore:
             values.append(str(media_id).strip())
         if not clauses:
             return 0
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 f"DELETE FROM import_watches WHERE {' AND '.join(clauses)}", values
             )
@@ -1279,7 +1327,7 @@ class SQLiteStore:
             raise ValueError("qB 延时删除任务缺少下载器、info-hash 或到期时间")
         identity = f"{downloader}:{normalized_hash}"
         now = utc_now()
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO qb_delete_jobs(
                     id, task_id, task_name, downloader_id, info_hash,
@@ -1329,7 +1377,7 @@ class SQLiteStore:
     ) -> List[Dict[str, Any]]:
         current = str(now or utc_now())
         safe_limit = max(1, min(int(limit or 20), 100))
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             rows = connection.execute(
                 """SELECT * FROM qb_delete_jobs
                    WHERE state = 'pending' AND due_at <= ?
@@ -1355,7 +1403,7 @@ class SQLiteStore:
         if not identity:
             return
         now = utc_now()
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             if success:
                 connection.execute(
                     """UPDATE qb_delete_jobs
@@ -1378,7 +1426,7 @@ class SQLiteStore:
         identity = str(job_id or "").strip()
         if not identity:
             return
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """UPDATE qb_delete_jobs
                    SET state = 'needs_review', attempts = attempts + 1,
@@ -1391,7 +1439,7 @@ class SQLiteStore:
         identity = str(job_id or "").strip()
         if not identity:
             return False
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 "DELETE FROM qb_delete_jobs WHERE id = ?", (identity,)
             )
@@ -1404,7 +1452,7 @@ class SQLiteStore:
         normalized_hash = str(info_hash or "").strip().lower()
         if not downloader or not normalized_hash:
             return 0
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 """DELETE FROM qb_delete_jobs
                    WHERE downloader_id = ? AND info_hash = ?""",
@@ -1413,7 +1461,7 @@ class SQLiteStore:
         return int(cursor.rowcount or 0)
 
     def cleanup_completed_qb_delete_jobs(self) -> int:
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             rows = connection.execute(
                 """SELECT id, downloader_id, info_hash FROM qb_delete_jobs
                    WHERE state = 'succeeded'"""
@@ -1453,7 +1501,7 @@ class SQLiteStore:
         result: Optional[Dict[str, Any]] = None,
     ) -> None:
         now = utc_now()
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO background_tasks(
                     id, task_type, task_name, state, result_json, created_at, updated_at
@@ -1470,7 +1518,7 @@ class SQLiteStore:
             )
 
     def start_background_task(self, task_id: str) -> bool:
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 """UPDATE background_tasks
                    SET state = 'running', updated_at = ?
@@ -1509,7 +1557,7 @@ class SQLiteStore:
             updates.append("result_json = ?")
             values.append(self._json_dump(result))
         values.append(task_id)
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 f"UPDATE background_tasks SET {', '.join(updates)} WHERE id = ?",
                 values,
@@ -1524,7 +1572,7 @@ class SQLiteStore:
         error_message: str = "",
     ) -> None:
         now = utc_now()
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """UPDATE background_tasks
                    SET state = ?, result_json = ?, error_message = ?,
@@ -1567,7 +1615,7 @@ class SQLiteStore:
             for item in (preserve_queued_types or [])
             if str(item or "").strip()
         })
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             params: List[Any] = [now, now]
             if preserved:
                 placeholders = ",".join("?" for _ in preserved)
@@ -1636,7 +1684,7 @@ class SQLiteStore:
         tasks: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         now = utc_now()
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             existing = {
                 str(row["id"]): str(row["created_at"])
                 for row in connection.execute(
@@ -1889,7 +1937,7 @@ class SQLiteStore:
             str(record.get("created_at") or now),
             now,
         )
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             connection.execute(
                 """INSERT INTO rss_history(
                     task_id, source_key, content_key, title, status, reason,
@@ -1913,7 +1961,7 @@ class SQLiteStore:
         normalized_hash = str(info_hash or "").strip().lower()
         if not normalized_hash:
             return 0
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             return self._archive_rss_history_for_torrent(
                 connection, downloader, normalized_hash
             )
@@ -1981,7 +2029,7 @@ class SQLiteStore:
         return self._list_table("background_tasks", "updated_at", offset, limit)
 
     def clear_background_tasks(self) -> Dict[str, int]:
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             running = int(connection.execute(
                 """SELECT COUNT(*) FROM background_tasks
                    WHERE state IN ('queued', 'running')"""
@@ -1999,7 +2047,7 @@ class SQLiteStore:
         keep: int = 50,
     ) -> int:
         received_at = str(record.get("received_at") or utc_now())
-        with self.connection() as connection:
+        with self.write_connection() as connection:
             cursor = connection.execute(
                 """INSERT INTO emby_callback_events(
                     batch_id, payload_type, payload_json, coerced_json,

@@ -412,7 +412,7 @@ class RssExecutionService:
             "qb_recognition_deferred": 0,
             "errors": [],
         }
-        self.store.update_background_task(
+        self._update_progress(
             background_task_id,
             total=total,
             result=result,
@@ -541,7 +541,7 @@ class RssExecutionService:
                     self._log("error", f"RSS一条龙：处理 {task_name}/{title} 失败：{error}")
 
             processed += 1
-            self.store.update_background_task(
+            self._update_progress(
                 background_task_id,
                 current_item=title,
                 processed=processed,
@@ -812,6 +812,18 @@ class RssExecutionService:
             },
             "updated_at": now,
         })
+
+    def _update_progress(self, background_task_id: str, **kwargs: Any) -> None:
+        """Progress is helpful but must not abort an otherwise valid RSS run."""
+        try:
+            self.store.update_background_task(background_task_id, **kwargs)
+        except Exception as error:
+            if not self.store.is_busy_error(error):
+                raise
+            self._log(
+                "warning",
+                f"RSS一条龙：进度写入暂时遇到数据库锁，已跳过本次更新：{error}",
+            )
 
     def _log(self, level: str, message: str) -> None:
         callback = getattr(self.logger, level, None) if self.logger else None
