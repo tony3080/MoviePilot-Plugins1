@@ -224,6 +224,7 @@ class SiteLabelService:
 
 
 CHD_HR_URL = "https://ptchdbits.co/hnr.php"
+CHD_HR_PAGE_SIZE = 25
 CHD_HR_DETAIL_ID_PATTERN = re.compile(
     r"details\.php\?id=(\d+)(?:&|&amp;)hit=1",
     re.IGNORECASE,
@@ -231,6 +232,12 @@ CHD_HR_DETAIL_ID_PATTERN = re.compile(
 CHD_HR_USER_ID_PATTERN = re.compile(
     r"userdetails\.php\?id=(\d+)",
     re.IGNORECASE,
+)
+CHD_HR_COUNT_PATTERN = re.compile(
+    r"href\s*=\s*[\"']hnr\.php\?id=\d+[\"'][^>]*>.*?"
+    r"H\s*(?:&amp;|&)\s*R\s*:[^<]*</font>\s*</a>"
+    r"(?:(?:\s|&nbsp;|<[^>]*>))*?(\d+)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -270,6 +277,31 @@ def chd_hr_list_url(access: Any = None, html_text: str = "") -> str:
     if not user_id:
         raise ChdHrError("彩虹岛站点身份无法确定 HR 用户 ID")
     return f"{CHD_HR_URL}?id={user_id}"
+
+
+def chd_hr_page_url(list_url: str, page: int) -> str:
+    """Return a numbered CHD HR page while preserving the user id query."""
+    normalized = str(list_url or "").strip()
+    try:
+        page_number = max(0, int(page))
+    except (TypeError, ValueError):
+        page_number = 0
+    if page_number == 0 or not normalized:
+        return normalized
+    separator = "&" if "?" in normalized else "?"
+    return f"{normalized}{separator}page={page_number}"
+
+
+def parse_chd_hr_total_count(page: str) -> int:
+    """Read the total H&R count shown beside the CHD HR link."""
+    text = html.unescape(str(page or ""))
+    match = CHD_HR_COUNT_PATTERN.search(text)
+    if not match:
+        return 0
+    try:
+        return max(0, int(match.group(1)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def parse_chd_hr_torrent_ids(page: str) -> list[str]:

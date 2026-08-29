@@ -42,7 +42,15 @@ from .qb_sync import (
 )
 from .rss_feed import RssFeedError, RssPreviewService
 from .rss_execute import RSS_RUN_TASK_TYPE, RssExecutionError, RssExecutionService, MoviePilotRssGateway
-from .rss_site_labels import ChdHrError, chd_hr_list_url, identify_site_kind, parse_chd_hr_torrent_ids
+from .rss_site_labels import (
+    ChdHrError,
+    CHD_HR_PAGE_SIZE,
+    chd_hr_list_url,
+    chd_hr_page_url,
+    identify_site_kind,
+    parse_chd_hr_torrent_ids,
+    parse_chd_hr_total_count,
+)
 from .rss_tasks import normalize_rss_tasks
 
 
@@ -58,7 +66,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.66"
+    plugin_version = "0.13.67"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1800,10 +1808,29 @@ class RssAllInOne(_PluginBase):
         if isinstance(cached, dict) and cached.get("date") == today:
             return set(cached.get("ids") or [])
         try:
-            html_text = MoviePilotRssGateway.fetch_site_html(list_url, access)
-            ids = parse_chd_hr_torrent_ids(html_text)
+            # CHD displays at most 25 HR rows per page.  The first page also
+            # exposes the total count next to the H&R link, so use it to
+            # fetch every numbered page without guessing a fixed limit.
+            first_page = MoviePilotRssGateway.fetch_site_html(list_url, access)
+            ids = parse_chd_hr_torrent_ids(first_page)
+            total_count = parse_chd_hr_total_count(first_page)
+            page_count = (
+                max(1, (total_count + CHD_HR_PAGE_SIZE - 1) // CHD_HR_PAGE_SIZE)
+                if total_count
+                else 1
+            )
+            for page_number in range(1, page_count):
+                page_url = chd_hr_page_url(list_url, page_number)
+                page_html = MoviePilotRssGateway.fetch_site_html(page_url, access)
+                ids.extend(parse_chd_hr_torrent_ids(page_html))
+            ids = list(dict.fromkeys(ids))
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
+        if total_count:
+            logger.info(
+                f"RSS一条龙：彩虹岛 HR 分页读取完成，记录总数={total_count}，"
+                f"页数={page_count}，唯一种子数={len(ids)}",
+            )
         self._chd_hr_cache[list_url] = {"date": today, "ids": set(ids)}
         return set(ids)
 

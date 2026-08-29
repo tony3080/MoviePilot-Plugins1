@@ -58,6 +58,20 @@ class ChdHrParseTest(unittest.TestCase):
             rss_site_labels.chd_hr_list_url(access),
             "https://ptchdbits.co/hnr.php?id=1794",
         )
+
+    def test_total_count_and_page_url(self) -> None:
+        page = (
+            '<a href="hnr.php?id=1794">'
+            '<font class="color_bonus">H&amp;R:</font></a> 30'
+        )
+        self.assertEqual(rss_site_labels.parse_chd_hr_total_count(page), 30)
+        self.assertEqual(
+            rss_site_labels.chd_hr_page_url(
+                "https://ptchdbits.co/hnr.php?id=1794", 1
+            ),
+            "https://ptchdbits.co/hnr.php?id=1794&page=1",
+        )
+        self.assertEqual(rss_site_labels.CHD_HR_PAGE_SIZE, 25)
         self.assertEqual(
             rss_site_labels.chd_hr_list_url(
                 types.SimpleNamespace(cookie=""),
