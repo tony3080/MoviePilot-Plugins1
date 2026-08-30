@@ -156,6 +156,11 @@ function testTask(task, position) {
   });
 }
 
+function keepExpanded(taskId) {
+  if (!taskId || expanded.value.includes(taskId)) return
+  expanded.value = [...expanded.value, taskId];
+}
+
 watch$2(
   () => props.items,
   value => {
@@ -216,7 +221,7 @@ return (_ctx, _cache) => {
         variant: "text",
         onClick: addTask
       }, {
-        default: _withCtx$4(() => [...(_cache[4] || (_cache[4] = [
+        default: _withCtx$4(() => [...(_cache[6] || (_cache[6] = [
           _createTextVNode$4(" 添加任务 ", -1)
         ]))]),
         _: 1
@@ -228,7 +233,7 @@ return (_ctx, _cache) => {
         loading: __props.loading,
         onClick: saveTasks
       }, {
-        default: _withCtx$4(() => [...(_cache[5] || (_cache[5] = [
+        default: _withCtx$4(() => [...(_cache[7] || (_cache[7] = [
           _createTextVNode$4(" 保存 ", -1)
         ]))]),
         _: 1
@@ -240,7 +245,7 @@ return (_ctx, _cache) => {
           type: "info",
           variant: "tonal"
         }, {
-          default: _withCtx$4(() => [...(_cache[6] || (_cache[6] = [
+          default: _withCtx$4(() => [...(_cache[8] || (_cache[8] = [
             _createTextVNode$4(" 暂无 RSS 任务 ", -1)
           ]))]),
           _: 1
@@ -248,7 +253,7 @@ return (_ctx, _cache) => {
       : (_openBlock$4(), _createBlock$4(_component_VExpansionPanels, {
           key: 1,
           modelValue: expanded.value,
-          "onUpdate:modelValue": _cache[3] || (_cache[3] = $event => ((expanded).value = $event)),
+          "onUpdate:modelValue": _cache[5] || (_cache[5] = $event => ((expanded).value = $event)),
           multiple: "",
           class: "task-panels"
         }, {
@@ -355,9 +360,11 @@ return (_ctx, _cache) => {
                             default: _withCtx$4(() => [
                               _createVNode$4(_component_VSelect, {
                                 modelValue: task.config.task_type,
-                                "onUpdate:modelValue": $event => ((task.config.task_type) = $event),
+                                "onUpdate:modelValue": [$event => ((task.config.task_type) = $event), $event => (keepExpanded(task.id))],
                                 items: taskTypeOptions,
-                                label: "任务类型"
+                                label: "任务类型",
+                                onClick: _cache[3] || (_cache[3] = _withModifiers$1(() => {}, ["stop"])),
+                                onMousedown: _cache[4] || (_cache[4] = _withModifiers$1(() => {}, ["stop"]))
                               }, null, 8, ["modelValue", "onUpdate:modelValue"])
                             ]),
                             _: 2
@@ -599,24 +606,21 @@ return (_ctx, _cache) => {
                                 _: 2
                               }, 1024))
                             : _createCommentVNode$4("", true),
-                          (task.config.task_type === 'rss')
-                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
-                                key: 9,
-                                cols: "12",
-                                md: "6"
-                              }, {
-                                default: _withCtx$4(() => [
-                                  _createVNode$4(_component_VTextarea, {
-                                    modelValue: task.config.rename_rules,
-                                    "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
-                                    label: "重命名规则",
-                                    rows: "3",
-                                    "auto-grow": ""
-                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                                ]),
-                                _: 2
-                              }, 1024))
-                            : _createCommentVNode$4("", true),
+                          _createVNode$4(_component_VCol, {
+                            cols: "12",
+                            md: "6"
+                          }, {
+                            default: _withCtx$4(() => [
+                              _createVNode$4(_component_VTextarea, {
+                                modelValue: task.config.rename_rules,
+                                "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
+                                label: task.config.task_type === 'manual' ? '重命名规则（可选）' : '重命名规则',
+                                rows: "3",
+                                "auto-grow": ""
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "label"])
+                            ]),
+                            _: 2
+                          }, 1024),
                           _createVNode$4(_component_VCol, {
                             cols: "12",
                             md: "6"
@@ -633,7 +637,7 @@ return (_ctx, _cache) => {
                           }, 1024),
                           (task.config.task_type === 'rss')
                             ? (_openBlock$4(), _createBlock$4(_component_VCol, {
-                                key: 10,
+                                key: 9,
                                 cols: "12",
                                 md: "6"
                               }, {
@@ -649,7 +653,7 @@ return (_ctx, _cache) => {
                             : _createCommentVNode$4("", true),
                           (task.config.task_type === 'rss')
                             ? (_openBlock$4(), _createBlock$4(_component_VCol, {
-                                key: 11,
+                                key: 10,
                                 cols: "12",
                                 md: "6"
                               }, {
@@ -667,7 +671,7 @@ return (_ctx, _cache) => {
                             : _createCommentVNode$4("", true),
                           (task.config.task_type === 'rss')
                             ? (_openBlock$4(), _createBlock$4(_component_VCol, {
-                                key: 12,
+                                key: 11,
                                 cols: "12",
                                 md: "6"
                               }, {
@@ -717,7 +721,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-46afa1bb"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-687f8f2a"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 

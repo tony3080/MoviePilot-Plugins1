@@ -94,6 +94,7 @@ class RssTaskQbRule:
     hr_cron: str = ""
     task_type: str = "rss"
     query_interval: int = 60
+    rename_rules: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +114,7 @@ class RssTaskQbRule:
             "hr_cron": self.hr_cron,
             "task_type": self.task_type,
             "query_interval": self.query_interval,
+            "rename_rules": self.rename_rules,
         }
 
 
@@ -181,6 +183,7 @@ class RssTaskQbScope:
                 hr_cron=str(config.get("hr_cron") or "").strip(),
                 task_type=str(config.get("task_type") or "rss").strip().casefold(),
                 query_interval=_safe_positive_int(config.get("query_interval"), 60),
+                rename_rules=str(config.get("rename_rules") or "").strip(),
             ))
         return cls(rules, ignored)
 
@@ -1441,14 +1444,18 @@ class QbSyncService:
                     recognize_cn=True,
                     recognize_fx=True,
                 )
-                if manual_labels.get("mandarin") or manual_labels.get("effects"):
+                if (
+                    manual_labels.get("mandarin")
+                    or manual_labels.get("effects")
+                    or task_rule.rename_rules
+                ):
                     server = self.gateway.get_server(downloader.name)
                     rename_result = QbSourceRenameService(self.gateway).apply(
                         server,
                         info_hash,
                         rss_title=title,
-                        rename_enabled=False,
-                        rename_rules="",
+                        rename_enabled=bool(task_rule.rename_rules),
+                        rename_rules=task_rule.rename_rules,
                         add_chinese_title=False,
                         add_cn=bool(manual_labels.get("mandarin")),
                         add_fx=bool(manual_labels.get("effects")),

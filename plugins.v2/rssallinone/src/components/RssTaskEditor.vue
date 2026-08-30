@@ -137,6 +137,11 @@ function testTask(task, position) {
   })
 }
 
+function keepExpanded(taskId) {
+  if (!taskId || expanded.value.includes(taskId)) return
+  expanded.value = [...expanded.value, taskId]
+}
+
 watch(
   () => props.items,
   value => {
@@ -258,7 +263,14 @@ watch(
               <VTextField v-model="task.name" label="任务名称" />
             </VCol>
             <VCol cols="12" md="4">
-              <VSelect v-model="task.config.task_type" :items="taskTypeOptions" label="任务类型" />
+              <VSelect
+                v-model="task.config.task_type"
+                :items="taskTypeOptions"
+                label="任务类型"
+                @click.stop
+                @mousedown.stop
+                @update:model-value="keepExpanded(task.id)"
+              />
             </VCol>
             <VCol v-if="task.config.task_type === 'rss'" cols="12" md="4">
               <VTextField v-model="task.config.rss_url" label="RSS URL" />
@@ -330,10 +342,10 @@ watch(
                 min="0"
               />
             </VCol>
-            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
+            <VCol cols="12" md="6">
               <VTextarea
                 v-model="task.config.rename_rules"
-                label="重命名规则"
+                :label="task.config.task_type === 'manual' ? '重命名规则（可选）' : '重命名规则'"
                 rows="3"
                 auto-grow
               />

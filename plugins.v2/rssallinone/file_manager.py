@@ -110,6 +110,7 @@ class LocalFileManagerService:
         recognize_fx: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
+        rename_rules: object = "",
     ) -> Dict[str, Any]:
         source = _local_entry(path)
         if not source.is_dir():
@@ -125,6 +126,7 @@ class LocalFileManagerService:
             recognize_fx=recognize_fx,
             cn_keywords=cn_keywords,
             query_interval=query_interval,
+            rename_rules=rename_rules,
         )
 
     def recognize_entry(
@@ -140,6 +142,7 @@ class LocalFileManagerService:
         recognize_fx: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
+        rename_rules: object = "",
     ) -> Dict[str, Any]:
         source = _local_entry(path)
         roots = self._source_roots()
@@ -157,6 +160,10 @@ class LocalFileManagerService:
             source_kind = "local_file"
         if not files:
             raise FileManagerError("所选项目中没有可识别的媒体文件")
+        if str(rename_rules or "").strip():
+            files = self._rename_local_files(files, rename_rules)
+            if source.is_file() and files:
+                source = files[0]
         return self._recognize_source(
             source=source,
             files=files,
@@ -171,6 +178,7 @@ class LocalFileManagerService:
             recognize_fx=recognize_fx,
             cn_keywords=cn_keywords,
             query_interval=query_interval,
+            rename_rules=rename_rules,
         )
 
     def recognize_current_directory(
@@ -185,6 +193,7 @@ class LocalFileManagerService:
         recognize_fx: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
+        rename_rules: object = "",
     ) -> Dict[str, Any]:
         directory = _local_directory(path)
         roots = self._source_roots()
@@ -219,6 +228,7 @@ class LocalFileManagerService:
                     recognize_fx=recognize_fx,
                     cn_keywords=cn_keywords,
                     query_interval=query_interval,
+                    rename_rules=rename_rules,
                 )
                 results.append({"path": str(candidate), **result})
                 if result.get("duplicate"):
@@ -265,6 +275,7 @@ class LocalFileManagerService:
         recognize_fx: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
+        rename_rules: object = "",
     ) -> Dict[str, Any]:
         media_id, source_hash = _source_identity(source)
         requested_media_id = str(refresh_media_id or "").strip()
@@ -517,6 +528,28 @@ class LocalFileManagerService:
             "item": self.store.get_media_item(media_id),
             "message": "识别完成，已更新入库管理卡片",
         }
+
+    @staticmethod
+    def _rename_local_files(files: Sequence[Path], rules_text: object) -> List[Path]:
+        from .rss_rename import parse_rename_rules, transform_name
+        rules = parse_rename_rules(rules_text)
+        renamed: List[Path] = []
+        for file_path in files:
+            current = Path(file_path)
+            new_name = transform_name(
+                current.name,
+                is_file=True,
+                rules=rules,
+            )
+            if new_name == current.name:
+                renamed.append(current)
+                continue
+            target = current.with_name(new_name)
+            if target.exists() and target.resolve() != current.resolve():
+                raise FileManagerError(f"本地重命名目标已存在：{target}")
+            current.rename(target)
+            renamed.append(target.resolve(strict=True))
+        return renamed
 
     @staticmethod
     def _duplicate_result(item: Dict[str, Any], reason: str) -> Dict[str, Any]:

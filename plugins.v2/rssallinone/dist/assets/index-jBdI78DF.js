@@ -1,5 +1,5 @@
 import { importShared } from './__federation_fn_import-JrT3xvdd.js';
-import AppPage from './__federation_expose_AppPage-BX0NQim2.js';
+import AppPage from './__federation_expose_AppPage-DmxJVGoo.js';
 
 true&&(function polyfill() {
   const relList = document.createElement("link").relList;

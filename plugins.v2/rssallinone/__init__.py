@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.68"
+    plugin_version = "0.13.69"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2208,6 +2208,7 @@ class RssAllInOne(_PluginBase):
                     recognize_fx=True,
                     cn_keywords=str(config.get("cn_keywords") or "国语,国配"),
                     query_interval=config.get("query_interval") or 60,
+                    rename_rules=str(config.get("rename_rules") or ""),
                 )
                 config["local_initialized"] = True
                 config["local_initialized_at"] = utc_now()
