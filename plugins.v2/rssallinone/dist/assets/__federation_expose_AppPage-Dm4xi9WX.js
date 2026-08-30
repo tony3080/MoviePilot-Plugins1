@@ -727,19 +727,23 @@ return (_ctx, _cache) => {
                         }, 1024),
                         _createVNode$4(_component_VDivider, { class: "mb-3" }),
                         _createElementVNode$4("div", _hoisted_5$3, [
-                          (task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(_ctx.option.key))
-                            ? (_openBlock$4(), _createElementBlock$3(_Fragment$2, { key: 0 }, _renderList$2(booleanOptions, (option) => {
-                                return _createVNode$4(_component_VSwitch, {
-                                  key: option.key,
-                                  modelValue: task.config[option.key],
-                                  "onUpdate:modelValue": $event => ((task.config[option.key]) = $event),
-                                  label: option.label,
-                                  density: "compact",
-                                  color: "primary",
-                                  "hide-details": ""
-                                }, null, 8, ["modelValue", "onUpdate:modelValue", "label"])
-                              }), 64))
-                            : _createCommentVNode$4("", true)
+                          (_openBlock$4(), _createElementBlock$3(_Fragment$2, null, _renderList$2(booleanOptions, (option) => {
+                            return (_openBlock$4(), _createElementBlock$3(_Fragment$2, {
+                              key: option.key
+                            }, [
+                              (task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key))
+                                ? (_openBlock$4(), _createBlock$4(_component_VSwitch, {
+                                    key: 0,
+                                    modelValue: task.config[option.key],
+                                    "onUpdate:modelValue": $event => ((task.config[option.key]) = $event),
+                                    label: option.label,
+                                    density: "compact",
+                                    color: "primary",
+                                    "hide-details": ""
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue", "label"]))
+                                : _createCommentVNode$4("", true)
+                            ], 64))
+                          }), 64))
                         ])
                       ], 32)
                     ]),
@@ -757,7 +761,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-03194b3f"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-29e6d66d"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 

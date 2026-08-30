@@ -409,16 +409,16 @@ watch(
 
           <VDivider class="mb-3" />
           <div class="switch-grid">
-            <VSwitch
-              v-for="option in booleanOptions"
-              :key="option.key"
-              v-if="task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key)"
-              v-model="task.config[option.key]"
-              :label="option.label"
-              density="compact"
-              color="primary"
-              hide-details
-            />
+            <template v-for="option in booleanOptions" :key="option.key">
+              <VSwitch
+                v-if="task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key)"
+                v-model="task.config[option.key]"
+                :label="option.label"
+                density="compact"
+                color="primary"
+                hide-details
+              />
+            </template>
           </div>
           </div>
         </VExpansionPanelText>
