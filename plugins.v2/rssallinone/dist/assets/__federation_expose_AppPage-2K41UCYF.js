@@ -10,7 +10,7 @@ const _hoisted_3$3 = { class: "text-caption text-medium-emphasis" };
 const _hoisted_4$3 = { class: "task-title" };
 const _hoisted_5$3 = { class: "switch-grid" };
 
-const {computed: computed$4,ref: ref$2,watch: watch$2} = await importShared('vue');
+const {computed: computed$4,nextTick,ref: ref$2,watch: watch$2} = await importShared('vue');
 
 
 
@@ -35,6 +35,8 @@ const emit = __emit;
 
 const tasks = ref$2([]);
 const expanded = ref$2([]);
+const hasSyncedProps = ref$2(false);
+let lastPropsSignature = '';
 
 const booleanOptions = [
   { key: 'pause_on_add', label: '添加种子时暂停' },
@@ -161,13 +163,39 @@ function keepExpanded(taskId) {
   expanded.value = [...expanded.value, taskId];
 }
 
+function keepTaskExpanded(taskId) {
+  // Vuetify may emit the panel model update after the select value update.
+  // Re-apply the current task on the next tick so changing task type cannot
+  // close the editor that is being edited.
+  nextTick(() => keepExpanded(taskId));
+}
+
 watch$2(
   () => props.items,
   value => {
-    tasks.value = (value || []).map(normalizeTask);
-    expanded.value = [];
+    const items = value || [];
+    const signature = JSON.stringify(items);
+
+    // Parent refreshes can replace the array while an editor is open. Ignore
+    // equivalent snapshots so local, unsaved edits are not overwritten.
+    if (hasSyncedProps.value && signature === lastPropsSignature) return
+
+    const nextTasks = items.map(normalizeTask);
+    const expandedIds = new Set(expanded.value);
+    tasks.value = nextTasks;
+    lastPropsSignature = signature;
+
+    if (!hasSyncedProps.value) {
+      expanded.value = [];
+      hasSyncedProps.value = true;
+      return
+    }
+
+    expanded.value = nextTasks
+      .map(task => task.id)
+      .filter(id => expandedIds.has(id));
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 );
 
 return (_ctx, _cache) => {
@@ -367,7 +395,7 @@ return (_ctx, _cache) => {
                               default: _withCtx$4(() => [
                                 _createVNode$4(_component_VSelect, {
                                   modelValue: task.config.task_type,
-                                  "onUpdate:modelValue": [$event => ((task.config.task_type) = $event), $event => (keepExpanded(task.id))],
+                                  "onUpdate:modelValue": [$event => ((task.config.task_type) = $event), $event => (keepTaskExpanded(task.id))],
                                   items: taskTypeOptions,
                                   label: "任务类型",
                                   onClick: _cache[3] || (_cache[3] = _withModifiers$1(() => {}, ["stop"])),
@@ -729,7 +757,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-da0dd8ba"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-03194b3f"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 

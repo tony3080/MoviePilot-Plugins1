@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -16,6 +16,8 @@ const emit = defineEmits(['save', 'reload', 'test', 'run', 'control'])
 
 const tasks = ref([])
 const expanded = ref([])
+const hasSyncedProps = ref(false)
+let lastPropsSignature = ''
 
 const booleanOptions = [
   { key: 'pause_on_add', label: '添加种子时暂停' },
@@ -142,13 +144,39 @@ function keepExpanded(taskId) {
   expanded.value = [...expanded.value, taskId]
 }
 
+function keepTaskExpanded(taskId) {
+  // Vuetify may emit the panel model update after the select value update.
+  // Re-apply the current task on the next tick so changing task type cannot
+  // close the editor that is being edited.
+  nextTick(() => keepExpanded(taskId))
+}
+
 watch(
   () => props.items,
   value => {
-    tasks.value = (value || []).map(normalizeTask)
-    expanded.value = []
+    const items = value || []
+    const signature = JSON.stringify(items)
+
+    // Parent refreshes can replace the array while an editor is open. Ignore
+    // equivalent snapshots so local, unsaved edits are not overwritten.
+    if (hasSyncedProps.value && signature === lastPropsSignature) return
+
+    const nextTasks = items.map(normalizeTask)
+    const expandedIds = new Set(expanded.value)
+    tasks.value = nextTasks
+    lastPropsSignature = signature
+
+    if (!hasSyncedProps.value) {
+      expanded.value = []
+      hasSyncedProps.value = true
+      return
+    }
+
+    expanded.value = nextTasks
+      .map(task => task.id)
+      .filter(id => expandedIds.has(id))
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 )
 </script>
 
@@ -270,7 +298,7 @@ watch(
                 label="任务类型"
                 @click.stop
                 @mousedown.stop
-                @update:model-value="keepExpanded(task.id)"
+                @update:model-value="keepTaskExpanded(task.id)"
               />
             </VCol>
             <VCol v-if="task.config.task_type === 'rss'" cols="12" md="4">
