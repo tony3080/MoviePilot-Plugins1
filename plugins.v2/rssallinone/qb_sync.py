@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -91,6 +92,8 @@ class RssTaskQbRule:
     hr_enabled: bool = False
     site_id: str = ""
     hr_cron: str = ""
+    task_type: str = "rss"
+    query_interval: int = 60
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -108,6 +111,8 @@ class RssTaskQbRule:
             "hr_enabled": self.hr_enabled,
             "site_id": self.site_id,
             "hr_cron": self.hr_cron,
+            "task_type": self.task_type,
+            "query_interval": self.query_interval,
         }
 
 
@@ -174,6 +179,8 @@ class RssTaskQbScope:
                 hr_enabled=_as_bool(config.get("hr_enabled", False)),
                 site_id=str(config.get("site_id") or "").strip(),
                 hr_cron=str(config.get("hr_cron") or "").strip(),
+                task_type=str(config.get("task_type") or "rss").strip().casefold(),
+                query_interval=_safe_positive_int(config.get("query_interval"), 60),
             ))
         return cls(rules, ignored)
 
@@ -213,6 +220,10 @@ class RssTaskQbScope:
         ]
         if len(matches) == 1:
             return matches[0]
+        if matches and not normalized_task_id:
+            manual_matches = [rule for rule in matches if rule.task_type == "manual"]
+            if len(manual_matches) == 1:
+                return manual_matches[0]
         if matches and len({
             (
                 rule.import_enabled,
@@ -334,6 +345,12 @@ class MoviePilotQbGateway:
 
     @staticmethod
     def list_torrent_files(downloader: str, info_hash: str) -> List[Any]:
+        if not isinstance(downloader, str):
+            server = downloader
+            try:
+                return list(server.get_files(info_hash, retry=6, interval=0.5) or [])
+            except Exception as error:
+                raise RuntimeError(f"读取 qB 文件列表失败：{error}") from error
         from app.chain.download import DownloadChain
 
         files = DownloadChain().torrent_files(
@@ -343,6 +360,29 @@ class MoviePilotQbGateway:
         if files is None:
             raise RuntimeError(f"读取 qBittorrent 文件清单失败：{downloader}/{info_hash}")
         return list(files)
+
+    @staticmethod
+    def rename_torrent_file(server: Any, info_hash: str, old_path: str, new_path: str) -> None:
+        server.qbc.torrents_rename_file(
+            torrent_hash=info_hash, old_path=old_path, new_path=new_path
+        )
+
+    @staticmethod
+    def rename_torrent_folder(server: Any, info_hash: str, old_path: str, new_path: str) -> None:
+        server.qbc.torrents_rename_folder(
+            torrent_hash=info_hash, old_path=old_path, new_path=new_path
+        )
+
+    @staticmethod
+    def get_server(downloader: str) -> Any:
+        from app.helper.downloader import DownloaderHelper
+        service = DownloaderHelper().get_service(
+            name=str(downloader or "").strip(), type_filter="qbittorrent"
+        )
+        server = getattr(service, "instance", None) if service else None
+        if not server:
+            raise RuntimeError(f"qBittorrent 节点不可用：{downloader}")
+        return server
 
     @staticmethod
     def remove_torrent(
@@ -1375,6 +1415,49 @@ class QbSyncService:
             raw.get("category") or "",
             rss_history.get("task_id") or "",
         )
+        manual_labels: Dict[str, Any] = {}
+        if task_rule and task_rule.task_type == "manual" and task_rule.site_id and _torrent_completed(raw):
+            try:
+                from .rss_execute import MoviePilotRssGateway
+                from .rss_rename import QbSourceRenameService
+                from .rss_site_labels import SiteLabelService
+                comment_url = str(raw.get("comment") or raw.get("url") or "").strip()
+                access = MoviePilotRssGateway.site_access(task_rule.site_id)
+                torrent_id = ""
+                match = re.search(r"[?&]id=(\d+)", comment_url)
+                if match:
+                    torrent_id = match.group(1)
+                label_service = SiteLabelService(
+                    MoviePilotRssGateway(),
+                    logger=self.logger,
+                    min_request_interval_seconds=task_rule.query_interval,
+                )
+                manual_labels = label_service.detect(
+                    access=access,
+                    title=title,
+                    detail_url=comment_url,
+                    torrent_id=torrent_id,
+                    cn_keywords="国语,国配",
+                    recognize_cn=True,
+                    recognize_fx=True,
+                )
+                if manual_labels.get("mandarin") or manual_labels.get("effects"):
+                    server = self.gateway.get_server(downloader.name)
+                    rename_result = QbSourceRenameService(self.gateway).apply(
+                        server,
+                        info_hash,
+                        rss_title=title,
+                        rename_enabled=False,
+                        rename_rules="",
+                        add_chinese_title=False,
+                        add_cn=bool(manual_labels.get("mandarin")),
+                        add_fx=bool(manual_labels.get("effects")),
+                    )
+                    manual_labels["rename"] = rename_result
+                    raw = dict(raw)
+                    raw["manual_labels"] = manual_labels
+            except Exception as error:
+                manual_labels = {"status": "failed", "reason": str(error)[:500]}
         import_enabled = bool(task_rule and task_rule.import_enabled)
         completion_requires_processing = _completion_requires_processing(
             task_rule, rss_history
@@ -1641,6 +1724,7 @@ class QbSyncService:
                 "deletion_scope": "qb_task_and_save_path",
             },
             "qb_delete": qb_delete,
+            "manual_labels": manual_labels,
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -1964,6 +2048,14 @@ def _as_bool(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().casefold() in {"1", "true", "yes", "on", "是"}
     return bool(value)
+
+
+def _safe_positive_int(value: object, fallback: int = 60) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(1, parsed)
 
 
 def build_source_target_mappings(

@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 
 DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
+    "task_type": "rss",
     "rss_url": "",
     "qb_downloader": "",
     "rss_cron": "*/10 * * * *",
@@ -34,6 +35,12 @@ DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
     "delete_files": False,
     "hr_enabled": False,
     "hr_cron": "30 3 * * *",
+    "local_path": "",
+    "process_local_files": False,
+    "local_initialized": False,
+    "local_initialized_at": "",
+    "local_path_fingerprint": "",
+    "query_interval": 60,
 }
 
 TEXT_FIELDS = (
@@ -50,6 +57,9 @@ TEXT_FIELDS = (
     "realtime_source_root",
     "realtime_link_root",
     "hr_cron",
+    "local_path",
+    "local_initialized_at",
+    "local_path_fingerprint",
 )
 BOOLEAN_FIELDS = (
     "pause_on_add",
@@ -63,10 +73,13 @@ BOOLEAN_FIELDS = (
     "download_enabled",
     "delete_files",
     "hr_enabled",
+    "process_local_files",
+    "local_initialized",
 )
 INTEGER_LIMITS = {
     "delete_after_minutes": (0, 525600),
     "upload_limit_kbps": (0, 1_000_000_000),
+    "query_interval": (1, 86400),
 }
 TASK_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -88,7 +101,7 @@ def normalize_rss_tasks(value: object) -> List[Dict[str, Any]]:
         raise ValueError("RSS 任务最多保存 100 条")
     normalized: List[Dict[str, Any]] = []
     seen_ids = set()
-    seen_qb_pairs: Dict[tuple[str, str], str] = {}
+    seen_qb_pairs: Dict[tuple[str, str, str], str] = {}
     for position, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f"第 {position + 1} 条 RSS 任务格式无效")
@@ -100,7 +113,8 @@ def normalize_rss_tasks(value: object) -> List[Dict[str, Any]]:
         downloader = str(config.get("qb_downloader") or "").strip()
         category = str(config.get("qb_category") or "").strip()
         if downloader and category:
-            pair = (downloader.casefold(), category.casefold())
+            task_type = str(config.get("task_type") or "rss").strip().casefold()
+            pair = (task_type, downloader.casefold(), category.casefold())
             previous_name = seen_qb_pairs.get(pair)
             if previous_name:
                 raise ValueError(
@@ -126,6 +140,8 @@ def normalize_rss_task(item: Dict[str, Any], position: int) -> Dict[str, Any]:
         normalized_config[field] = str(normalized_config.get(field) or "").strip()
     if not normalized_config.get("hr_cron"):
         normalized_config["hr_cron"] = DEFAULT_RSS_TASK_CONFIG["hr_cron"]
+    task_type = str(normalized_config.get("task_type") or "rss").strip().casefold()
+    normalized_config["task_type"] = "manual" if task_type in {"manual", "手动", "手动添加"} else "rss"
     for field in BOOLEAN_FIELDS:
         normalized_config[field] = _as_bool(normalized_config.get(field))
     for field, (minimum, maximum) in INTEGER_LIMITS.items():

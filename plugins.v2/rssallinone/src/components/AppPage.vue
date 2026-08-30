@@ -161,6 +161,7 @@ const taskTypeLabels = {
   rss_run: 'RSS 任务执行',
   qb_refresh: 'QB 刷新识别',
   file_batch_recognition: '文件批量识别',
+  manual_local_init: '手动添加本地初始化',
 }
 
 const taskStateLabels = {
@@ -195,7 +196,7 @@ const pendingImportStateText = computed(() => ({
   restore_failed: '恢复开关失败',
 }[pendingImportState.value] || (pendingImportActive.value ? '队列运行中' : '队列空闲')))
 const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => ({
-  title: task.name || task.id,
+  title: `${task.config?.task_type === 'manual' ? '手动添加' : 'RSS'} · ${task.name || task.id}`,
   value: String(task.id || ''),
 })).filter(item => item.value))
 const mediaStateOptions = [

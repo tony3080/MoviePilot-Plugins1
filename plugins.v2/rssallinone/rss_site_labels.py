@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from html.parser import HTMLParser
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from .rss_feed import mask_url
@@ -88,11 +88,19 @@ class SiteLabelService:
         sleeper: Any = None,
         clock: Any = None,
         logger: Any = None,
+        min_request_interval_seconds: Optional[float] = None,
     ) -> None:
         self.gateway = gateway
         self.sleeper = sleeper or time.sleep
         self.clock = clock or time.monotonic
         self.logger = logger
+        if min_request_interval_seconds is not None:
+            try:
+                self.request_interval_seconds = max(1.0, float(min_request_interval_seconds))
+            except (TypeError, ValueError):
+                self.request_interval_seconds = float(MIN_REQUEST_INTERVAL_SECONDS)
+        else:
+            self.request_interval_seconds = float(MIN_REQUEST_INTERVAL_SECONDS)
 
     def detect(
         self,
@@ -208,7 +216,7 @@ class SiteLabelService:
             wait_seconds = max(
                 0.0,
                 float(state.get("last_request", 0.0))
-                + MIN_REQUEST_INTERVAL_SECONDS
+                + self.request_interval_seconds
                 - now,
                 float(state.get("cooldown_until", 0.0)) - now,
             )

@@ -50,6 +50,11 @@ const booleanOptions = [
   { key: 'hr_enabled', label: 'HR保护' },
 ];
 
+const taskTypeOptions = [
+  { title: 'RSS任务', value: 'rss' },
+  { title: '手动添加', value: 'manual' },
+];
+
 const downloaderOptions = computed$4(() => props.downloaders.map(item => ({
   title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
   value: item.name,
@@ -75,6 +80,7 @@ function newId() {
 
 function defaultConfig() {
   return {
+    task_type: 'rss',
     rss_url: '',
     qb_downloader: '',
     rss_cron: '*/10 * * * *',
@@ -101,6 +107,12 @@ function defaultConfig() {
     delete_files: false,
     hr_enabled: false,
     hr_cron: '30 3 * * *',
+    local_path: '',
+    process_local_files: false,
+    local_initialized: false,
+    local_initialized_at: '',
+    local_path_fingerprint: '',
+    query_interval: 60,
   }
 }
 
@@ -280,7 +292,7 @@ return (_ctx, _cache) => {
                               variant: "text",
                               color: "success",
                               loading: __props.runningTaskId === task.id,
-                              disabled: !__props.rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim(),
+                              disabled: (task.config.task_type === 'rss' && !__props.rssEnabled) || !task.enabled || (task.config.task_type === 'rss' && !String(task.config.rss_url || '').trim()),
                               "aria-label": "立即执行 RSS",
                               onClick: _withModifiers$1($event => (emit('run', task)), ["stop"])
                             }), null, 16, ["loading", "disabled", "onClick"])
@@ -295,7 +307,7 @@ return (_ctx, _cache) => {
                               variant: "text",
                               color: "primary",
                               loading: __props.testingTaskId === task.id,
-                              disabled: !String(task.config.rss_url || '').trim(),
+                              disabled: task.config.task_type !== 'rss' || !String(task.config.rss_url || '').trim(),
                               "aria-label": "测试 RSS",
                               onClick: _withModifiers$1($event => (testTask(task, index)), ["stop"])
                             }), null, 16, ["loading", "disabled", "onClick"])
@@ -338,17 +350,34 @@ return (_ctx, _cache) => {
                           }, 1024),
                           _createVNode$4(_component_VCol, {
                             cols: "12",
-                            md: "8"
+                            md: "4"
                           }, {
                             default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.rss_url,
-                                "onUpdate:modelValue": $event => ((task.config.rss_url) = $event),
-                                label: "RSS URL"
+                              _createVNode$4(_component_VSelect, {
+                                modelValue: task.config.task_type,
+                                "onUpdate:modelValue": $event => ((task.config.task_type) = $event),
+                                items: taskTypeOptions,
+                                label: "任务类型"
                               }, null, 8, ["modelValue", "onUpdate:modelValue"])
                             ]),
                             _: 2
                           }, 1024),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 0,
+                                cols: "12",
+                                md: "4"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.rss_url,
+                                    "onUpdate:modelValue": $event => ((task.config.rss_url) = $event),
+                                    label: "RSS URL"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
                           _createVNode$4(_component_VCol, {
                             cols: "12",
                             md: "4"
@@ -376,125 +405,218 @@ return (_ctx, _cache) => {
                             ]),
                             _: 2
                           }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "4"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.save_path,
-                                "onUpdate:modelValue": $event => ((task.config.save_path) = $event),
-                                label: "保存路径"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.rss_cron,
-                                "onUpdate:modelValue": $event => ((task.config.rss_cron) = $event),
-                                label: "RSS周期 (CRON)"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.start_cron,
-                                "onUpdate:modelValue": $event => ((task.config.start_cron) = $event),
-                                label: "开始任务 CRON"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.name_contains,
-                                "onUpdate:modelValue": $event => ((task.config.name_contains) = $event),
-                                label: "限制条件 (名称包含)"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "3"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.delete_after_minutes,
-                                "onUpdate:modelValue": $event => ((task.config.delete_after_minutes) = $event),
-                                modelModifiers: { number: true },
-                                label: "完成后删除任务 (分钟)",
-                                type: "number",
-                                min: "0",
-                                disabled: task.config.hr_enabled,
-                                hint: task.config.hr_enabled ? '勾选 HR 后此项无效' : '',
-                                "persistent-hint": task.config.hr_enabled
-                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "hint", "persistent-hint"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "3"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.hr_cron,
-                                "onUpdate:modelValue": $event => ((task.config.hr_cron) = $event),
-                                label: "HR扫描 CRON",
-                                placeholder: "30 3 * * *",
-                                disabled: !task.config.hr_enabled,
-                                hint: "勾选 HR 后按此 CRON 对照彩虹岛 HR 名单删除任务",
-                                "persistent-hint": task.config.hr_enabled
-                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "persistent-hint"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "3"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.upload_limit_kbps,
-                                "onUpdate:modelValue": $event => ((task.config.upload_limit_kbps) = $event),
-                                modelModifiers: { number: true },
-                                label: "上传限速 (kb/s)",
-                                type: "number",
-                                min: "0"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextarea, {
-                                modelValue: task.config.rename_rules,
-                                "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
-                                label: "重命名规则",
-                                rows: "3",
-                                "auto-grow": ""
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 1,
+                                cols: "12",
+                                md: "4"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.save_path,
+                                    "onUpdate:modelValue": $event => ((task.config.save_path) = $event),
+                                    label: "保存路径"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 2,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.rss_cron,
+                                    "onUpdate:modelValue": $event => ((task.config.rss_cron) = $event),
+                                    label: "RSS周期 (CRON)"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 3,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.start_cron,
+                                    "onUpdate:modelValue": $event => ((task.config.start_cron) = $event),
+                                    label: "开始任务 CRON"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 4,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.name_contains,
+                                    "onUpdate:modelValue": $event => ((task.config.name_contains) = $event),
+                                    label: "限制条件 (名称包含)"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'manual')
+                            ? (_openBlock$4(), _createElementBlock$3(_Fragment$2, { key: 5 }, [
+                                _createVNode$4(_component_VCol, {
+                                  cols: "12",
+                                  md: "6"
+                                }, {
+                                  default: _withCtx$4(() => [
+                                    _createVNode$4(_component_VTextField, {
+                                      modelValue: task.config.local_path,
+                                      "onUpdate:modelValue": $event => ((task.config.local_path) = $event),
+                                      label: "本地目录",
+                                      placeholder: "/MP/机械UB收藏"
+                                    }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                  ]),
+                                  _: 2
+                                }, 1024),
+                                _createVNode$4(_component_VCol, {
+                                  cols: "12",
+                                  md: "3"
+                                }, {
+                                  default: _withCtx$4(() => [
+                                    _createVNode$4(_component_VTextField, {
+                                      modelValue: task.config.query_interval,
+                                      "onUpdate:modelValue": $event => ((task.config.query_interval) = $event),
+                                      modelModifiers: { number: true },
+                                      label: "查询间隔（秒）",
+                                      type: "number",
+                                      min: "1"
+                                    }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                  ]),
+                                  _: 2
+                                }, 1024),
+                                _createVNode$4(_component_VCol, {
+                                  cols: "12",
+                                  md: "3",
+                                  class: "d-flex align-center"
+                                }, {
+                                  default: _withCtx$4(() => [
+                                    _createVNode$4(_component_VSwitch, {
+                                      modelValue: task.config.process_local_files,
+                                      "onUpdate:modelValue": $event => ((task.config.process_local_files) = $event),
+                                      label: "处理本地文件",
+                                      density: "compact",
+                                      color: "primary",
+                                      "hide-details": ""
+                                    }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                  ]),
+                                  _: 2
+                                }, 1024),
+                                _createVNode$4(_component_VCol, { cols: "12" }, {
+                                  default: _withCtx$4(() => [
+                                    (task.config.local_initialized)
+                                      ? (_openBlock$4(), _createBlock$4(_component_VAlert, {
+                                          key: 0,
+                                          type: "success",
+                                          variant: "tonal",
+                                          density: "compact"
+                                        }, {
+                                          default: _withCtx$4(() => [
+                                            _createTextVNode$4(" 本地目录已完成首次处理（" + _toDisplayString$4(task.config.local_initialized_at || '已初始化') + "） ", 1)
+                                          ]),
+                                          _: 2
+                                        }, 1024))
+                                      : _createCommentVNode$4("", true)
+                                  ]),
+                                  _: 2
+                                }, 1024)
+                              ], 64))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 6,
+                                cols: "12",
+                                md: "3"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.delete_after_minutes,
+                                    "onUpdate:modelValue": $event => ((task.config.delete_after_minutes) = $event),
+                                    modelModifiers: { number: true },
+                                    label: "完成后删除任务 (分钟)",
+                                    type: "number",
+                                    min: "0",
+                                    disabled: task.config.hr_enabled,
+                                    hint: task.config.hr_enabled ? '勾选 HR 后此项无效' : '',
+                                    "persistent-hint": task.config.hr_enabled
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "hint", "persistent-hint"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 7,
+                                cols: "12",
+                                md: "3"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.hr_cron,
+                                    "onUpdate:modelValue": $event => ((task.config.hr_cron) = $event),
+                                    label: "HR扫描 CRON",
+                                    placeholder: "30 3 * * *",
+                                    disabled: !task.config.hr_enabled,
+                                    hint: "勾选 HR 后按此 CRON 对照彩虹岛 HR 名单删除任务",
+                                    "persistent-hint": task.config.hr_enabled
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled", "persistent-hint"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 8,
+                                cols: "12",
+                                md: "3"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.upload_limit_kbps,
+                                    "onUpdate:modelValue": $event => ((task.config.upload_limit_kbps) = $event),
+                                    modelModifiers: { number: true },
+                                    label: "上传限速 (kb/s)",
+                                    type: "number",
+                                    min: "0"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 9,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextarea, {
+                                    modelValue: task.config.rename_rules,
+                                    "onUpdate:modelValue": $event => ((task.config.rename_rules) = $event),
+                                    label: "重命名规则",
+                                    rows: "3",
+                                    "auto-grow": ""
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
                           _createVNode$4(_component_VCol, {
                             cols: "12",
                             md: "6"
@@ -509,65 +631,76 @@ return (_ctx, _cache) => {
                             ]),
                             _: 2
                           }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.cn_keywords,
-                                "onUpdate:modelValue": $event => ((task.config.cn_keywords) = $event),
-                                label: "国语关键词"
-                              }, null, 8, ["modelValue", "onUpdate:modelValue"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.realtime_source_root,
-                                "onUpdate:modelValue": $event => ((task.config.realtime_source_root) = $event),
-                                label: "实时硬链接源根目录",
-                                placeholder: "/SSD/QB目录/REMUX/CHD",
-                                disabled: !task.config.realtime_hardlink_enabled
-                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
-                            ]),
-                            _: 2
-                          }, 1024),
-                          _createVNode$4(_component_VCol, {
-                            cols: "12",
-                            md: "6"
-                          }, {
-                            default: _withCtx$4(() => [
-                              _createVNode$4(_component_VTextField, {
-                                modelValue: task.config.realtime_link_root,
-                                "onUpdate:modelValue": $event => ((task.config.realtime_link_root) = $event),
-                                label: "实时硬链接目标根目录",
-                                placeholder: "/SSD/QB目录/REMUX/CHDlink",
-                                disabled: !task.config.realtime_hardlink_enabled
-                              }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
-                            ]),
-                            _: 2
-                          }, 1024)
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 10,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.cn_keywords,
+                                    "onUpdate:modelValue": $event => ((task.config.cn_keywords) = $event),
+                                    label: "国语关键词"
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 11,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.realtime_source_root,
+                                    "onUpdate:modelValue": $event => ((task.config.realtime_source_root) = $event),
+                                    label: "实时硬链接源根目录",
+                                    placeholder: "/SSD/QB目录/REMUX/CHD",
+                                    disabled: !task.config.realtime_hardlink_enabled
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true),
+                          (task.config.task_type === 'rss')
+                            ? (_openBlock$4(), _createBlock$4(_component_VCol, {
+                                key: 12,
+                                cols: "12",
+                                md: "6"
+                              }, {
+                                default: _withCtx$4(() => [
+                                  _createVNode$4(_component_VTextField, {
+                                    modelValue: task.config.realtime_link_root,
+                                    "onUpdate:modelValue": $event => ((task.config.realtime_link_root) = $event),
+                                    label: "实时硬链接目标根目录",
+                                    placeholder: "/SSD/QB目录/REMUX/CHDlink",
+                                    disabled: !task.config.realtime_hardlink_enabled
+                                  }, null, 8, ["modelValue", "onUpdate:modelValue", "disabled"])
+                                ]),
+                                _: 2
+                              }, 1024))
+                            : _createCommentVNode$4("", true)
                         ]),
                         _: 2
                       }, 1024),
                       _createVNode$4(_component_VDivider, { class: "mb-3" }),
                       _createElementVNode$4("div", _hoisted_5$3, [
-                        (_openBlock$4(), _createElementBlock$3(_Fragment$2, null, _renderList$2(booleanOptions, (option) => {
-                          return _createVNode$4(_component_VSwitch, {
-                            key: option.key,
-                            modelValue: task.config[option.key],
-                            "onUpdate:modelValue": $event => ((task.config[option.key]) = $event),
-                            label: option.label,
-                            density: "compact",
-                            color: "primary",
-                            "hide-details": ""
-                          }, null, 8, ["modelValue", "onUpdate:modelValue", "label"])
-                        }), 64))
+                        (task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(_ctx.option.key))
+                          ? (_openBlock$4(), _createElementBlock$3(_Fragment$2, { key: 0 }, _renderList$2(booleanOptions, (option) => {
+                              return _createVNode$4(_component_VSwitch, {
+                                key: option.key,
+                                modelValue: task.config[option.key],
+                                "onUpdate:modelValue": $event => ((task.config[option.key]) = $event),
+                                label: option.label,
+                                density: "compact",
+                                color: "primary",
+                                "hide-details": ""
+                              }, null, 8, ["modelValue", "onUpdate:modelValue", "label"])
+                            }), 64))
+                          : _createCommentVNode$4("", true)
                       ])
                     ]),
                     _: 2
@@ -584,7 +717,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-31d92add"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-46afa1bb"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
@@ -1787,6 +1920,7 @@ const taskTypeLabels = {
   rss_run: 'RSS 任务执行',
   qb_refresh: 'QB 刷新识别',
   file_batch_recognition: '文件批量识别',
+  manual_local_init: '手动添加本地初始化',
 };
 
 const taskStateLabels = {
@@ -1821,7 +1955,7 @@ const pendingImportStateText = computed(() => ({
   restore_failed: '恢复开关失败',
 }[pendingImportState.value] || (pendingImportActive.value ? '队列运行中' : '队列空闲')));
 const rssTaskFilterOptions = computed(() => (rssTasks.value || []).map(task => ({
-  title: task.name || task.id,
+  title: `${task.config?.task_type === 'manual' ? '手动添加' : 'RSS'} · ${task.name || task.id}`,
   value: String(task.id || ''),
 })).filter(item => item.value));
 const mediaStateOptions = [
@@ -3841,6 +3975,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-734e8635"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-af1bafca"]]);
 
 export { AppPage as default };

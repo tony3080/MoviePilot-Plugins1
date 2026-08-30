@@ -31,6 +31,11 @@ const booleanOptions = [
   { key: 'hr_enabled', label: 'HR保护' },
 ]
 
+const taskTypeOptions = [
+  { title: 'RSS任务', value: 'rss' },
+  { title: '手动添加', value: 'manual' },
+]
+
 const downloaderOptions = computed(() => props.downloaders.map(item => ({
   title: `${item.name}${item.default ? ' · 默认' : ''}${item.ready ? '' : ' · 未就绪'}`,
   value: item.name,
@@ -56,6 +61,7 @@ function newId() {
 
 function defaultConfig() {
   return {
+    task_type: 'rss',
     rss_url: '',
     qb_downloader: '',
     rss_cron: '*/10 * * * *',
@@ -82,6 +88,12 @@ function defaultConfig() {
     delete_files: false,
     hr_enabled: false,
     hr_cron: '30 3 * * *',
+    local_path: '',
+    process_local_files: false,
+    local_initialized: false,
+    local_initialized_at: '',
+    local_path_fingerprint: '',
+    query_interval: 60,
   }
 }
 
@@ -204,7 +216,7 @@ watch(
                   variant="text"
                   color="success"
                   :loading="runningTaskId === task.id"
-                  :disabled="!rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim()"
+                  :disabled="(task.config.task_type === 'rss' && !rssEnabled) || !task.enabled || (task.config.task_type === 'rss' && !String(task.config.rss_url || '').trim())"
                   aria-label="立即执行 RSS"
                   @click.stop="emit('run', task)"
                 />
@@ -219,7 +231,7 @@ watch(
                   variant="text"
                   color="primary"
                   :loading="testingTaskId === task.id"
-                  :disabled="!String(task.config.rss_url || '').trim()"
+                  :disabled="task.config.task_type !== 'rss' || !String(task.config.rss_url || '').trim()"
                   aria-label="测试 RSS"
                   @click.stop="testTask(task, index)"
                 />
@@ -245,7 +257,10 @@ watch(
             <VCol cols="12" md="4">
               <VTextField v-model="task.name" label="任务名称" />
             </VCol>
-            <VCol cols="12" md="8">
+            <VCol cols="12" md="4">
+              <VSelect v-model="task.config.task_type" :items="taskTypeOptions" label="任务类型" />
+            </VCol>
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="4">
               <VTextField v-model="task.config.rss_url" label="RSS URL" />
             </VCol>
             <VCol cols="12" md="4">
@@ -258,19 +273,35 @@ watch(
             <VCol cols="12" md="4">
               <VTextField v-model="task.config.qb_category" label="QB分类" />
             </VCol>
-            <VCol cols="12" md="4">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="4">
               <VTextField v-model="task.config.save_path" label="保存路径" />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField v-model="task.config.rss_cron" label="RSS周期 (CRON)" />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField v-model="task.config.start_cron" label="开始任务 CRON" />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField v-model="task.config.name_contains" label="限制条件 (名称包含)" />
             </VCol>
-            <VCol cols="12" md="3">
+            <template v-if="task.config.task_type === 'manual'">
+              <VCol cols="12" md="6">
+                <VTextField v-model="task.config.local_path" label="本地目录" placeholder="/MP/机械UB收藏" />
+              </VCol>
+              <VCol cols="12" md="3">
+                <VTextField v-model.number="task.config.query_interval" label="查询间隔（秒）" type="number" min="1" />
+              </VCol>
+              <VCol cols="12" md="3" class="d-flex align-center">
+                <VSwitch v-model="task.config.process_local_files" label="处理本地文件" density="compact" color="primary" hide-details />
+              </VCol>
+              <VCol cols="12">
+                <VAlert v-if="task.config.local_initialized" type="success" variant="tonal" density="compact">
+                  本地目录已完成首次处理（{{ task.config.local_initialized_at || '已初始化' }}）
+                </VAlert>
+              </VCol>
+            </template>
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="3">
               <VTextField
                 v-model.number="task.config.delete_after_minutes"
                 label="完成后删除任务 (分钟)"
@@ -281,7 +312,7 @@ watch(
                 :persistent-hint="task.config.hr_enabled"
               />
             </VCol>
-            <VCol cols="12" md="3">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="3">
               <VTextField
                 v-model="task.config.hr_cron"
                 label="HR扫描 CRON"
@@ -291,7 +322,7 @@ watch(
                 :persistent-hint="task.config.hr_enabled"
               />
             </VCol>
-            <VCol cols="12" md="3">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="3">
               <VTextField
                 v-model.number="task.config.upload_limit_kbps"
                 label="上传限速 (kb/s)"
@@ -299,7 +330,7 @@ watch(
                 min="0"
               />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextarea
                 v-model="task.config.rename_rules"
                 label="重命名规则"
@@ -314,10 +345,10 @@ watch(
                 label="站点访问身份"
               />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField v-model="task.config.cn_keywords" label="国语关键词" />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField
                 v-model="task.config.realtime_source_root"
                 label="实时硬链接源根目录"
@@ -325,7 +356,7 @@ watch(
                 :disabled="!task.config.realtime_hardlink_enabled"
               />
             </VCol>
-            <VCol cols="12" md="6">
+            <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField
                 v-model="task.config.realtime_link_root"
                 label="实时硬链接目标根目录"
@@ -340,6 +371,7 @@ watch(
             <VSwitch
               v-for="option in booleanOptions"
               :key="option.key"
+              v-if="task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key)"
               v-model="task.config[option.key]"
               :label="option.label"
               density="compact"

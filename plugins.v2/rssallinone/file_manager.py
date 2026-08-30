@@ -103,6 +103,13 @@ class LocalFileManagerService:
         *,
         manual_override: Optional[Dict[str, Any]] = None,
         refresh_media_id: object = "",
+        task_id: object = "",
+        task_name: object = "文件管理",
+        site_id: object = "",
+        recognize_cn: bool = False,
+        recognize_fx: bool = False,
+        cn_keywords: object = "国语,国配",
+        query_interval: object = 60,
     ) -> Dict[str, Any]:
         source = _local_entry(path)
         if not source.is_dir():
@@ -111,6 +118,13 @@ class LocalFileManagerService:
             source,
             manual_override=manual_override,
             refresh_media_id=refresh_media_id,
+            task_id=task_id,
+            task_name=task_name,
+            site_id=site_id,
+            recognize_cn=recognize_cn,
+            recognize_fx=recognize_fx,
+            cn_keywords=cn_keywords,
+            query_interval=query_interval,
         )
 
     def recognize_entry(
@@ -119,6 +133,13 @@ class LocalFileManagerService:
         *,
         manual_override: Optional[Dict[str, Any]] = None,
         refresh_media_id: object = "",
+        task_id: object = "",
+        task_name: object = "文件管理",
+        site_id: object = "",
+        recognize_cn: bool = False,
+        recognize_fx: bool = False,
+        cn_keywords: object = "国语,国配",
+        query_interval: object = 60,
     ) -> Dict[str, Any]:
         source = _local_entry(path)
         roots = self._source_roots()
@@ -143,6 +164,13 @@ class LocalFileManagerService:
             source_kind=source_kind,
             manual_override=manual_override,
             refresh_media_id=refresh_media_id,
+            task_id=task_id,
+            task_name=task_name,
+            site_id=site_id,
+            recognize_cn=recognize_cn,
+            recognize_fx=recognize_fx,
+            cn_keywords=cn_keywords,
+            query_interval=query_interval,
         )
 
     def recognize_current_directory(
@@ -150,6 +178,13 @@ class LocalFileManagerService:
         path: object,
         *,
         progress: Any = None,
+        task_id: object = "",
+        task_name: object = "文件管理",
+        site_id: object = "",
+        recognize_cn: bool = False,
+        recognize_fx: bool = False,
+        cn_keywords: object = "国语,国配",
+        query_interval: object = 60,
     ) -> Dict[str, Any]:
         directory = _local_directory(path)
         roots = self._source_roots()
@@ -175,7 +210,16 @@ class LocalFileManagerService:
             if callable(progress):
                 progress(candidate.name, index - 1, succeeded + duplicate, failed, len(candidates))
             try:
-                result = self.recognize_entry(candidate)
+                result = self.recognize_entry(
+                    candidate,
+                    task_id=task_id,
+                    task_name=task_name,
+                    site_id=site_id,
+                    recognize_cn=recognize_cn,
+                    recognize_fx=recognize_fx,
+                    cn_keywords=cn_keywords,
+                    query_interval=query_interval,
+                )
                 results.append({"path": str(candidate), **result})
                 if result.get("duplicate"):
                     duplicate += 1
@@ -214,6 +258,13 @@ class LocalFileManagerService:
         source_kind: str,
         manual_override: Optional[Dict[str, Any]],
         refresh_media_id: object,
+        task_id: object = "",
+        task_name: object = "文件管理",
+        site_id: object = "",
+        recognize_cn: bool = False,
+        recognize_fx: bool = False,
+        cn_keywords: object = "国语,国配",
+        query_interval: object = 60,
     ) -> Dict[str, Any]:
         media_id, source_hash = _source_identity(source)
         requested_media_id = str(refresh_media_id or "").strip()
@@ -278,12 +329,42 @@ class LocalFileManagerService:
                 "deletion_scope": "persisted_file_mappings_only",
             },
             "import_control": {
-                "task_id": "",
-                "task_name": "文件管理",
+                "task_id": str(task_id or "").strip(),
+                "task_name": str(task_name or "文件管理").strip(),
                 "import_enabled": True,
                 "torrent_completed": True,
             },
         }
+
+        if site_id and (recognize_cn or recognize_fx):
+            try:
+                from .rss_execute import MoviePilotRssGateway
+                from .rss_site_labels import SiteLabelService
+                access = MoviePilotRssGateway.site_access(site_id)
+                labels = SiteLabelService(
+                    MoviePilotRssGateway(),
+                    logger=self.logger,
+                    min_request_interval_seconds=query_interval,
+                ).detect(
+                    access=access,
+                    title=title,
+                    detail_url="",
+                    torrent_id="",
+                    cn_keywords=cn_keywords,
+                    recognize_cn=recognize_cn,
+                    recognize_fx=recognize_fx,
+                )
+                details["site_labels"] = labels
+                details["rss_source"] = {
+                    "task_id": str(task_id or "").strip(),
+                    "task_name": str(task_name or "").strip(),
+                    "detail_url_masked": str(labels.get("request_url_masked") or ""),
+                }
+            except Exception as error:
+                details["site_labels"] = {
+                    "status": "failed",
+                    "reason": str(error)[:500],
+                }
 
         media_type = ""
         media_title = ""

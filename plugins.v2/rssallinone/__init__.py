@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 import uuid
 from copy import deepcopy
@@ -66,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.67"
+    plugin_version = "0.13.68"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -242,7 +243,8 @@ class RssAllInOne(_PluginBase):
                 task_name = str(task.get("name") or task_id).strip()
                 rss_url = str(config.get("rss_url") or "").strip()
                 rss_cron = str(config.get("rss_cron") or "").strip()
-                if rss_url and rss_cron:
+                task_type = str(config.get("task_type") or "rss").strip().casefold()
+                if task_type == "rss" and rss_url and rss_cron:
                     try:
                         trigger = CronTrigger.from_crontab(rss_cron)
                     except (TypeError, ValueError) as error:
@@ -261,7 +263,7 @@ class RssAllInOne(_PluginBase):
                 start_cron = str(config.get("start_cron") or "").strip()
                 downloader = str(config.get("qb_downloader") or "").strip()
                 category = str(config.get("qb_category") or "").strip()
-                if start_cron and downloader and category:
+                if task_type == "rss" and start_cron and downloader and category:
                     try:
                         start_trigger = CronTrigger.from_crontab(start_cron)
                     except (TypeError, ValueError) as error:
@@ -277,7 +279,7 @@ class RssAllInOne(_PluginBase):
                             "func_kwargs": {"task_id": task_id},
                         })
 
-                if config.get("hr_enabled"):
+                if task_type == "rss" and config.get("hr_enabled"):
                     hr_cron = str(config.get("hr_cron") or "").strip() or "30 3 * * *"
                     try:
                         hr_trigger = CronTrigger.from_crontab(hr_cron)
@@ -1324,6 +1326,14 @@ class RssAllInOne(_PluginBase):
         task_id = str((payload or {}).get("task_id") or "").strip()
         if not task_id:
             return {"success": False, "message": "缺少 RSS 任务 ID"}
+        task = next(
+            (item for item in self._require_store().list_all_rss_tasks()
+             if str(item.get("id") or "") == task_id),
+            None,
+        )
+        task_config = task.get("config") if isinstance(task, dict) else {}
+        if str((task_config or {}).get("task_type") or "rss").strip().casefold() == "manual":
+            return self._start_qb_refresh(force_recognition=True, source=f"manual:{task_id}")
         return self._start_rss_run(task_id=task_id, source="manual")
 
     def api_rss_control(
@@ -2128,6 +2138,8 @@ class RssAllInOne(_PluginBase):
                 f"RSS一条龙：开始 QB 同步与完成转移，来源={source}，"
                 f"强制识别={force_recognition}"
             )
+            selected_manual_task = source.split(":", 1)[1] if str(source).startswith("manual:") else ""
+            self._process_manual_local_tasks(selected_manual_task)
             QbSyncService(
                 store=store,
                 inventory_checker=LocalInventoryChecker([]),
@@ -2147,6 +2159,75 @@ class RssAllInOne(_PluginBase):
             )
         finally:
             self._qb_refresh_lock.release()
+
+    def _process_manual_local_tasks(self, selected_task_id: str = "") -> Dict[str, Any]:
+        """Initialize enabled manual tasks' local directories exactly once."""
+        store = self._store
+        if not store:
+            return {"processed": 0, "skipped": 0, "failed": 0}
+        tasks = store.list_all_rss_tasks()
+        summary = {"processed": 0, "skipped": 0, "failed": 0}
+        changed = False
+        for task in tasks:
+            config = task.get("config") if isinstance(task.get("config"), dict) else {}
+            if str(config.get("task_type") or "rss").strip().casefold() != "manual":
+                continue
+            if selected_task_id and str(task.get("id") or "") != selected_task_id:
+                continue
+            if not bool(task.get("enabled")) or not self._as_bool(config.get("process_local_files")):
+                continue
+            local_path = str(config.get("local_path") or "").strip()
+            if not local_path:
+                logger.warning("RSS一条龙：手动任务 %s 未配置本地目录", task.get("name") or task.get("id"))
+                summary["failed"] += 1
+                continue
+            try:
+                resolved = Path(local_path).expanduser().resolve(strict=True)
+                if not resolved.is_dir():
+                    raise ValueError("本地目录不是文件夹")
+            except Exception as error:
+                logger.error("RSS一条龙：手动任务 %s 本地目录不可用：%s", task.get("name") or task.get("id"), error)
+                summary["failed"] += 1
+                continue
+            fingerprint = hashlib.sha256(str(resolved).casefold().encode("utf-8")).hexdigest()
+            if (
+                self._as_bool(config.get("local_initialized"))
+                and str(config.get("local_path_fingerprint") or "") == fingerprint
+            ):
+                summary["skipped"] += 1
+                continue
+            summary["processed"] += 1
+            logger.info("RSS一条龙：手动任务本地目录首次处理开始，任务=%s，目录=%s", task.get("name") or task.get("id"), resolved)
+            try:
+                result = self._file_manager_service().recognize_current_directory(
+                    str(resolved),
+                    task_id=str(task.get("id") or ""),
+                    task_name=str(task.get("name") or "手动添加"),
+                    site_id=str(config.get("site_id") or ""),
+                    recognize_cn=True,
+                    recognize_fx=True,
+                    cn_keywords=str(config.get("cn_keywords") or "国语,国配"),
+                    query_interval=config.get("query_interval") or 60,
+                )
+                config["local_initialized"] = True
+                config["local_initialized_at"] = utc_now()
+                config["local_path_fingerprint"] = fingerprint
+                task["config"] = config
+                changed = True
+                logger.info(
+                    "RSS一条龙：手动任务本地目录首次处理完成，任务=%s，新增=%s，重复=%s，失败=%s",
+                    task.get("name") or task.get("id"),
+                    result.get("succeeded", 0), result.get("duplicate", 0), result.get("failed", 0),
+                )
+            except Exception as error:
+                logger.error("RSS一条龙：手动任务本地目录处理失败，任务=%s：%s", task.get("name") or task.get("id"), error, exc_info=True)
+                summary["failed"] += 1
+        if changed:
+            try:
+                store.replace_rss_tasks(tasks)
+            except Exception as error:
+                logger.error("RSS一条龙：保存手动任务本地初始化状态失败：%s", error, exc_info=True)
+        return summary
 
     @staticmethod
     def _as_bool(value: Any) -> bool:
