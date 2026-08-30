@@ -146,16 +146,9 @@ watch(
   () => props.items,
   value => {
     tasks.value = (value || []).map(normalizeTask)
-    expanded.value = tasks.value.length === 1 ? [tasks.value[0].id] : []
+    expanded.value = []
   },
   { immediate: true, deep: true },
-)
-
-watch(
-  () => tasks.value.map(task => `${task.id}:${task.config?.task_type || 'rss'}`),
-  () => {
-    tasks.value.forEach(task => keepExpanded(task.id))
-  },
 )
 </script>
 

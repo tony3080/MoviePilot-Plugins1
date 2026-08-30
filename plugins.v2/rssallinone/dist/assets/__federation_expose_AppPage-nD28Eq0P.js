@@ -165,16 +165,9 @@ watch$2(
   () => props.items,
   value => {
     tasks.value = (value || []).map(normalizeTask);
-    expanded.value = tasks.value.length === 1 ? [tasks.value[0].id] : [];
+    expanded.value = [];
   },
   { immediate: true, deep: true },
-);
-
-watch$2(
-  () => tasks.value.map(task => `${task.id}:${task.config?.task_type || 'rss'}`),
-  () => {
-    tasks.value.forEach(task => keepExpanded(task.id));
-  },
 );
 
 return (_ctx, _cache) => {
@@ -736,7 +729,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-7c3eca0e"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-da0dd8ba"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
