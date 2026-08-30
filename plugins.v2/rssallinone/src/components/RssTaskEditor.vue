@@ -150,6 +150,13 @@ watch(
   },
   { immediate: true, deep: true },
 )
+
+watch(
+  () => tasks.value.map(task => `${task.id}:${task.config?.task_type || 'rss'}`),
+  () => {
+    tasks.value.forEach(task => keepExpanded(task.id))
+  },
+)
 </script>
 
 <template>
@@ -258,6 +265,7 @@ watch(
           </div>
         </VExpansionPanelTitle>
         <VExpansionPanelText>
+          <div class="task-editor-content" @click.stop @mousedown.stop @pointerdown.stop @touchstart.stop>
           <VRow dense>
             <VCol cols="12" md="4">
               <VTextField v-model="task.name" label="任务名称" />
@@ -391,6 +399,7 @@ watch(
               hide-details
             />
           </div>
+          </div>
         </VExpansionPanelText>
       </VExpansionPanel>
     </VExpansionPanels>
@@ -428,6 +437,10 @@ watch(
 .task-panels :deep(.v-expansion-panel) {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
+}
+
+.task-editor-content {
+  min-width: 0;
 }
 
 .switch-grid {
