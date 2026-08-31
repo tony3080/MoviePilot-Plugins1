@@ -704,6 +704,52 @@ class SQLiteStore:
             )
         return bool(cursor.rowcount)
 
+    def clear_task_records(self, task_id: object, qb_category: object = "") -> Dict[str, int]:
+        """Remove plugin records for one task without touching downloader files/tasks."""
+        normalized_task = str(task_id or "").strip()
+        category = str(qb_category or "").strip()
+        if not normalized_task:
+            return {"media": 0, "torrents": 0, "mappings": 0, "watches": 0, "jobs": 0}
+        with self.write_connection() as connection:
+            media_rows = connection.execute(
+                "SELECT id FROM media_items WHERE json_extract(details_json, '$.import_control.task_id') = ?",
+                (normalized_task,),
+            ).fetchall()
+            media_ids = [str(row["id"]) for row in media_rows]
+            torrent_rows = connection.execute(
+                "SELECT downloader_id, info_hash FROM torrent_snapshots WHERE json_extract(details_json, '$.import_control.task_id') = ?"
+                + (" OR category = ?" if category else ""),
+                (normalized_task, category) if category else (normalized_task,),
+            ).fetchall()
+            mappings = 0
+            watches = 0
+            jobs = 0
+            if media_ids:
+                placeholders = ",".join("?" for _ in media_ids)
+                mappings = int(connection.execute(
+                    f"DELETE FROM file_mappings WHERE media_id IN ({placeholders})", media_ids
+                ).rowcount or 0)
+                watches = int(connection.execute(
+                    f"DELETE FROM import_watches WHERE media_id IN ({placeholders})", media_ids
+                ).rowcount or 0)
+                connection.execute(f"DELETE FROM media_items WHERE id IN ({placeholders})", media_ids)
+            if torrent_rows:
+                jobs = int(connection.executemany(
+                    "DELETE FROM qb_delete_jobs WHERE downloader_id = ? AND info_hash = ?",
+                    [(str(row["downloader_id"]), str(row["info_hash"])) for row in torrent_rows],
+                ).rowcount or 0)
+                connection.executemany(
+                    "DELETE FROM torrent_snapshots WHERE downloader_id = ? AND info_hash = ?",
+                    [(str(row["downloader_id"]), str(row["info_hash"])) for row in torrent_rows],
+                )
+            return {
+                "media": len(media_ids),
+                "torrents": len(torrent_rows),
+                "mappings": mappings,
+                "watches": watches,
+                "jobs": jobs,
+            }
+
     def delete_completed_media_workflow(self, media_id: object) -> Dict[str, int]:
         """Remove finished operational data while retaining a compact RSS dedup key."""
         identity = str(media_id or "").strip()

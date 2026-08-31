@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.76"
+    plugin_version = "0.13.77"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -396,6 +396,7 @@ class RssAllInOne(_PluginBase):
             self._api("/files/recognize-batch", self.api_files_recognize_batch, "POST", "批量识别当前目录"),
             self._api("/files/task", self.api_files_task, "GET", "查询文件批量识别任务"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
+            self._api("/data/clear-task-records", self.api_clear_task_records, "POST", "清理指定任务数据库记录"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
             self._api("/health", self.api_health, "GET", "依赖与数据库状态"),
@@ -1706,6 +1707,19 @@ class RssAllInOne(_PluginBase):
             "already_absent": 0,
             "failed": 0,
         }
+
+    def api_clear_task_records(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        data = payload or {}
+        if str(data.get("confirm") or "").strip() != "CLEAR_MANUAL_TASK":
+            return {"success": False, "message": "清理任务记录需要 confirm=CLEAR_MANUAL_TASK"}
+        if self._pending_coordinator().status().get("running"):
+            return {"success": False, "message": "待入库批次运行期间不能清理任务记录"}
+        task_id = str(data.get("task_id") or "").strip()
+        category = str(data.get("qb_category") or "").strip()
+        if not task_id:
+            return {"success": False, "message": "缺少 task_id"}
+        counts = self._require_store().clear_task_records(task_id, category)
+        return {"success": True, "message": "指定任务数据库记录已清理", "counts": counts}
         
         # 构建 hash -> torrent_id 映射（从 RSS 历史记录）
         hash_to_torrent_id: dict[str, str] = {}
