@@ -397,6 +397,39 @@ class RssExecutionServiceTest(unittest.TestCase):
 
 
 class SiteLabelParsingTest(unittest.TestCase):
+    def test_ubits_without_detail_url_falls_back_to_search(self):
+        search_page = """
+          <tr><td><a href="details.php?id=42">Demo</a>
+            <span class="tag">国语</span><span class="tag">特效字幕</span>
+          </td></tr>
+        """
+
+        class Gateway:
+            @staticmethod
+            def fetch_site_html(url, access):
+                return search_page
+
+        access = types.SimpleNamespace(
+            site_key="UBits",
+            site_url="https://ubits.club",
+            referer="https://ubits.club",
+        )
+        labels = rss_site_labels.SiteLabelService(
+            Gateway(), sleeper=lambda _seconds: None
+        ).detect(
+            access=access,
+            title="Demo 2026 1080p",
+            detail_url="",
+            torrent_id="",
+            cn_keywords="国语,国配",
+            recognize_cn=True,
+            recognize_fx=True,
+        )
+        self.assertEqual(labels["status"], "matched")
+        self.assertTrue(labels["mandarin"])
+        self.assertTrue(labels["effects"])
+        self.assertIn("details.php?id=42", labels["request_url_masked"])
+
     def test_ubits_only_reads_the_tags_row(self):
         page = """
           <table><tr><td>标签</td><td>

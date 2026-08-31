@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.73"
+    plugin_version = "0.13.74"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -104,6 +104,7 @@ class RssAllInOne(_PluginBase):
         self._store: Optional[SQLiteStore] = None
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
+        self._manual_refresh_lock = threading.Lock()
         self._qb_delete_lock = threading.Lock()
         self._rss_queue_lock = threading.RLock()
         self._rss_active_run_ids: Dict[str, str] = {}
@@ -1333,8 +1334,64 @@ class RssAllInOne(_PluginBase):
         )
         task_config = task.get("config") if isinstance(task, dict) else {}
         if str((task_config or {}).get("task_type") or "rss").strip().casefold() == "manual":
-            return self._start_qb_refresh(force_recognition=True, source=f"manual:{task_id}")
+            return self._start_manual_refresh(task_id)
         return self._start_rss_run(task_id=task_id, source="manual")
+
+    def _start_manual_refresh(self, selected_task_id: str) -> Dict[str, Any]:
+        store = self._require_store()
+        if not self._manual_refresh_lock.acquire(blocking=False):
+            running = store.latest_running_task(QB_TASK_TYPE)
+            return {
+                "success": False,
+                "message": "手动添加处理正在运行",
+                "task_id": running.get("id") if running else None,
+            }
+        task_id = uuid.uuid4().hex
+        try:
+            store.create_background_task(task_id, QB_TASK_TYPE)
+            thread = threading.Thread(
+                target=self._run_manual_refresh,
+                kwargs={"task_id": task_id, "selected_task_id": selected_task_id},
+                name=f"rssallinone-manual-{task_id[:8]}",
+                daemon=True,
+            )
+            thread.start()
+        except Exception as error:
+            store.finish_background_task(
+                task_id,
+                "failed",
+                error_message=f"后台线程启动失败：{error}",
+            )
+            self._manual_refresh_lock.release()
+            raise
+        return {"success": True, "message": "手动添加处理已启动", "task_id": task_id}
+
+    def _run_manual_refresh(self, *, task_id: str, selected_task_id: str) -> None:
+        store = self._store
+        if not store:
+            self._manual_refresh_lock.release()
+            return
+        try:
+            logger.info(
+                f"RSS一条龙：开始手动添加串行处理，任务={selected_task_id}"
+            )
+            self._process_manual_local_tasks(selected_task_id)
+            QbSyncService(
+                store=store,
+                inventory_checker=LocalInventoryChecker([]),
+                library_layout=self._library_layout,
+                logger=logger,
+            ).run(
+                task_id,
+                force_recognition=True,
+                stop_event=self._stop_event,
+                rss_task_id=selected_task_id,
+            )
+        except Exception as error:
+            logger.error(f"RSS一条龙：手动添加处理失败：{error}", exc_info=True)
+            store.finish_background_task(task_id, "failed", error_message=str(error))
+        finally:
+            self._manual_refresh_lock.release()
 
     def api_rss_control(
         self,

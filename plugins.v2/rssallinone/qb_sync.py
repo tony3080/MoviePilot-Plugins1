@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import html
 import os
 import re
 import threading
@@ -347,6 +348,41 @@ class MoviePilotQbGateway:
         return dict(vars(torrent))
 
     @staticmethod
+    def torrent_properties(server: Any, info_hash: str) -> Dict[str, Any]:
+        """Read qB per-torrent properties, including the comment URL."""
+        normalized = str(info_hash or "").strip().lower()
+        if not normalized or not server:
+            return {}
+        for target in (getattr(server, "qbc", None), server):
+            if not target:
+                continue
+            for method_name in (
+                "torrents_properties",
+                "get_torrent_properties",
+                "torrent_properties",
+            ):
+                method = getattr(target, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    value = method(torrent_hash=normalized)
+                except TypeError:
+                    try:
+                        value = method(normalized)
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                if isinstance(value, (list, tuple)):
+                    value = value[0] if value else None
+                if value:
+                    try:
+                        return MoviePilotQbGateway.torrent_dict(value)
+                    except (TypeError, ValueError):
+                        continue
+        return {}
+
+    @staticmethod
     def list_torrent_files(downloader: str, info_hash: str) -> List[Any]:
         if not isinstance(downloader, str):
             server = downloader
@@ -375,6 +411,35 @@ class MoviePilotQbGateway:
         server.qbc.torrents_rename_folder(
             torrent_hash=info_hash, old_path=old_path, new_path=new_path
         )
+
+    @staticmethod
+    def rename_torrent_name(server: Any, info_hash: str, name: str) -> bool:
+        """Synchronize qB's display name after manual file/folder renaming."""
+        value = str(name or "").strip()
+        if not value:
+            return False
+        for target in (getattr(server, "qbc", None), server):
+            if not target:
+                continue
+            for method_name in (
+                "torrents_rename",
+                "torrents_rename_name",
+                "torrents_set_name",
+            ):
+                method = getattr(target, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    method(torrent_hash=info_hash, name=value)
+                except TypeError:
+                    try:
+                        method(info_hash, value)
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                return True
+        return False
 
     @staticmethod
     def get_server(downloader: str) -> Any:
@@ -1161,6 +1226,7 @@ class QbSyncService:
         force_recognition: bool = False,
         schedule_delete: bool = False,
         stop_event: Optional[threading.Event] = None,
+        rss_task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "downloaders": 0,
@@ -1173,11 +1239,22 @@ class QbSyncService:
             "completed_skipped": 0,
             "errors": [],
         }
-        scope = RssTaskQbScope.from_tasks(self.store.list_all_rss_tasks())
+        configured_tasks = self.store.list_all_rss_tasks()
+        if rss_task_id:
+            selected_id = str(rss_task_id).strip()
+            configured_tasks = [
+                task for task in configured_tasks
+                if str(task.get("id") or "").strip() == selected_id
+            ]
+        scope = RssTaskQbScope.from_tasks(configured_tasks)
         result["managed_scope"] = scope.to_dict()
-        result["out_of_scope"] = self.store.mark_torrents_outside_scope(
-            scope.downloader_categories(),
-            utc_now(),
+        result["out_of_scope"] = (
+            self.store.mark_torrents_outside_scope(
+                scope.downloader_categories(),
+                utc_now(),
+            )
+            if not rss_task_id
+            else 0
         )
         if not scope.ready:
             message = "VT+ 没有已保存且同时配置 QB下载器、QB分类的 RSS 任务"
@@ -1419,12 +1496,45 @@ class QbSyncService:
             rss_history.get("task_id") or "",
         )
         manual_labels: Dict[str, Any] = {}
-        if task_rule and task_rule.task_type == "manual" and task_rule.site_id and _torrent_completed(raw):
+        if task_rule and task_rule.task_type == "manual":
+            raw = dict(raw)
+            comment_url = _extract_torrent_source_url(raw)
+            if not comment_url:
+                try:
+                    properties = self.gateway.torrent_properties(
+                        self.gateway.get_server(downloader.name), info_hash
+                    )
+                except Exception as error:
+                    properties = {}
+                    self._log(
+                        "warning",
+                        f"RSS一条龙：读取 qB 注释失败 {downloader.name}/{info_hash}：{error}",
+                    )
+                if properties:
+                    for key, value in properties.items():
+                        if raw.get(key) in (None, "") and value not in (None, ""):
+                            raw[key] = value
+                    comment_url = _extract_torrent_source_url(properties)
+                if comment_url:
+                    self._log(
+                        "info",
+                        f"RSS一条龙：读取手动 qB 注释链接成功，任务={title}，"
+                        f"链接={mask_url(comment_url)}",
+                    )
+            if comment_url:
+                raw["comment"] = comment_url
+                raw["source_url_masked"] = mask_url(comment_url)
+        if (
+            task_rule
+            and task_rule.task_type == "manual"
+            and task_rule.site_id
+            and _torrent_completed(raw)
+        ):
             try:
                 from .rss_execute import MoviePilotRssGateway
                 from .rss_rename import QbSourceRenameService
                 from .rss_site_labels import SiteLabelService
-                comment_url = str(raw.get("comment") or raw.get("url") or "").strip()
+                comment_url = _extract_torrent_source_url(raw)
                 access = MoviePilotRssGateway.site_access(task_rule.site_id)
                 torrent_id = ""
                 match = re.search(r"[?&]id=(\d+)", comment_url)
@@ -1444,6 +1554,12 @@ class QbSyncService:
                     recognize_cn=True,
                     recognize_fx=True,
                 )
+                manual_source_url = str(
+                    manual_labels.get("request_url_masked") or comment_url or ""
+                ).strip()
+                if manual_source_url:
+                    raw["source_url_masked"] = mask_url(manual_source_url)
+                    raw["comment"] = manual_source_url
                 if (
                     manual_labels.get("mandarin")
                     or manual_labels.get("effects")
@@ -1461,6 +1577,12 @@ class QbSyncService:
                         add_fx=bool(manual_labels.get("effects")),
                     )
                     manual_labels["rename"] = rename_result
+                    if rename_result.get("status") in {"renamed", "unchanged"}:
+                        display_name = _rename_result_display_name(rename_result)
+                        if display_name:
+                            self.gateway.rename_torrent_name(
+                                server, info_hash, display_name
+                            )
                     raw = dict(raw)
                     raw["manual_labels"] = manual_labels
             except Exception as error:
@@ -1989,6 +2111,9 @@ def _source_url_for_torrent(
     for candidate in (
         history.get("detail_url_masked"),
         torrent.get("comment"),
+        torrent.get("source_url_masked"),
+        torrent.get("source_url"),
+        torrent.get("detail_url"),
         existing,
     ):
         value = mask_url(candidate)
@@ -2007,6 +2132,56 @@ def _source_url_for_torrent(
             urlencode({"id": torrent_id}),
             "",
         ))
+    return ""
+
+
+def _extract_torrent_source_url(value: object) -> str:
+    """Extract the first HTTP(S) source URL from qB fields or nested values."""
+    values: List[object] = []
+
+    def collect(item: object) -> None:
+        if isinstance(item, dict):
+            for key in (
+                "comment", "url", "source_url", "detail_url", "rss_source",
+            ):
+                if key in item:
+                    collect(item.get(key))
+            return
+        if isinstance(item, (list, tuple, set)):
+            for child in item:
+                collect(child)
+            return
+        values.append(item)
+
+    collect(value)
+    for item in values:
+        text = html.unescape(str(item or "")).strip()
+        if not text:
+            continue
+        match = re.search(r"https?://[^\s\"'<>]+", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(0).rstrip(".,;)]}>")
+    return ""
+
+
+def _rename_result_display_name(result: Dict[str, Any]) -> str:
+    """Pick the renamed torrent root for qB's display name."""
+    directory_renames = result.get("directory_renames") or []
+    for item in directory_renames:
+        if not isinstance(item, dict):
+            continue
+        new_path = str(item.get("new_path") or "").strip().replace("\\", "/")
+        if new_path and "/" not in new_path.strip("/"):
+            return PurePosixPath(new_path).name
+    final_files = result.get("final_files") or []
+    for item in final_files:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("name") or "").strip().replace("\\", "/")
+        if path:
+            parts = [part for part in path.split("/") if part]
+            if parts:
+                return parts[0] if len(parts) > 1 else PurePosixPath(parts[0]).stem
     return ""
 
 

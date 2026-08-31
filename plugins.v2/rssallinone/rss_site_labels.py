@@ -136,12 +136,36 @@ class SiteLabelService:
         try:
             if site_kind == "ubits":
                 request_url = _ubits_detail_url(access, detail_url, torrent_id)
-                if not request_url:
-                    raise SiteLabelError("UBits RSS 条目缺少详情页链接")
-                page = self._request(request_url, access)
-                mandarin, effects = parse_ubits_labels(
-                    page, _keywords(cn_keywords)
-                )
+                if request_url:
+                    page = self._request(request_url, access)
+                    mandarin, effects = parse_ubits_labels(
+                        page, _keywords(cn_keywords)
+                    )
+                else:
+                    base_url = str(
+                        getattr(access, "site_url", "")
+                        or getattr(access, "referer", "")
+                        or ""
+                    ).strip()
+                    query = clean_search_title(title)
+                    if not base_url:
+                        raise SiteLabelError("站点身份缺少站点 URL")
+                    if not query:
+                        raise SiteLabelError("RSS 标题清理后无法用于站内搜索")
+                    request_url = urljoin(
+                        base_url.rstrip("/") + "/",
+                        f"torrents.php?search={quote(query)}",
+                    )
+                    page = self._request(request_url, access)
+                    block, selected_id = select_exact_result(page, torrent_id)
+                    result["torrent_id"] = selected_id
+                    base = urlparse(base_url)
+                    request_url = (
+                        f"{base.scheme}://{base.netloc}/details.php?id={selected_id}"
+                    )
+                    mandarin, effects = parse_ubits_labels(
+                        block, _keywords(cn_keywords)
+                    )
             else:
                 base_url = str(
                     getattr(access, "site_url", "")

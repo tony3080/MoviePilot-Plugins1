@@ -881,6 +881,24 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             "https://pt.example/details.php?id=42&authkey=***",
         )
 
+    def test_extracts_qb_source_url_from_html_wrapped_comment(self) -> None:
+        value = qb_sync._extract_torrent_source_url({
+            "comment": '<a href="https://pt.example/details.php?id=42">详情</a>',
+        })
+        self.assertEqual(value, "https://pt.example/details.php?id=42")
+
+    def test_reads_qb_properties_from_qb_client(self) -> None:
+        class Client:
+            @staticmethod
+            def torrents_properties(*, torrent_hash):
+                return {"comment": "https://pt.example/details.php?id=42"}
+
+        server = types.SimpleNamespace(qbc=Client())
+        self.assertEqual(
+            qb_sync.MoviePilotQbGateway.torrent_properties(server, "ABC123"),
+            {"comment": "https://pt.example/details.php?id=42"},
+        )
+
     def test_library_refresh_uses_saved_local_files_after_qb_deletion(self) -> None:
         class Meta:
             begin_season = None
