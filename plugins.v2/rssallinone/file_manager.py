@@ -145,6 +145,7 @@ class LocalFileManagerService:
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
+        site_search_title: object = "",
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
             raise FileManagerError("手动添加处理已停止")
@@ -164,9 +165,19 @@ class LocalFileManagerService:
             source_kind = "local_file"
         if not files:
             raise FileManagerError("所选项目中没有可识别的媒体文件")
+        site_search_name = str(site_search_title or "").strip() or (
+            source.name
+        )
         if str(rename_rules or "").strip():
             files = self._rename_local_files(files, rename_rules)
-            if source.is_file() and files:
+            if source.is_dir():
+                old_source = source
+                source = self._rename_local_directory(source, rename_rules)
+                files = [
+                    source / item.relative_to(old_source)
+                    for item in files
+                ]
+            elif files:
                 source = files[0]
         return self._recognize_source(
             source=source,
@@ -183,6 +194,7 @@ class LocalFileManagerService:
             cn_keywords=cn_keywords,
             query_interval=query_interval,
             rename_rules=rename_rules,
+            site_search_title=site_search_name,
             stop_event=stop_event,
         )
 
@@ -245,6 +257,7 @@ class LocalFileManagerService:
                     cn_keywords=cn_keywords,
                     query_interval=query_interval,
                     rename_rules=rename_rules,
+                    site_search_title=candidate.name,
                 )
                 results.append({"path": str(candidate), **result})
                 if result.get("duplicate"):
@@ -314,6 +327,7 @@ class LocalFileManagerService:
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
+        site_search_title: object = "",
         stop_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
@@ -402,7 +416,7 @@ class LocalFileManagerService:
                     min_request_interval_seconds=query_interval,
                 ).detect(
                     access=access,
-                    title=title,
+                    title=str(site_search_title or title),
                     detail_url="",
                     torrent_id="",
                     cn_keywords=cn_keywords,
@@ -599,6 +613,24 @@ class LocalFileManagerService:
             current.rename(target)
             renamed.append(target.resolve(strict=True))
         return renamed
+
+    @staticmethod
+    def _rename_local_directory(directory: Path, rules_text: object) -> Path:
+        from .rss_rename import parse_rename_rules, transform_name
+        rules = parse_rename_rules(rules_text)
+        current = Path(directory)
+        new_name = transform_name(
+            current.name,
+            is_file=False,
+            rules=rules,
+        )
+        if new_name == current.name:
+            return current
+        target = current.with_name(new_name)
+        if target.exists() and target.resolve() != current.resolve():
+            raise FileManagerError(f"本地重命名目标已存在：{target}")
+        current.rename(target)
+        return target.resolve(strict=True)
 
     @staticmethod
     def _duplicate_result(item: Dict[str, Any], reason: str) -> Dict[str, Any]:

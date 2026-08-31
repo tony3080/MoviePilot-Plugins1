@@ -158,7 +158,9 @@ class SiteLabelService:
                         f"torrents.php?search={quote(query)}",
                     )
                     page = self._request(request_url, access)
-                    block, selected_id = select_exact_result(page, torrent_id)
+                    block, selected_id = select_exact_result(
+                        page, torrent_id, search_title=query
+                    )
                     result["torrent_id"] = selected_id
                     base = urlparse(base_url)
                     request_url = (
@@ -185,7 +187,9 @@ class SiteLabelService:
                     f"torrents.php?search={quote(query)}",
                 )
                 page = self._request(request_url, access)
-                block, selected_id = select_exact_result(page, torrent_id)
+                block, selected_id = select_exact_result(
+                    page, torrent_id, search_title=query
+                )
                 result["torrent_id"] = selected_id
                 if site_kind == "chd":
                     mandarin, effects = parse_chd_labels(
@@ -420,7 +424,12 @@ def parse_hdsky_labels(block: str, keywords: Sequence[str]) -> Tuple[bool, bool]
     return mandarin, effects
 
 
-def select_exact_result(page: str, torrent_id: object) -> Tuple[str, str]:
+def select_exact_result(
+    page: str,
+    torrent_id: object,
+    *,
+    search_title: object = "",
+) -> Tuple[str, str]:
     candidates = _candidate_blocks(page)
     if not candidates:
         raise SiteLabelError("站内搜索没有找到种子详情结果")
@@ -428,11 +437,39 @@ def select_exact_result(page: str, torrent_id: object) -> Tuple[str, str]:
         return candidates[0][1], candidates[0][0]
     wanted = str(torrent_id or "").strip()
     if not wanted:
+        wanted_title = _normalized_search_title(search_title)
+        if wanted_title:
+            title_matches = [
+                candidate
+                for candidate in candidates
+                if _normalized_search_title(_candidate_title(candidate[1]))
+                == wanted_title
+            ]
+            if len(title_matches) == 1:
+                return title_matches[0][1], title_matches[0][0]
         raise SiteLabelError("站内搜索有多条结果，但没有 torrent ID 可用于精确匹配")
     for candidate_id, block in candidates:
         if candidate_id == wanted:
             return block, candidate_id
     raise SiteLabelError("站内搜索有多条结果，但没有命中 RSS torrent ID")
+
+
+def _candidate_title(block: str) -> str:
+    """Read the title attached to a details.php result link."""
+    match = re.search(
+        r"<a\b[^>]*details\.php\?[^>]*>\s*(.*?)\s*</a>",
+        str(block or ""),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return _plain_text(match.group(1)) if match else ""
+
+
+def _normalized_search_title(value: object) -> str:
+    """Normalize release titles for exact comparison across dots/spaces."""
+    text = html.unescape(str(value or "")).casefold()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"[^0-9a-z\u3400-\u9fff]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def clean_search_title(value: object) -> str:

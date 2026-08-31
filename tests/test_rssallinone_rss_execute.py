@@ -508,6 +508,24 @@ class SiteLabelParsingTest(unittest.TestCase):
         with self.assertRaises(rss_site_labels.SiteLabelError):
             rss_site_labels.select_exact_result(page, "")
 
+    def test_multiple_results_without_id_can_match_unique_release_title(self):
+        page = """
+          <tr><td><a href="details.php?id=41">Other.Release.2024.1080p</a></td></tr>
+          <tr><td><a href="details.php?id=42">Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits</a>
+            <span class="tag">国语</span><span class="tag">特效字幕</span>
+          </td></tr>
+        """
+        block, selected = rss_site_labels.select_exact_result(
+            page,
+            "",
+            search_title="Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits",
+        )
+        self.assertEqual(selected, "42")
+        self.assertEqual(
+            rss_site_labels.parse_ubits_labels(block, ["国语", "国配"]),
+            (True, True),
+        )
+
     def test_hdsky_optiontag_text_controls_both_labels(self):
         block = """
           <span class="optiontag selected">国配</span>

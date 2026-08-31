@@ -198,6 +198,55 @@ class LocalFileManagerTest(unittest.TestCase):
             self.assertEqual(result["succeeded"], 2)
             self.assertEqual(result["failed"], 0)
 
+    def test_batch_recognition_prefers_folder_name_for_site_search(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ManualRoot"
+            root.mkdir()
+            folder = root / "Folder.Release.2026"
+            folder.mkdir()
+            (folder / "movie.mkv").write_bytes(b"episode")
+            file_item = root / "File.Release.2026.mkv"
+            file_item.write_bytes(b"movie")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+
+            class RecordingService(file_manager.LocalFileManagerService):
+                def __init__(self):
+                    super().__init__(store)
+                    self.search_titles = []
+
+                def recognize_entry(self, path, **kwargs):
+                    self.search_titles.append(kwargs.get("site_search_title"))
+                    return {"success": True, "duplicate": False}
+
+            service = RecordingService()
+            service.recognize_current_directory(root)
+
+            self.assertEqual(
+                service.search_titles,
+                ["Folder.Release.2026", "File.Release.2026.mkv"],
+            )
+
+    def test_local_rename_updates_media_files_and_project_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "Movie.2026.UBits"
+            project.mkdir()
+            media = project / "Movie.2026.UBits.mkv"
+            media.write_bytes(b"movie")
+
+            renamed_files = file_manager.LocalFileManagerService._rename_local_files(
+                [media], "/ubits/i => REMUX-U版"
+            )
+            renamed_project = file_manager.LocalFileManagerService._rename_local_directory(
+                project, "/ubits/i => REMUX-U版"
+            )
+            final_media = renamed_project / renamed_files[0].relative_to(project.resolve())
+
+            self.assertEqual(renamed_project.name, "Movie.2026.REMUX-U版")
+            self.assertEqual(renamed_files[0].name, "Movie.2026.REMUX-U版.mkv")
+            self.assertTrue(final_media.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
