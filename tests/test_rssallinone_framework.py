@@ -513,6 +513,81 @@ class SQLiteFrameworkTest(unittest.TestCase):
             self.assertNotIn("completion_processed", history["payload"])
             self.assertNotIn("qb_delete", history["payload"])
 
+    def test_clear_task_records_removes_only_manual_qb_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "rssallinone.db")
+            store.initialize()
+            now = database.utc_now()
+            store.replace_rss_tasks([{
+                "id": "manual-task",
+                "name": "机械UB收藏",
+                "enabled": True,
+                "position": 0,
+                "config": {
+                    "task_type": "manual",
+                    "qb_downloader": "qb-main",
+                    "qb_category": "manual",
+                },
+            }])
+            store.upsert_media_item({
+                "id": "qb:qb-main:manualhash",
+                "state": "identified",
+                "title": "Manual Movie",
+                "source_name": "Manual.Movie.2026",
+                "source_path": "/downloads/manual.mkv",
+                "downloader_id": "qb-main",
+                "info_hash": "manualhash",
+                "details": {
+                    "import_control": {"task_id": "manual-task"},
+                    "source_identity": {"kind": "qb_download"},
+                },
+            })
+            store.upsert_media_item({
+                "id": "local:manual-folder",
+                "state": "identified",
+                "title": "Local Movie",
+                "source_name": "Local.Movie.2026",
+                "source_path": "/MP/机械UB收藏/Local.Movie.2026",
+                "details": {
+                    "import_control": {"task_id": "manual-task"},
+                    "source_identity": {"kind": "local_folder"},
+                },
+            })
+            with store.connection() as connection:
+                connection.execute(
+                    """INSERT INTO torrent_snapshots(
+                        downloader_id, info_hash, name, state, category,
+                        content_path, progress, size, present, details_json,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        "qb-main", "manualhash", "Manual Movie", "pausedUP",
+                        "manual", "/downloads/manual.mkv", 1.0, 4, 1,
+                        json.dumps({"import_control": {"task_id": "manual-task"}}),
+                        now,
+                    ),
+                )
+            store.upsert_rss_history({
+                "task_id": "manual-task",
+                "source_key": "manual-source",
+                "content_key": "qb-main:manualhash",
+                "title": "Manual Movie",
+                "status": "processed",
+                "payload": {
+                    "manual_source": True,
+                    "info_hash": "manualhash",
+                },
+            })
+
+            counts = store.clear_task_records("manual-task", "manual")
+
+            self.assertEqual(counts["media"], 1)
+            self.assertEqual(counts["torrents"], 1)
+            self.assertEqual(counts["history"], 1)
+            self.assertIsNone(store.get_media_item("qb:qb-main:manualhash"))
+            self.assertIsNotNone(store.get_media_item("local:manual-folder"))
+            self.assertEqual(store.list_torrents()["total"], 0)
+
     def test_v1_torrent_snapshots_migrate_without_losing_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rssallinone.db"

@@ -705,14 +705,26 @@ class SQLiteStore:
         return bool(cursor.rowcount)
 
     def clear_task_records(self, task_id: object, qb_category: object = "") -> Dict[str, int]:
-        """Remove plugin records for one task without touching downloader files/tasks."""
+        """Remove qB-backed records for one task without touching local cards or qB files."""
         normalized_task = str(task_id or "").strip()
         category = str(qb_category or "").strip()
         if not normalized_task:
-            return {"media": 0, "torrents": 0, "mappings": 0, "watches": 0, "jobs": 0}
+            return {
+                "media": 0,
+                "torrents": 0,
+                "mappings": 0,
+                "watches": 0,
+                "jobs": 0,
+                "history": 0,
+            }
         with self.write_connection() as connection:
             media_rows = connection.execute(
-                "SELECT id FROM media_items WHERE json_extract(details_json, '$.import_control.task_id') = ?",
+                """SELECT id FROM media_items
+                   WHERE json_extract(details_json, '$.import_control.task_id') = ?
+                     AND (
+                       json_extract(details_json, '$.source_identity.kind') = 'qb_download'
+                       OR id LIKE 'qb:%'
+                     )""",
                 (normalized_task,),
             ).fetchall()
             media_ids = [str(row["id"]) for row in media_rows]
@@ -742,12 +754,31 @@ class SQLiteStore:
                     "DELETE FROM torrent_snapshots WHERE downloader_id = ? AND info_hash = ?",
                     [(str(row["downloader_id"]), str(row["info_hash"])) for row in torrent_rows],
                 )
+            history_params: List[Any] = [normalized_task]
+            history_clause = (
+                "task_id = ? AND json_extract(payload_json, '$.manual_source') = 1"
+            )
+            if torrent_rows:
+                content_keys = [
+                    f"{str(row['downloader_id'])}:{str(row['info_hash']).lower()}"
+                    for row in torrent_rows
+                ]
+                placeholders = ",".join("?" for _ in content_keys)
+                history_clause = (
+                    f"({history_clause}) OR content_key IN ({placeholders})"
+                )
+                history_params.extend(content_keys)
+            history = int(connection.execute(
+                f"DELETE FROM rss_history WHERE {history_clause}",
+                history_params,
+            ).rowcount or 0)
             return {
                 "media": len(media_ids),
                 "torrents": len(torrent_rows),
                 "mappings": mappings,
                 "watches": watches,
                 "jobs": jobs,
+                "history": history,
             }
 
     def delete_completed_media_workflow(self, media_id: object) -> Dict[str, int]:

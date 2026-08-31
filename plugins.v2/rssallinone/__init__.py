@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.91"
+    plugin_version = "0.13.92"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -811,10 +811,21 @@ class RssAllInOne(_PluginBase):
         category = str(data.get("qb_category") or "").strip()
         if not task_id:
             return {"success": False, "message": "缺少 task_id"}
-        counts = self._require_store().clear_task_records(task_id, category)
+        store = self._require_store()
+        task = store.get_rss_task(task_id) or {}
+        task_config = task.get("config") or {}
+        if str(task_config.get("task_type") or "rss").strip().casefold() != "manual":
+            return {"success": False, "message": "该任务不是手动添加任务，拒绝清理"}
+        if not category:
+            category = str(
+                task_config.get("qb_category")
+                or task_config.get("qbittorrent_category")
+                or ""
+            ).strip()
+        counts = store.clear_task_records(task_id, category)
         return {
             "success": True,
-            "message": "指定任务数据库记录已清理",
+            "message": "手动添加任务的 qB 数据库记录已清理，本地卡片和文件均未处理",
             "counts": counts,
         }
 
@@ -1536,6 +1547,18 @@ class RssAllInOne(_PluginBase):
                     "handled": 0,
                     "errors": [{"message": str(error)}],
                 }
+            logger.info(
+                "RSS一条龙：手动 qB 阶段完成，任务=%s，扫描=%s，处理=%s，"
+                "识别=%s，未识别=%s，已存在=%s，已跳过=%s，错误=%s",
+                selected_task_id,
+                int(qb_result.get("scanned") or 0),
+                int(qb_result.get("handled") or 0),
+                int(qb_result.get("recognized") or 0),
+                int(qb_result.get("unrecognized") or 0),
+                int(qb_result.get("existing") or 0),
+                int(qb_result.get("completed_skipped") or 0),
+                len(qb_result.get("errors") or []),
+            )
             if self._manual_refresh_stop_event.is_set() or qb_result.get("cancelled"):
                 store.finish_background_task(
                     task_id,

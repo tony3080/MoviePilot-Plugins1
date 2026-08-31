@@ -1422,6 +1422,39 @@ class QbSyncService:
                                 info_hash=info_hash,
                                 raw=raw,
                             )
+                        # A manual card can be deleted while its RSS history is
+                        # intentionally retained.  In that case the old
+                        # completion marker must not suppress the qB task from
+                        # being processed again.
+                        if (
+                            rule
+                            and rule.task_type == "manual"
+                            and history
+                            and bool(
+                                (history.get("payload") or {}).get(
+                                    "completion_processed"
+                                )
+                            )
+                            and bool(
+                                (history.get("payload") or {}).get(
+                                    "imported_to_library"
+                                )
+                            )
+                            and not self.store.get_media_item(
+                                f"qb:{downloader.name}:{info_hash}"
+                            )
+                        ):
+                            self.store.reopen_rss_torrent(
+                                history,
+                                downloader_id=downloader.name,
+                                info_hash=info_hash,
+                            )
+                            history = (
+                                self.store.latest_rss_history_for_torrent(
+                                    downloader.name, info_hash
+                                )
+                                or history
+                            )
                         history_payload = history.get("payload") or {}
                         if (
                             bool(history_payload.get("completion_processed"))
