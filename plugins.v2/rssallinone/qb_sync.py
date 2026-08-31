@@ -1553,6 +1553,7 @@ class QbSyncService:
                     cn_keywords="国语,国配",
                     recognize_cn=True,
                     recognize_fx=True,
+                    allow_search_without_detail=True,
                 )
                 manual_source_url = str(
                     manual_labels.get("request_url_masked") or comment_url or ""

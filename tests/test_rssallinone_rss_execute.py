@@ -424,6 +424,7 @@ class SiteLabelParsingTest(unittest.TestCase):
             cn_keywords="国语,国配",
             recognize_cn=True,
             recognize_fx=True,
+            allow_search_without_detail=True,
         )
         self.assertEqual(labels["status"], "matched")
         self.assertTrue(labels["mandarin"])

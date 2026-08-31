@@ -112,6 +112,7 @@ class SiteLabelService:
         cn_keywords: object,
         recognize_cn: bool,
         recognize_fx: bool,
+        allow_search_without_detail: bool = False,
     ) -> Dict[str, Any]:
         requested = bool(recognize_cn or recognize_fx)
         result = {
@@ -141,7 +142,7 @@ class SiteLabelService:
                     mandarin, effects = parse_ubits_labels(
                         page, _keywords(cn_keywords)
                     )
-                else:
+                elif allow_search_without_detail:
                     base_url = str(
                         getattr(access, "site_url", "")
                         or getattr(access, "referer", "")
@@ -166,6 +167,8 @@ class SiteLabelService:
                     mandarin, effects = parse_ubits_labels(
                         block, _keywords(cn_keywords)
                     )
+                else:
+                    raise SiteLabelError("UBits RSS 条目缺少详情页链接")
             else:
                 base_url = str(
                     getattr(access, "site_url", "")

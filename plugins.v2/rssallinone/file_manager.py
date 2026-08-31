@@ -364,6 +364,7 @@ class LocalFileManagerService:
                     cn_keywords=cn_keywords,
                     recognize_cn=recognize_cn,
                     recognize_fx=recognize_fx,
+                    allow_search_without_detail=True,
                 )
                 details["site_labels"] = labels
                 details["rss_source"] = {
