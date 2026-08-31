@@ -383,6 +383,36 @@ class RssExecutionServiceTest(unittest.TestCase):
         self.assertFalse(renamer.calls[1][2]["add_cn"])
         self.assertTrue(renamer.calls[1][2]["add_fx"])
 
+    def test_unknown_category_persists_mandarin_without_renaming(self):
+        class Labels:
+            def detect(self, **kwargs):
+                self.kwargs = kwargs
+                return {
+                    "status": "matched",
+                    "mandarin": True,
+                    "effects": False,
+                }
+
+        labels = Labels()
+        renamer = FakeRenamer()
+        result = self._run(
+            FakeGateway(),
+            renamer=renamer,
+            label_service=labels,
+            media_category_resolver=lambda _title: "",
+            recognize_cn=True,
+        )
+
+        self.assertEqual(result["queued"], 1)
+        self.assertTrue(labels.kwargs["recognize_cn"])
+        self.assertEqual(len(renamer.calls), 1)
+        self.assertFalse(any(call[2].get("add_cn") for call in renamer.calls))
+        history = self.store.list_rss_history()["items"][0]
+        site_labels = history["payload"]["site_labels"]
+        self.assertTrue(site_labels["mandarin"])
+        self.assertTrue(site_labels["mandarin_pending"])
+        self.assertFalse(site_labels["mandarin_applied"])
+
     def test_failed_source_rename_defers_initial_qb_card(self):
         callbacks = []
         result = self._run(

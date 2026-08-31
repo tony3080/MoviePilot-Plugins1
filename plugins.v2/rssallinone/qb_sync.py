@@ -1877,6 +1877,32 @@ class QbSyncService:
             automatic_category = str(getattr(media, "category", "") or "")
             category = str(override.get("category") or automatic_category).strip()
             poster = self.gateway.poster(media)
+            pending_labels = _pending_mandarin_labels(rss_history)
+            if (
+                _valid_tmdb_id(tmdb_id)
+                and pending_labels
+                and _allows_mandarin_category(category)
+            ):
+                rename_result = self._apply_pending_mandarin_label(
+                    history=rss_history,
+                    downloader_id=downloader.name,
+                    info_hash=info_hash,
+                    category=category,
+                )
+                if rename_result and rename_result.get("status") != "failed":
+                    # Re-read the renamed qB files and run recognition again so
+                    # MoviePilot can derive the final customization markers.
+                    return self._sync_one(
+                        downloader=downloader,
+                        raw=raw,
+                        force_recognition=True,
+                        manual_override=override,
+                        scope=scope,
+                        schedule_delete=schedule_delete,
+                        completion_confirmed=completion_confirmed,
+                        allow_completion_transition=allow_completion_transition,
+                        stop_event=stop_event,
+                    )
             if not _valid_tmdb_id(tmdb_id):
                 recognition_error = "MoviePilot 未返回有效 TMDB ID"
                 inventory_details = {
@@ -2029,6 +2055,7 @@ class QbSyncService:
             },
             "qb_delete": qb_delete,
             "manual_labels": manual_labels,
+            "site_labels": (rss_history.get("payload") or {}).get("site_labels") or {},
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -2227,6 +2254,64 @@ class QbSyncService:
             "updated_at": now,
         })
 
+    def _apply_pending_mandarin_label(
+        self,
+        *,
+        history: Dict[str, Any],
+        downloader_id: str,
+        info_hash: str,
+        category: str,
+    ) -> Optional[Dict[str, Any]]:
+        payload = dict(history.get("payload") or {})
+        labels = dict(payload.get("site_labels") or {})
+        if not labels.get("mandarin_pending") or not labels.get("mandarin"):
+            return None
+        if not _allows_mandarin_category(category):
+            labels["mandarin_pending"] = False
+            labels["mandarin_skipped"] = True
+            payload["site_labels"] = labels
+            self.store.upsert_rss_history({
+                **history,
+                "payload": payload,
+                "updated_at": utc_now(),
+            })
+            return None
+        try:
+            from .rss_rename import QbSourceRenameService
+
+            result = QbSourceRenameService(self.gateway).apply(
+                self.gateway.get_server(downloader_id),
+                info_hash,
+                rss_title="",
+                rename_enabled=False,
+                rename_rules="",
+                add_chinese_title=False,
+                add_cn=True,
+                add_fx=False,
+            )
+        except Exception as error:
+            self._log(
+                "error",
+                f"RSS一条龙：延迟添加国配标签失败 "
+                f"{downloader_id}/{info_hash}：{error}",
+            )
+            return {"status": "failed", "error": str(error)}
+        if result.get("status") != "failed":
+            labels["mandarin_pending"] = False
+            labels["mandarin_applied"] = True
+            payload["site_labels"] = labels
+            self.store.upsert_rss_history({
+                **history,
+                "payload": payload,
+                "updated_at": utc_now(),
+            })
+            self._log(
+                "info",
+                f"RSS一条龙：延迟添加国配标签完成 "
+                f"{downloader_id}/{info_hash}，分类={category}",
+            )
+        return result
+
     def _update_progress(
         self,
         task_id: str,
@@ -2399,6 +2484,17 @@ def _torrent_completed(torrent: Dict[str, Any]) -> bool:
         "checkingup",
         "forcedup",
     }
+
+
+def _pending_mandarin_labels(history: Dict[str, Any]) -> bool:
+    labels = (history.get("payload") or {}).get("site_labels") or {}
+    return bool(labels.get("mandarin_pending") and labels.get("mandarin"))
+
+
+def _allows_mandarin_category(category: object) -> bool:
+    from .rss_execute import MANDARIN_MEDIA_CATEGORIES
+
+    return str(category or "").strip() in MANDARIN_MEDIA_CATEGORIES
 
 
 def _completion_requires_processing(

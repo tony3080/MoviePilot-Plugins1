@@ -655,7 +655,8 @@ class RssExecutionService:
                         requested_cn = bool(config.get("recognize_cn"))
                         requested_fx = bool(config.get("recognize_fx"))
                         media_category = ""
-                        allow_cn = requested_cn
+                        allow_cn = False
+                        defer_cn = False
                         if requested_cn:
                             media_category = self._resolve_media_category(
                                 _recognition_title_after_rename(
@@ -663,7 +664,11 @@ class RssExecutionService:
                                     str(prepared.get("title") or entry.title or ""),
                                 )
                             )
-                            allow_cn = _allows_mandarin_category(media_category)
+                            defer_cn = not bool(media_category)
+                            allow_cn = bool(
+                                media_category
+                                and _allows_mandarin_category(media_category)
+                            )
                         if not requested_cn and not requested_fx:
                             site_labels = self.label_service.detect(
                                 access=access,
@@ -674,14 +679,14 @@ class RssExecutionService:
                                 recognize_cn=False,
                                 recognize_fx=False,
                             )
-                        elif allow_cn or requested_fx:
+                        elif allow_cn or defer_cn or requested_fx:
                             site_labels = self.label_service.detect(
                                 access=access,
                                 title=str(prepared.get("title") or entry.title or ""),
                                 detail_url=str(entry.detail_url or ""),
                                 torrent_id=str(prepared.get("torrent_id") or ""),
                                 cn_keywords=config.get("cn_keywords") or "",
-                                recognize_cn=allow_cn,
+                                recognize_cn=allow_cn or defer_cn,
                                 recognize_fx=requested_fx,
                             )
                         else:
@@ -702,11 +707,21 @@ class RssExecutionService:
                         if requested_cn:
                             site_labels["media_category"] = media_category
                             site_labels["mandarin_allowed"] = allow_cn
+                            site_labels["mandarin_pending"] = bool(
+                                defer_cn and site_labels.get("mandarin")
+                            )
+                            site_labels["mandarin_applied"] = bool(
+                                allow_cn and site_labels.get("mandarin")
+                            )
                             if not allow_cn and requested_fx:
                                 site_labels["mandarin_skip_reason"] = (
                                     f"媒体分类“{media_category}”不检查国语标签"
                                 )
-                        if site_labels.get("mandarin") or site_labels.get("effects"):
+                        apply_mandarin = bool(
+                            site_labels.get("mandarin")
+                            and not site_labels.get("mandarin_pending")
+                        )
+                        if apply_mandarin or site_labels.get("effects"):
                             marker_rename = self.renamer.apply(
                                 server,
                                 info_hash,
@@ -714,7 +729,7 @@ class RssExecutionService:
                                 rename_enabled=False,
                                 rename_rules="",
                                 add_chinese_title=False,
-                                add_cn=bool(site_labels.get("mandarin")),
+                                add_cn=apply_mandarin,
                                 add_fx=bool(site_labels.get("effects")),
                             )
                     source_rename = _merge_source_processing(
