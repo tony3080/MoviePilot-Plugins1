@@ -41,6 +41,39 @@ layout = load_package_module("layout")
 qb_sync = load_package_module("qb_sync")
 
 
+class QbTaskScopeTest(unittest.TestCase):
+    def test_missing_history_prefers_rss_over_manual_for_shared_pair(self) -> None:
+        scope = qb_sync.RssTaskQbScope.from_tasks([
+            {
+                "id": "rss-task",
+                "name": "RSS",
+                "enabled": True,
+                "config": {
+                    "task_type": "rss",
+                    "qb_downloader": "qb-main",
+                    "qb_category": "CHD",
+                },
+            },
+            {
+                "id": "manual-task",
+                "name": "手动",
+                "enabled": True,
+                "config": {
+                    "task_type": "manual",
+                    "qb_downloader": "qb-main",
+                    "qb_category": "CHD",
+                },
+            },
+        ])
+        rule = scope.rule_for(
+            "qb-main",
+            "CHD",
+            preferred_task_type="rss",
+        )
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule.task_id, "rss-task")
+
+
 class LocalInventoryCheckerTest(unittest.TestCase):
     def test_parses_typed_and_shared_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

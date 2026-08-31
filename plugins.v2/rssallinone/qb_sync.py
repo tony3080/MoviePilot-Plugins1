@@ -209,6 +209,7 @@ class RssTaskQbScope:
         downloader: object,
         category: object,
         task_id: object = "",
+        preferred_task_type: object = "",
     ) -> Optional[RssTaskQbRule]:
         normalized_task_id = str(task_id or "").strip()
         if normalized_task_id:
@@ -222,12 +223,15 @@ class RssTaskQbScope:
             if rule.downloader == normalized_downloader
             and rule.category == normalized_category
         ]
+        preferred_type = str(preferred_task_type or "").strip().casefold()
+        if preferred_type:
+            preferred_matches = [
+                rule for rule in matches if rule.task_type == preferred_type
+            ]
+            if len(preferred_matches) == 1:
+                return preferred_matches[0]
         if len(matches) == 1:
             return matches[0]
-        if matches and not normalized_task_id:
-            manual_matches = [rule for rule in matches if rule.task_type == "manual"]
-            if len(manual_matches) == 1:
-                return manual_matches[0]
         if matches and len({
             (
                 rule.import_enabled,
@@ -1344,6 +1348,7 @@ class QbSyncService:
                             downloader.name,
                             raw.get("category") or "",
                             history.get("task_id") or "",
+                            preferred_task_type="rss" if not history else "",
                         )
                         if (
                             bool(history_payload.get("completion_processed"))
@@ -1494,6 +1499,7 @@ class QbSyncService:
             downloader.name,
             raw.get("category") or "",
             rss_history.get("task_id") or "",
+            preferred_task_type="rss" if not rss_history else "",
         )
         manual_labels: Dict[str, Any] = {}
         if task_rule and task_rule.task_type == "manual":

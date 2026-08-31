@@ -214,7 +214,8 @@ class SiteLabelService:
             })
             self._log(
                 "error",
-                f"RSS一条龙：站点标签识别失败 {site_kind or 'unknown'}：{error}",
+                f"RSS一条龙：{'手动' if allow_search_without_detail else 'RSS'}站点标签识别失败 "
+                f"{site_kind or 'unknown'}：{error}",
             )
         return result
 
@@ -427,7 +428,7 @@ def select_exact_result(page: str, torrent_id: object) -> Tuple[str, str]:
         return candidates[0][1], candidates[0][0]
     wanted = str(torrent_id or "").strip()
     if not wanted:
-        raise SiteLabelError("站内搜索有多条结果，但 RSS 条目没有 torrent ID")
+        raise SiteLabelError("站内搜索有多条结果，但没有 torrent ID 可用于精确匹配")
     for candidate_id, block in candidates:
         if candidate_id == wanted:
             return block, candidate_id

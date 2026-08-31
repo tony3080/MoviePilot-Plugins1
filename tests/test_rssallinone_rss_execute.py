@@ -397,6 +397,35 @@ class RssExecutionServiceTest(unittest.TestCase):
 
 
 class SiteLabelParsingTest(unittest.TestCase):
+    def test_ubits_without_detail_url_does_not_search_by_default(self):
+        class Gateway:
+            calls = []
+
+            @classmethod
+            def fetch_site_html(cls, url, access):
+                cls.calls.append(url)
+                return "<html></html>"
+
+        access = types.SimpleNamespace(
+            site_key="UBits",
+            site_url="https://ubits.club",
+            referer="https://ubits.club",
+        )
+        labels = rss_site_labels.SiteLabelService(
+            Gateway(), sleeper=lambda _seconds: None
+        ).detect(
+            access=access,
+            title="Demo 2026 1080p",
+            detail_url="",
+            torrent_id="",
+            cn_keywords="国语,国配",
+            recognize_cn=True,
+            recognize_fx=False,
+        )
+        self.assertEqual(Gateway.calls, [])
+        self.assertEqual(labels["status"], "failed")
+        self.assertIn("缺少详情页链接", labels["reason"])
+
     def test_ubits_without_detail_url_falls_back_to_search(self):
         search_page = """
           <tr><td><a href="details.php?id=42">Demo</a>
