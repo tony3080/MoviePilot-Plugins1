@@ -111,6 +111,7 @@ function defaultConfig() {
     hr_cron: '30 3 * * *',
     local_path: '',
     process_local_files: false,
+    force_reprocess_local: false,
     local_initialized: false,
     local_initialized_at: '',
     local_path_fingerprint: '',
@@ -556,6 +557,16 @@ return (_ctx, _cache) => {
                                         density: "compact",
                                         color: "primary",
                                         "hide-details": ""
+                                      }, null, 8, ["modelValue", "onUpdate:modelValue"]),
+                                      _createVNode$4(_component_VSwitch, {
+                                        modelValue: task.config.force_reprocess_local,
+                                        "onUpdate:modelValue": $event => ((task.config.force_reprocess_local) = $event),
+                                        label: "强制重新处理本地目录",
+                                        density: "compact",
+                                        color: "warning",
+                                        "hide-details": "",
+                                        hint: "忽略本地目录已初始化标记",
+                                        "persistent-hint": ""
                                       }, null, 8, ["modelValue", "onUpdate:modelValue"])
                                     ]),
                                     _: 2
@@ -761,7 +772,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-29e6d66d"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-5cbf54e4"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 

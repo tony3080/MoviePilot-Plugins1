@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.75"
+    plugin_version = "0.13.76"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2250,6 +2250,7 @@ class RssAllInOne(_PluginBase):
             if (
                 self._as_bool(config.get("local_initialized"))
                 and str(config.get("local_path_fingerprint") or "") == fingerprint
+                and not self._as_bool(config.get("force_reprocess_local"))
             ):
                 summary["skipped"] += 1
                 continue

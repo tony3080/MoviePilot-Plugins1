@@ -37,6 +37,7 @@ DEFAULT_RSS_TASK_CONFIG: Dict[str, Any] = {
     "hr_cron": "30 3 * * *",
     "local_path": "",
     "process_local_files": False,
+    "force_reprocess_local": False,
     "local_initialized": False,
     "local_initialized_at": "",
     "local_path_fingerprint": "",
@@ -74,6 +75,7 @@ BOOLEAN_FIELDS = (
     "delete_files",
     "hr_enabled",
     "process_local_files",
+    "force_reprocess_local",
     "local_initialized",
 )
 INTEGER_LIMITS = {

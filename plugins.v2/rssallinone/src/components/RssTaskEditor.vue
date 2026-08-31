@@ -92,6 +92,7 @@ function defaultConfig() {
     hr_cron: '30 3 * * *',
     local_path: '',
     process_local_files: false,
+    force_reprocess_local: false,
     local_initialized: false,
     local_initialized_at: '',
     local_path_fingerprint: '',
@@ -334,7 +335,16 @@ watch(
                 <VTextField v-model.number="task.config.query_interval" label="查询间隔（秒）" type="number" min="1" />
               </VCol>
               <VCol cols="12" md="3" class="d-flex align-center">
-                <VSwitch v-model="task.config.process_local_files" label="处理本地文件" density="compact" color="primary" hide-details />
+              <VSwitch v-model="task.config.process_local_files" label="处理本地文件" density="compact" color="primary" hide-details />
+              <VSwitch
+                v-model="task.config.force_reprocess_local"
+                label="强制重新处理本地目录"
+                density="compact"
+                color="warning"
+                hide-details
+                hint="忽略本地目录已初始化标记"
+                persistent-hint
+              />
               </VCol>
               <VCol cols="12">
                 <VAlert v-if="task.config.local_initialized" type="success" variant="tonal" density="compact">
