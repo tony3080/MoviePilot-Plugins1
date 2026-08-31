@@ -1250,6 +1250,12 @@ class QbSyncService:
                 task for task in configured_tasks
                 if str(task.get("id") or "").strip() == selected_id
             ]
+            if configured_tasks:
+                selected_config = configured_tasks[0].get("config") or {}
+                result["mode"] = str(
+                    selected_config.get("task_type") or "rss"
+                ).strip().casefold()
+                result["rss_task_id"] = selected_id
         scope = RssTaskQbScope.from_tasks(configured_tasks)
         result["managed_scope"] = scope.to_dict()
         result["out_of_scope"] = (
@@ -1375,6 +1381,7 @@ class QbSyncService:
                         force_recognition=force_recognition,
                         scope=scope,
                         schedule_delete=schedule_delete,
+                        stop_event=stop_event,
                     )
                     succeeded += 1
                     result["scanned"] += 1
@@ -1382,6 +1389,8 @@ class QbSyncService:
                     if _torrent_completed(raw):
                         result["completed"] += 1
                 except Exception as error:
+                    if stop_event and stop_event.is_set():
+                        return self._cancel(task_id, result)
                     failed += 1
                     result["errors"].append({
                         "downloader": downloader.name,
@@ -1398,6 +1407,8 @@ class QbSyncService:
                     task_id, title, processed, succeeded, failed, total, result
                 )
 
+        if stop_event and stop_event.is_set():
+            return self._cancel(task_id, result)
         state = "succeeded" if batches else "failed"
         error_message = "" if batches else "所有 qBittorrent 节点均读取失败"
         self.store.finish_background_task(
@@ -1457,7 +1468,10 @@ class QbSyncService:
         schedule_delete: bool = False,
         completion_confirmed: bool = False,
         allow_completion_transition: bool = True,
+        stop_event: Optional[threading.Event] = None,
     ) -> str:
+        if stop_event and stop_event.is_set():
+            raise RuntimeError("手动添加处理已停止")
         now = utc_now()
         info_hash = str(raw.get("hash") or "").strip().lower()
         title = str(raw.get("title") or raw.get("name") or "").strip()
@@ -1548,6 +1562,9 @@ class QbSyncService:
                     torrent_id = match.group(1)
                 label_service = SiteLabelService(
                     MoviePilotRssGateway(),
+                    sleeper=lambda seconds: _interruptible_wait(
+                        stop_event, seconds
+                    ),
                     logger=self.logger,
                     min_request_interval_seconds=task_rule.query_interval,
                 )
@@ -1561,6 +1578,8 @@ class QbSyncService:
                     recognize_fx=True,
                     allow_search_without_detail=True,
                 )
+                if stop_event and stop_event.is_set():
+                    raise RuntimeError("手动添加处理已停止")
                 manual_source_url = str(
                     manual_labels.get("request_url_masked") or comment_url or ""
                 ).strip()
@@ -1593,6 +1612,8 @@ class QbSyncService:
                     raw = dict(raw)
                     raw["manual_labels"] = manual_labels
             except Exception as error:
+                if stop_event and stop_event.is_set():
+                    raise RuntimeError("手动添加处理已停止") from error
                 manual_labels = {"status": "failed", "reason": str(error)[:500]}
         import_enabled = bool(task_rule and task_rule.import_enabled)
         completion_requires_processing = _completion_requires_processing(
@@ -2084,7 +2105,7 @@ class QbSyncService:
             task_id,
             "cancelled",
             result=result,
-            error_message="插件停止，刷新任务已取消",
+            error_message="刷新任务已取消",
         )
         return result
 
@@ -2140,6 +2161,18 @@ def _source_url_for_torrent(
             "",
         ))
     return ""
+
+
+def _interruptible_wait(
+    stop_event: Optional[threading.Event], seconds: object
+) -> None:
+    try:
+        timeout = max(0.0, float(seconds or 0))
+    except (TypeError, ValueError):
+        timeout = 0.0
+    waiter = stop_event or threading.Event()
+    if waiter.wait(timeout) and stop_event:
+        raise RuntimeError("手动添加处理已停止")
 
 
 def _extract_torrent_source_url(value: object) -> str:

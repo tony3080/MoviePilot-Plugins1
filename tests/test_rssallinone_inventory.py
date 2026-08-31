@@ -39,6 +39,7 @@ database = load_package_module("database")
 inventory = load_package_module("inventory")
 layout = load_package_module("layout")
 qb_sync = load_package_module("qb_sync")
+file_manager = load_package_module("file_manager")
 
 
 class QbTaskScopeTest(unittest.TestCase):
@@ -72,6 +73,25 @@ class QbTaskScopeTest(unittest.TestCase):
         )
         self.assertIsNotNone(rule)
         self.assertEqual(rule.task_id, "rss-task")
+
+
+class ManualLocalCancellationTest(unittest.TestCase):
+    def test_cancelled_batch_does_not_create_the_next_card(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Demo.2026.mkv").write_bytes(b"demo")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            stop_event = __import__("threading").Event()
+            stop_event.set()
+
+            result = file_manager.LocalFileManagerService(
+                store=store,
+            ).recognize_current_directory(root, stop_event=stop_event)
+
+            self.assertTrue(result["cancelled"])
+            self.assertEqual(result["succeeded"], 0)
+            self.assertEqual(store.list_media()["total"], 0)
 
 
 class LocalInventoryCheckerTest(unittest.TestCase):

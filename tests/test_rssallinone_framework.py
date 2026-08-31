@@ -746,6 +746,9 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("mediaRssTaskIds", app_page)
         self.assertIn("label=\"RSS任务\"", app_page)
         self.assertIn("saveRssTasks", app_page)
+        self.assertIn('@stop="stopManualTask"', app_page)
+        self.assertIn("rss/manual/stop", app_page)
+        self.assertIn("立刻停止手动处理", editor)
         self.assertNotIn("电影目录组分类", config)
         self.assertNotIn("剧集目录组分类", config)
         self.assertNotIn("轮询兜底 CRON", editor)
@@ -1061,6 +1064,33 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("/media/inventory/refresh-batch", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
                 self.assertIn("/tasks/clear", api_paths)
+                self.assertIn("/rss/manual/stop", api_paths)
+                self.assertFalse(plugin.api_manual_refresh_stop()["success"])
+                manual_background_id = "manual-stop-test"
+                plugin._store.create_background_task(
+                    manual_background_id,
+                    module.QB_TASK_TYPE,
+                    result={"mode": "manual", "rss_task_id": "movies"},
+                )
+                plugin._manual_refresh_lock.acquire()
+                try:
+                    plugin._manual_refresh_task_id = manual_background_id
+                    plugin._manual_refresh_selected_task_id = "movies"
+                    stopped = plugin.api_manual_refresh_stop({
+                        "task_id": manual_background_id,
+                    })
+                    self.assertTrue(stopped["success"])
+                    self.assertTrue(plugin._manual_refresh_stop_event.is_set())
+                    self.assertTrue(
+                        plugin._store.get_background_task(manual_background_id)[
+                            "result"
+                        ]["stop_requested"]
+                    )
+                finally:
+                    plugin._manual_refresh_task_id = ""
+                    plugin._manual_refresh_selected_task_id = ""
+                    plugin._manual_refresh_stop_event.clear()
+                    plugin._manual_refresh_lock.release()
                 self.assertIn("/external/catchup/control", api_paths)
                 self.assertIn("/external/scan/control", api_paths)
                 self.assertIn("/emby/scheduledtasks/last", api_paths)

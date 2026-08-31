@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -133,6 +134,7 @@ class LocalFileManagerService:
         self,
         path: object,
         *,
+        stop_event: Optional[threading.Event] = None,
         manual_override: Optional[Dict[str, Any]] = None,
         refresh_media_id: object = "",
         task_id: object = "",
@@ -144,6 +146,8 @@ class LocalFileManagerService:
         query_interval: object = 60,
         rename_rules: object = "",
     ) -> Dict[str, Any]:
+        if stop_event and stop_event.is_set():
+            raise FileManagerError("手动添加处理已停止")
         source = _local_entry(path)
         roots = self._source_roots()
         if roots and not _inside_any(source, roots):
@@ -179,6 +183,7 @@ class LocalFileManagerService:
             cn_keywords=cn_keywords,
             query_interval=query_interval,
             rename_rules=rename_rules,
+            stop_event=stop_event,
         )
 
     def recognize_current_directory(
@@ -186,6 +191,7 @@ class LocalFileManagerService:
         path: object,
         *,
         progress: Any = None,
+        stop_event: Optional[threading.Event] = None,
         task_id: object = "",
         task_name: object = "文件管理",
         site_id: object = "",
@@ -215,12 +221,17 @@ class LocalFileManagerService:
 
         results = []
         succeeded = duplicate = failed = 0
+        cancelled = False
         for index, candidate in enumerate(candidates, start=1):
+            if stop_event and stop_event.is_set():
+                cancelled = True
+                break
             if callable(progress):
                 progress(candidate.name, index - 1, succeeded + duplicate, failed, len(candidates))
             try:
                 result = self.recognize_entry(
                     candidate,
+                    stop_event=stop_event,
                     task_id=task_id,
                     task_name=task_name,
                     site_id=site_id,
@@ -236,6 +247,9 @@ class LocalFileManagerService:
                 else:
                     succeeded += 1
             except Exception as error:
+                if stop_event and stop_event.is_set():
+                    cancelled = True
+                    break
                 failed += 1
                 results.append({
                     "path": str(candidate),
@@ -244,9 +258,13 @@ class LocalFileManagerService:
                 })
             if callable(progress):
                 progress(candidate.name, index, succeeded + duplicate, failed, len(candidates))
+            if stop_event and stop_event.is_set():
+                cancelled = True
+                break
         return {
-            "success": failed == 0,
-            "partial": bool(failed and (succeeded or duplicate)),
+            "success": failed == 0 and not cancelled,
+            "cancelled": cancelled,
+            "partial": bool((failed or cancelled) and (succeeded or duplicate)),
             "path": str(directory),
             "total": len(candidates),
             "succeeded": succeeded,
@@ -254,8 +272,15 @@ class LocalFileManagerService:
             "failed": failed,
             "results": results,
             "message": (
-                f"批量识别完成：新增或更新 {succeeded} 项，"
-                f"已存在 {duplicate} 项，失败 {failed} 项"
+                (
+                    f"批量识别已停止：新增或更新 {succeeded} 项，"
+                    f"已存在 {duplicate} 项，失败 {failed} 项"
+                )
+                if cancelled else
+                (
+                    f"批量识别完成：新增或更新 {succeeded} 项，"
+                    f"已存在 {duplicate} 项，失败 {failed} 项"
+                )
             ),
         }
 
@@ -276,7 +301,10 @@ class LocalFileManagerService:
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
+        stop_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
+        if stop_event and stop_event.is_set():
+            raise FileManagerError("手动添加处理已停止")
         media_id, source_hash = _source_identity(source)
         requested_media_id = str(refresh_media_id or "").strip()
         if requested_media_id and requested_media_id != media_id:
@@ -354,6 +382,9 @@ class LocalFileManagerService:
                 access = MoviePilotRssGateway.site_access(site_id)
                 labels = SiteLabelService(
                     MoviePilotRssGateway(),
+                    sleeper=(
+                        lambda seconds: _interruptible_wait(stop_event, seconds)
+                    ),
                     logger=self.logger,
                     min_request_interval_seconds=query_interval,
                 ).detect(
@@ -366,6 +397,8 @@ class LocalFileManagerService:
                     recognize_fx=recognize_fx,
                     allow_search_without_detail=True,
                 )
+                if stop_event and stop_event.is_set():
+                    raise FileManagerError("手动添加处理已停止")
                 details["site_labels"] = labels
                 details["rss_source"] = {
                     "task_id": str(task_id or "").strip(),
@@ -373,6 +406,8 @@ class LocalFileManagerService:
                     "detail_url_masked": str(labels.get("request_url_masked") or ""),
                 }
             except Exception as error:
+                if stop_event and stop_event.is_set():
+                    raise FileManagerError("手动添加处理已停止") from error
                 details["site_labels"] = {
                     "status": "failed",
                     "reason": str(error)[:500],
@@ -652,6 +687,18 @@ def _source_identity(path: Path) -> Tuple[str, str]:
     identity = os.path.normcase(os.path.normpath(str(path.resolve(strict=False))))
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return f"file:{digest}", digest
+
+
+def _interruptible_wait(
+    stop_event: Optional[threading.Event], seconds: object
+) -> None:
+    try:
+        timeout = max(0.0, float(seconds or 0))
+    except (TypeError, ValueError):
+        timeout = 0.0
+    waiter = stop_event or threading.Event()
+    if waiter.wait(timeout) and stop_event:
+        raise FileManagerError("手动添加处理已停止")
 
 
 def _moviepilot_media_extensions() -> set[str]:

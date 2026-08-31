@@ -8,11 +8,12 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   testingTaskId: { type: String, default: '' },
   runningTaskId: { type: String, default: '' },
+  stoppingTaskId: { type: String, default: '' },
   rssEnabled: { type: Boolean, default: true },
   controlling: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['save', 'reload', 'test', 'run', 'control'])
+const emit = defineEmits(['save', 'reload', 'test', 'run', 'stop', 'control'])
 
 const tasks = ref([])
 const expanded = ref([])
@@ -253,6 +254,21 @@ watch(
                   :disabled="(task.config.task_type === 'rss' && !rssEnabled) || !task.enabled || (task.config.task_type === 'rss' && !String(task.config.rss_url || '').trim())"
                   aria-label="立即执行 RSS"
                   @click.stop="emit('run', task)"
+                />
+              </template>
+            </VTooltip>
+            <VTooltip v-if="task.config.task_type === 'manual' && runningTaskId === task.id" text="立刻停止手动处理">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-stop-circle-outline"
+                  size="small"
+                  variant="text"
+                  color="error"
+                  :loading="stoppingTaskId === task.id"
+                  :disabled="stoppingTaskId === task.id"
+                  aria-label="立刻停止手动处理"
+                  @click.stop="emit('stop', task)"
                 />
               </template>
             </VTooltip>

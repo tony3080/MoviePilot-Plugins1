@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.78"
+    plugin_version = "0.13.79"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -105,6 +105,9 @@ class RssAllInOne(_PluginBase):
         self._startup_error = ""
         self._qb_refresh_lock = threading.Lock()
         self._manual_refresh_lock = threading.Lock()
+        self._manual_refresh_stop_event = threading.Event()
+        self._manual_refresh_task_id = ""
+        self._manual_refresh_selected_task_id = ""
         self._qb_delete_lock = threading.Lock()
         self._rss_queue_lock = threading.RLock()
         self._rss_active_run_ids: Dict[str, str] = {}
@@ -181,6 +184,7 @@ class RssAllInOne(_PluginBase):
 
         self._startup_error = ""
         self._stop_event.clear()
+        self._manual_refresh_stop_event.clear()
         if self._rss_enabled:
             self._rss_stop_event.clear()
         else:
@@ -335,6 +339,7 @@ class RssAllInOne(_PluginBase):
     def stop_service(self) -> None:
         self._stop_event.set()
         self._rss_stop_event.set()
+        self._manual_refresh_stop_event.set()
         self._store = None
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -409,6 +414,7 @@ class RssAllInOne(_PluginBase):
             self._api("/rss/tasks", self.api_save_rss_tasks, "POST", "保存 RSS 任务"),
             self._api("/rss/test", self.api_rss_test, "POST", "只读测试 RSS 任务"),
             self._api("/rss/run", self.api_rss_run, "POST", "执行 RSS 任务"),
+            self._api("/rss/manual/stop", self.api_manual_refresh_stop, "POST", "停止手动添加处理"),
             self._api("/rss/control", self.api_rss_control, "POST", "暂停或恢复 RSS 执行"),
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
@@ -419,6 +425,14 @@ class RssAllInOne(_PluginBase):
 
     def api_overview(self) -> Dict[str, Any]:
         store = self._require_store()
+        manual_task = (
+            store.get_background_task(self._manual_refresh_task_id)
+            if self._manual_refresh_task_id
+            else None
+        )
+        qb_task = store.latest_running_task(QB_TASK_TYPE)
+        if manual_task and qb_task and qb_task.get("id") == manual_task.get("id"):
+            qb_task = None
         rss_runs = store.list_background_tasks_by_state(
             RSS_RUN_TASK_TYPE,
             {"queued", "running"},
@@ -435,7 +449,8 @@ class RssAllInOne(_PluginBase):
             },
             "counts": store.counts(),
             "capabilities": self._capabilities(),
-            "qb_task": store.latest_running_task(QB_TASK_TYPE),
+            "qb_task": qb_task,
+            "manual_task": manual_task,
             "rss_task": store.latest_running_task(RSS_RUN_TASK_TYPE),
             "rss_tasks": rss_runs,
             "rss_queue": {
@@ -774,6 +789,31 @@ class RssAllInOne(_PluginBase):
                 f"已清空 QB 卡片 {counts['torrents']} 条、"
                 f"入库卡片 {counts['media']} 条"
             ),
+            "counts": counts,
+        }
+
+    def api_clear_task_records(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        if str(data.get("confirm") or "").strip() != "CLEAR_MANUAL_TASK":
+            return {
+                "success": False,
+                "message": "清理任务记录需要 confirm=CLEAR_MANUAL_TASK",
+            }
+        if self._pending_coordinator().status().get("running"):
+            return {
+                "success": False,
+                "message": "待入库批次运行期间不能清理任务记录",
+            }
+        task_id = str(data.get("task_id") or "").strip()
+        category = str(data.get("qb_category") or "").strip()
+        if not task_id:
+            return {"success": False, "message": "缺少 task_id"}
+        counts = self._require_store().clear_task_records(task_id, category)
+        return {
+            "success": True,
+            "message": "指定任务数据库记录已清理",
             "counts": counts,
         }
 
@@ -1341,7 +1381,11 @@ class RssAllInOne(_PluginBase):
     def _start_manual_refresh(self, selected_task_id: str) -> Dict[str, Any]:
         store = self._require_store()
         if not self._manual_refresh_lock.acquire(blocking=False):
-            running = store.latest_running_task(QB_TASK_TYPE)
+            running = (
+                store.get_background_task(self._manual_refresh_task_id)
+                if self._manual_refresh_task_id
+                else None
+            )
             return {
                 "success": False,
                 "message": "手动添加处理正在运行",
@@ -1349,7 +1393,26 @@ class RssAllInOne(_PluginBase):
             }
         task_id = uuid.uuid4().hex
         try:
-            store.create_background_task(task_id, QB_TASK_TYPE)
+            self._manual_refresh_stop_event.clear()
+            self._manual_refresh_task_id = task_id
+            self._manual_refresh_selected_task_id = selected_task_id
+            task = next(
+                (
+                    item for item in store.list_all_rss_tasks()
+                    if str(item.get("id") or "").strip() == selected_task_id
+                ),
+                {},
+            )
+            store.create_background_task(
+                task_id,
+                QB_TASK_TYPE,
+                task_name=f"手动添加 · {task.get('name') or selected_task_id}",
+                result={
+                    "mode": "manual",
+                    "rss_task_id": selected_task_id,
+                    "stop_requested": False,
+                },
+            )
             thread = threading.Thread(
                 target=self._run_manual_refresh,
                 kwargs={"task_id": task_id, "selected_task_id": selected_task_id},
@@ -1364,19 +1427,70 @@ class RssAllInOne(_PluginBase):
                 error_message=f"后台线程启动失败：{error}",
             )
             self._manual_refresh_lock.release()
+            self._manual_refresh_task_id = ""
+            self._manual_refresh_selected_task_id = ""
             raise
         return {"success": True, "message": "手动添加处理已启动", "task_id": task_id}
+
+    def api_manual_refresh_stop(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        requested_task_id = str((payload or {}).get("task_id") or "").strip()
+        active_task_id = str(self._manual_refresh_task_id or "").strip()
+        if not active_task_id or not self._manual_refresh_lock.locked():
+            return {"success": False, "message": "当前没有正在运行的手动添加处理"}
+        if requested_task_id and requested_task_id != active_task_id:
+            return {"success": False, "message": "指定的手动添加处理已经结束"}
+        self._manual_refresh_stop_event.set()
+        store = self._store
+        if store:
+            task = store.get_background_task(active_task_id) or {}
+            result = dict(task.get("result") or {})
+            result["mode"] = "manual"
+            result["rss_task_id"] = self._manual_refresh_selected_task_id
+            result["stop_requested"] = True
+            store.update_background_task(
+                active_task_id,
+                result=result,
+                error_message="已请求停止，当前步骤结束后退出",
+            )
+        logger.info(
+            "RSS一条龙：已请求停止手动添加处理，任务=%s",
+            self._manual_refresh_selected_task_id or active_task_id,
+        )
+        return {
+            "success": True,
+            "task_id": active_task_id,
+            "message": "已请求停止，当前步骤结束后将立即退出",
+        }
 
     def _run_manual_refresh(self, *, task_id: str, selected_task_id: str) -> None:
         store = self._store
         if not store:
+            self._manual_refresh_task_id = ""
+            self._manual_refresh_selected_task_id = ""
             self._manual_refresh_lock.release()
             return
         try:
             logger.info(
                 f"RSS一条龙：开始手动添加串行处理，任务={selected_task_id}"
             )
-            self._process_manual_local_tasks(selected_task_id)
+            self._process_manual_local_tasks(
+                selected_task_id,
+                stop_event=self._manual_refresh_stop_event,
+            )
+            if self._manual_refresh_stop_event.is_set():
+                store.finish_background_task(
+                    task_id,
+                    "cancelled",
+                    result={
+                        "mode": "manual",
+                        "rss_task_id": selected_task_id,
+                        "stop_requested": True,
+                    },
+                    error_message="用户停止手动添加处理",
+                )
+                return
             QbSyncService(
                 store=store,
                 inventory_checker=LocalInventoryChecker([]),
@@ -1385,13 +1499,16 @@ class RssAllInOne(_PluginBase):
             ).run(
                 task_id,
                 force_recognition=True,
-                stop_event=self._stop_event,
+                stop_event=self._manual_refresh_stop_event,
                 rss_task_id=selected_task_id,
             )
         except Exception as error:
             logger.error(f"RSS一条龙：手动添加处理失败：{error}", exc_info=True)
             store.finish_background_task(task_id, "failed", error_message=str(error))
         finally:
+            self._manual_refresh_task_id = ""
+            self._manual_refresh_selected_task_id = ""
+            self._manual_refresh_stop_event.clear()
             self._manual_refresh_lock.release()
 
     def api_rss_control(
@@ -1708,19 +1825,6 @@ class RssAllInOne(_PluginBase):
             "failed": 0,
         }
 
-    def api_clear_task_records(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        data = payload or {}
-        if str(data.get("confirm") or "").strip() != "CLEAR_MANUAL_TASK":
-            return {"success": False, "message": "清理任务记录需要 confirm=CLEAR_MANUAL_TASK"}
-        if self._pending_coordinator().status().get("running"):
-            return {"success": False, "message": "待入库批次运行期间不能清理任务记录"}
-        task_id = str(data.get("task_id") or "").strip()
-        category = str(data.get("qb_category") or "").strip()
-        if not task_id:
-            return {"success": False, "message": "缺少 task_id"}
-        counts = self._require_store().clear_task_records(task_id, category)
-        return {"success": True, "message": "指定任务数据库记录已清理", "counts": counts}
-        
         # 构建 hash -> torrent_id 映射（从 RSS 历史记录）
         hash_to_torrent_id: dict[str, str] = {}
         if self._store:
@@ -2231,7 +2335,12 @@ class RssAllInOne(_PluginBase):
         finally:
             self._qb_refresh_lock.release()
 
-    def _process_manual_local_tasks(self, selected_task_id: str = "") -> Dict[str, Any]:
+    def _process_manual_local_tasks(
+        self,
+        selected_task_id: str = "",
+        *,
+        stop_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
         """Initialize enabled manual tasks' local directories exactly once."""
         store = self._store
         if not store:
@@ -2240,6 +2349,9 @@ class RssAllInOne(_PluginBase):
         summary = {"processed": 0, "skipped": 0, "failed": 0}
         changed = False
         for task in tasks:
+            if stop_event and stop_event.is_set():
+                summary["cancelled"] = True
+                break
             config = task.get("config") if isinstance(task.get("config"), dict) else {}
             if str(config.get("task_type") or "rss").strip().casefold() != "manual":
                 continue
@@ -2273,6 +2385,7 @@ class RssAllInOne(_PluginBase):
             try:
                 result = self._file_manager_service().recognize_current_directory(
                     str(resolved),
+                    stop_event=stop_event,
                     task_id=str(task.get("id") or ""),
                     task_name=str(task.get("name") or "手动添加"),
                     site_id=str(config.get("site_id") or ""),
@@ -2282,6 +2395,9 @@ class RssAllInOne(_PluginBase):
                     query_interval=config.get("query_interval") or 60,
                     rename_rules=str(config.get("rename_rules") or ""),
                 )
+                if result.get("cancelled"):
+                    summary["cancelled"] = True
+                    break
                 config["local_initialized"] = True
                 config["local_initialized_at"] = utc_now()
                 config["local_path_fingerprint"] = fingerprint
