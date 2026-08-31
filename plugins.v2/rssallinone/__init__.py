@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.84"
+    plugin_version = "0.13.87"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2420,7 +2420,8 @@ class RssAllInOne(_PluginBase):
                 f"强制识别={force_recognition}"
             )
             selected_manual_task = source.split(":", 1)[1] if str(source).startswith("manual:") else ""
-            self._process_manual_local_tasks(selected_manual_task)
+            if selected_manual_task:
+                self._process_manual_local_tasks(selected_manual_task)
             QbSyncService(
                 store=store,
                 inventory_checker=LocalInventoryChecker([]),

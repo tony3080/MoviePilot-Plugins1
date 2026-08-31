@@ -247,6 +247,12 @@ class LocalFileManagerTest(unittest.TestCase):
             self.assertEqual(renamed_files[0].name, "Movie.2026.REMUX-U版.mkv")
             self.assertTrue(final_media.exists())
 
+            fx_file = renamed_project / "Movie.2026.REMUX-U版.mkv"
+            fx_renamed = file_manager.LocalFileManagerService._rename_local_files(
+                [fx_file], "/ubits/i => REMUX-U版", add_fx=True
+            )
+            self.assertEqual(fx_renamed[0].name, "Movie.2026-特效-REMUX-U版.mkv")
+
 
 if __name__ == "__main__":
     unittest.main()

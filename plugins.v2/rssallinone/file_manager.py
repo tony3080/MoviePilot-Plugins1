@@ -168,17 +168,6 @@ class LocalFileManagerService:
         site_search_name = str(site_search_title or "").strip() or (
             source.name
         )
-        if str(rename_rules or "").strip():
-            files = self._rename_local_files(files, rename_rules)
-            if source.is_dir():
-                old_source = source
-                source = self._rename_local_directory(source, rename_rules)
-                files = [
-                    source / item.relative_to(old_source)
-                    for item in files
-                ]
-            elif files:
-                source = files[0]
         return self._recognize_source(
             source=source,
             files=files,
@@ -332,6 +321,59 @@ class LocalFileManagerService:
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
             raise FileManagerError("手动添加处理已停止")
+        site_labels: Dict[str, Any] = {}
+        if site_id and (recognize_cn or recognize_fx):
+            try:
+                from .rss_execute import MoviePilotRssGateway
+                from .rss_site_labels import SiteLabelService
+                access = MoviePilotRssGateway.site_access(site_id)
+                site_labels = SiteLabelService(
+                    MoviePilotRssGateway(),
+                    sleeper=(
+                        lambda seconds: _interruptible_wait(stop_event, seconds)
+                    ),
+                    logger=self.logger,
+                    min_request_interval_seconds=query_interval,
+                ).detect(
+                    access=access,
+                    title=str(site_search_title or source.name),
+                    detail_url="",
+                    torrent_id="",
+                    cn_keywords=cn_keywords,
+                    recognize_cn=recognize_cn,
+                    recognize_fx=recognize_fx,
+                    allow_search_without_detail=True,
+                )
+                if stop_event and stop_event.is_set():
+                    raise FileManagerError("手动添加处理已停止")
+            except Exception as error:
+                if stop_event and stop_event.is_set():
+                    raise FileManagerError("手动添加处理已停止") from error
+                site_labels = {
+                    "status": "failed",
+                    "reason": str(error)[:500],
+                }
+        add_cn = bool(site_labels.get("mandarin"))
+        add_fx = bool(site_labels.get("effects"))
+        if str(rename_rules or "").strip() or add_cn or add_fx:
+            files = self._rename_local_files(
+                files,
+                rename_rules,
+                add_cn=add_cn,
+                add_fx=add_fx,
+            )
+            if source.is_dir():
+                old_source = source
+                source = self._rename_local_directory(
+                    source,
+                    rename_rules,
+                    add_cn=add_cn,
+                    add_fx=add_fx,
+                )
+                files = [source / item.relative_to(old_source) for item in files]
+            elif files:
+                source = files[0]
+
         media_id, source_hash = _source_identity(source)
         requested_media_id = str(refresh_media_id or "").strip()
         if requested_media_id and requested_media_id != media_id:
@@ -401,44 +443,13 @@ class LocalFileManagerService:
                 "torrent_completed": True,
             },
         }
-
-        if site_id and (recognize_cn or recognize_fx):
-            try:
-                from .rss_execute import MoviePilotRssGateway
-                from .rss_site_labels import SiteLabelService
-                access = MoviePilotRssGateway.site_access(site_id)
-                labels = SiteLabelService(
-                    MoviePilotRssGateway(),
-                    sleeper=(
-                        lambda seconds: _interruptible_wait(stop_event, seconds)
-                    ),
-                    logger=self.logger,
-                    min_request_interval_seconds=query_interval,
-                ).detect(
-                    access=access,
-                    title=str(site_search_title or title),
-                    detail_url="",
-                    torrent_id="",
-                    cn_keywords=cn_keywords,
-                    recognize_cn=recognize_cn,
-                    recognize_fx=recognize_fx,
-                    allow_search_without_detail=True,
-                )
-                if stop_event and stop_event.is_set():
-                    raise FileManagerError("手动添加处理已停止")
-                details["site_labels"] = labels
-                details["rss_source"] = {
-                    "task_id": str(task_id or "").strip(),
-                    "task_name": str(task_name or "").strip(),
-                    "detail_url_masked": str(labels.get("request_url_masked") or ""),
-                }
-            except Exception as error:
-                if stop_event and stop_event.is_set():
-                    raise FileManagerError("手动添加处理已停止") from error
-                details["site_labels"] = {
-                    "status": "failed",
-                    "reason": str(error)[:500],
-                }
+        if site_labels:
+            details["site_labels"] = site_labels
+            details["rss_source"] = {
+                "task_id": str(task_id or "").strip(),
+                "task_name": str(task_name or "").strip(),
+                "detail_url_masked": str(site_labels.get("request_url_masked") or ""),
+            }
 
         media_type = ""
         media_title = ""
@@ -593,7 +604,13 @@ class LocalFileManagerService:
         }
 
     @staticmethod
-    def _rename_local_files(files: Sequence[Path], rules_text: object) -> List[Path]:
+    def _rename_local_files(
+        files: Sequence[Path],
+        rules_text: object,
+        *,
+        add_cn: bool = False,
+        add_fx: bool = False,
+    ) -> List[Path]:
         from .rss_rename import parse_rename_rules, transform_name
         rules = parse_rename_rules(rules_text)
         renamed: List[Path] = []
@@ -603,6 +620,8 @@ class LocalFileManagerService:
                 current.name,
                 is_file=True,
                 rules=rules,
+                add_cn=add_cn,
+                add_fx=add_fx,
             )
             if new_name == current.name:
                 renamed.append(current)
@@ -615,7 +634,13 @@ class LocalFileManagerService:
         return renamed
 
     @staticmethod
-    def _rename_local_directory(directory: Path, rules_text: object) -> Path:
+    def _rename_local_directory(
+        directory: Path,
+        rules_text: object,
+        *,
+        add_cn: bool = False,
+        add_fx: bool = False,
+    ) -> Path:
         from .rss_rename import parse_rename_rules, transform_name
         rules = parse_rename_rules(rules_text)
         current = Path(directory)
@@ -623,6 +648,8 @@ class LocalFileManagerService:
             current.name,
             is_file=False,
             rules=rules,
+            add_cn=add_cn,
+            add_fx=add_fx,
         )
         if new_name == current.name:
             return current

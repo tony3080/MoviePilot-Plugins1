@@ -2294,6 +2294,99 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             self.assertEqual(store.list_torrents()["total"], 0)
             self.assertEqual(store.list_media()["total"], 0)
 
+    def test_normal_qb_refresh_skips_manual_categories_and_preserves_cards(self) -> None:
+        class Gateway:
+            recognitions = []
+
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [
+                    {
+                        "hash": "RSSHASH",
+                        "title": "Rss.Movie.2026",
+                        "category": "rss-category",
+                        "content_path": "/downloads/rss.mkv",
+                    },
+                    {
+                        "hash": "MANUALHASH",
+                        "title": "Manual.Movie.2026",
+                        "category": "manual-category",
+                        "content_path": "/downloads/manual.mkv",
+                    },
+                ]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @classmethod
+            def recognize(cls, title):
+                cls.recognitions.append(title)
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_id="rss-task",
+                category="rss-category",
+            )
+            self.add_rss_task(
+                store,
+                task_id="manual-task",
+                category="manual-category",
+                task_type="manual",
+            )
+            store.upsert_torrent_snapshot({
+                "downloader_id": "qb-main",
+                "info_hash": "manualhash",
+                "name": "Manual.Movie.2026",
+                "state": "pausedUP",
+                "category": "manual-category",
+                "content_path": "/downloads/manual.mkv",
+                "progress": 1.0,
+                "size": 4,
+                "source_url_masked": "",
+                "present": True,
+                "recognition_state": "identified",
+                "inventory_state": "unknown",
+                "media_title": "",
+                "media_type": "",
+                "media_year": "",
+                "poster": "",
+                "recognition_error": "",
+                "last_seen_at": database.utc_now(),
+                "updated_at": database.utc_now(),
+                "details": {},
+            })
+            store.create_background_task("normal-refresh", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(store=store, gateway=Gateway()).run(
+                "normal-refresh",
+                finish_task=False,
+            )
+
+            self.assertEqual(Gateway.recognitions, ["Rss.Movie.2026"])
+            self.assertEqual(result["manual_skipped"], 1)
+            self.assertIsNotNone(
+                store.get_torrent_snapshot("qb-main", "manualhash")
+            )
+
     def test_sync_never_falls_back_to_all_torrents_without_rss_scope(self) -> None:
         class Gateway:
             listed = False

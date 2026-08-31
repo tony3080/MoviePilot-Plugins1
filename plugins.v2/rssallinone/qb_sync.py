@@ -1264,6 +1264,11 @@ class QbSyncService:
                 ).strip().casefold()
                 result["rss_task_id"] = selected_id
         scope = RssTaskQbScope.from_tasks(configured_tasks)
+        manual_pairs = {
+            (rule.downloader, rule.category)
+            for rule in scope.rules
+            if rule.task_type == "manual"
+        }
         result["managed_scope"] = scope.to_dict()
         result["out_of_scope"] = (
             self.store.mark_torrents_outside_scope(
@@ -1308,17 +1313,29 @@ class QbSyncService:
                     self.gateway.torrent_dict(item)
                     for item in self.gateway.list_torrents(downloader.name)
                 ]
-                torrents = sorted([
+                managed_torrents = [
                     item for item in all_torrents
                     if scope.matches(downloader.name, item.get("category") or "")
-                ], key=lambda item: str(
+                ]
+                manual_torrents = []
+                torrents = []
+                for item in managed_torrents:
+                    pair = (downloader.name, str(item.get("category") or "").strip())
+                    if not rss_task_id and pair in manual_pairs:
+                        manual_torrents.append(item)
+                    else:
+                        torrents.append(item)
+                torrents = sorted(torrents, key=lambda item: str(
                     item.get("title") or item.get("name") or ""
                 ).casefold())
                 result["filtered_out"] += len(all_torrents) - len(torrents)
+                result["manual_skipped"] = int(
+                    result.get("manual_skipped") or 0
+                ) + len(manual_torrents)
                 seen_at = utc_now()
                 seen_hashes = [
                     str(item.get("hash") or "").lower()
-                    for item in torrents
+                    for item in [*torrents, *manual_torrents]
                 ]
                 self.store.mark_downloader_seen(
                     downloader.name, seen_hashes, seen_at
