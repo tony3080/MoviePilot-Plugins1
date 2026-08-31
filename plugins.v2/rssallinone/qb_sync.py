@@ -1300,7 +1300,10 @@ class QbSyncService:
                 return self._cancel(task_id, result, finish_task=finish_task)
             categories = scope.categories_for(downloader.name)
             if not categories:
-                self.store.mark_downloader_seen(downloader.name, [], utc_now())
+                # A task-scoped refresh must not mark unrelated categories as
+                # missing.  They are intentionally outside this run's scope.
+                if not rss_task_id:
+                    self.store.mark_downloader_seen(downloader.name, [], utc_now())
                 continue
             if not downloader.ready:
                 result["errors"].append({
@@ -1337,9 +1340,14 @@ class QbSyncService:
                     str(item.get("hash") or "").lower()
                     for item in [*torrents, *manual_torrents]
                 ]
-                self.store.mark_downloader_seen(
-                    downloader.name, seen_hashes, seen_at
-                )
+                # Only a full qB refresh owns downloader-wide presence state.
+                # Trial/single-task runs must leave other RSS/manual cards
+                # untouched, otherwise they temporarily disappear from qB
+                # management as "not seen".
+                if not rss_task_id:
+                    self.store.mark_downloader_seen(
+                        downloader.name, seen_hashes, seen_at
+                    )
                 batches.append((downloader, torrents))
             except Exception as error:
                 result["errors"].append({
