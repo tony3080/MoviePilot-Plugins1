@@ -192,6 +192,7 @@ class LocalFileManagerService:
         *,
         progress: Any = None,
         stop_event: Optional[threading.Event] = None,
+        max_items: Optional[int] = None,
         task_id: object = "",
         task_name: object = "文件管理",
         site_id: object = "",
@@ -222,10 +223,14 @@ class LocalFileManagerService:
         results = []
         succeeded = duplicate = failed = 0
         cancelled = False
+        handled = 0
+        examined = 0
+        item_limit = max(0, int(max_items or 0))
         for index, candidate in enumerate(candidates, start=1):
             if stop_event and stop_event.is_set():
                 cancelled = True
                 break
+            examined = index
             if callable(progress):
                 progress(candidate.name, index - 1, succeeded + duplicate, failed, len(candidates))
             try:
@@ -246,11 +251,13 @@ class LocalFileManagerService:
                     duplicate += 1
                 else:
                     succeeded += 1
+                    handled += 1
             except Exception as error:
                 if stop_event and stop_event.is_set():
                     cancelled = True
                     break
                 failed += 1
+                handled += 1
                 results.append({
                     "path": str(candidate),
                     "success": False,
@@ -261,6 +268,9 @@ class LocalFileManagerService:
             if stop_event and stop_event.is_set():
                 cancelled = True
                 break
+            if item_limit and handled >= item_limit:
+                break
+        exhausted = not cancelled and examined >= len(candidates)
         return {
             "success": failed == 0 and not cancelled,
             "cancelled": cancelled,
@@ -270,6 +280,9 @@ class LocalFileManagerService:
             "succeeded": succeeded,
             "duplicate": duplicate,
             "failed": failed,
+            "handled": handled,
+            "exhausted": exhausted,
+            "limit_reached": bool(item_limit and handled >= item_limit),
             "results": results,
             "message": (
                 (

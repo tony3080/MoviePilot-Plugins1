@@ -93,6 +93,36 @@ class ManualLocalCancellationTest(unittest.TestCase):
             self.assertEqual(result["succeeded"], 0)
             self.assertEqual(store.list_media()["total"], 0)
 
+    def test_single_step_advances_to_the_next_local_item(self) -> None:
+        class Gateway:
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "A.2026.mkv").write_bytes(b"a")
+            (root / "B.2026.mkv").write_bytes(b"b")
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            service = file_manager.LocalFileManagerService(
+                store=store,
+                gateway=Gateway(),
+            )
+
+            first = service.recognize_current_directory(root, max_items=1)
+            second = service.recognize_current_directory(root, max_items=1)
+
+            self.assertEqual(first["handled"], 1)
+            self.assertFalse(first["exhausted"])
+            self.assertEqual(second["handled"], 1)
+            self.assertTrue(second["exhausted"])
+            self.assertEqual(store.list_media()["total"], 2)
+
 
 class LocalInventoryCheckerTest(unittest.TestCase):
     def test_parses_typed_and_shared_roots(self) -> None:
@@ -694,6 +724,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
         realtime_link_root="",
         delete_after_minutes=0,
         delete_files=False,
+        task_type="rss",
     ):
         now = database.utc_now()
         connection = sqlite3.connect(store.path)
@@ -708,6 +739,7 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                     int(enabled),
                     0,
                     json.dumps({
+                        "task_type": task_type,
                         "qb_downloader": downloader,
                         "qb_category": category,
                         "import_enabled": import_enabled,
@@ -724,6 +756,110 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
+
+    def test_manual_single_step_skips_completed_and_processes_one_pending(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "DONE",
+                    "title": "A.Done.2026",
+                    "state": "pausedUP",
+                    "category": "manual",
+                    "content_path": "/downloads/done.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }, {
+                    "hash": "NEXT",
+                    "title": "B.Next.2026",
+                    "state": "pausedUP",
+                    "category": "manual",
+                    "content_path": "/downloads/next.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }, {
+                    "hash": "LATER",
+                    "title": "C.Later.2026",
+                    "state": "pausedUP",
+                    "category": "manual",
+                    "content_path": "/downloads/later.mkv",
+                    "progress": 1.0,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+            @staticmethod
+            def torrent_properties(_server, _info_hash):
+                return {}
+
+            @staticmethod
+            def get_server(_downloader):
+                return object()
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_id="manual-task",
+                category="manual",
+                import_enabled=False,
+                task_type="manual",
+            )
+            store.upsert_rss_history({
+                "task_id": "manual-task",
+                "source_key": "done-source",
+                "content_key": "qb-main:done",
+                "title": "Done.2026",
+                "status": "processed",
+                "payload": {
+                    "info_hash": "done",
+                    "completion_processed": True,
+                },
+            })
+            store.create_background_task("manual-step", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+            ).run(
+                "manual-step",
+                rss_task_id="manual-task",
+                max_items=1,
+                finish_task=False,
+            )
+
+            self.assertEqual(result["handled"], 1)
+            self.assertEqual(result["completed_skipped"], 1)
+            self.assertTrue(result["limit_reached"])
+            next_history = store.latest_rss_history_for_torrent(
+                "qb-main", "next"
+            )
+            self.assertTrue(next_history["payload"]["completion_processed"])
+            self.assertIsNone(store.latest_rss_history_for_torrent(
+                "qb-main", "later"
+            ))
 
     @staticmethod
     def update_rss_task_category(store, task_id, category):

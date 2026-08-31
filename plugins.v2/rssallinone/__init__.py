@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.79"
+    plugin_version = "0.13.80"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -108,6 +108,7 @@ class RssAllInOne(_PluginBase):
         self._manual_refresh_stop_event = threading.Event()
         self._manual_refresh_task_id = ""
         self._manual_refresh_selected_task_id = ""
+        self._manual_refresh_run_mode = "all"
         self._qb_delete_lock = threading.Lock()
         self._rss_queue_lock = threading.RLock()
         self._rss_active_run_ids: Dict[str, str] = {}
@@ -1375,10 +1376,16 @@ class RssAllInOne(_PluginBase):
         )
         task_config = task.get("config") if isinstance(task, dict) else {}
         if str((task_config or {}).get("task_type") or "rss").strip().casefold() == "manual":
-            return self._start_manual_refresh(task_id)
+            run_mode = str((payload or {}).get("run_mode") or "all").strip().casefold()
+            return self._start_manual_refresh(
+                task_id,
+                "single" if run_mode == "single" else "all",
+            )
         return self._start_rss_run(task_id=task_id, source="manual")
 
-    def _start_manual_refresh(self, selected_task_id: str) -> Dict[str, Any]:
+    def _start_manual_refresh(
+        self, selected_task_id: str, run_mode: str = "all"
+    ) -> Dict[str, Any]:
         store = self._require_store()
         if not self._manual_refresh_lock.acquire(blocking=False):
             running = (
@@ -1396,6 +1403,9 @@ class RssAllInOne(_PluginBase):
             self._manual_refresh_stop_event.clear()
             self._manual_refresh_task_id = task_id
             self._manual_refresh_selected_task_id = selected_task_id
+            self._manual_refresh_run_mode = (
+                "single" if run_mode == "single" else "all"
+            )
             task = next(
                 (
                     item for item in store.list_all_rss_tasks()
@@ -1409,13 +1419,18 @@ class RssAllInOne(_PluginBase):
                 task_name=f"手动添加 · {task.get('name') or selected_task_id}",
                 result={
                     "mode": "manual",
+                    "run_mode": self._manual_refresh_run_mode,
                     "rss_task_id": selected_task_id,
                     "stop_requested": False,
                 },
             )
             thread = threading.Thread(
                 target=self._run_manual_refresh,
-                kwargs={"task_id": task_id, "selected_task_id": selected_task_id},
+                kwargs={
+                    "task_id": task_id,
+                    "selected_task_id": selected_task_id,
+                    "run_mode": self._manual_refresh_run_mode,
+                },
                 name=f"rssallinone-manual-{task_id[:8]}",
                 daemon=True,
             )
@@ -1429,8 +1444,18 @@ class RssAllInOne(_PluginBase):
             self._manual_refresh_lock.release()
             self._manual_refresh_task_id = ""
             self._manual_refresh_selected_task_id = ""
+            self._manual_refresh_run_mode = "all"
             raise
-        return {"success": True, "message": "手动添加处理已启动", "task_id": task_id}
+        return {
+            "success": True,
+            "message": (
+                "手动添加试跑已启动，本次只处理一条"
+                if self._manual_refresh_run_mode == "single"
+                else "手动添加自动处理已启动"
+            ),
+            "task_id": task_id,
+            "run_mode": self._manual_refresh_run_mode,
+        }
 
     def api_manual_refresh_stop(
         self, payload: Optional[Dict[str, Any]] = None
@@ -1447,6 +1472,7 @@ class RssAllInOne(_PluginBase):
             task = store.get_background_task(active_task_id) or {}
             result = dict(task.get("result") or {})
             result["mode"] = "manual"
+            result["run_mode"] = self._manual_refresh_run_mode
             result["rss_task_id"] = self._manual_refresh_selected_task_id
             result["stop_requested"] = True
             store.update_background_task(
@@ -1464,43 +1490,122 @@ class RssAllInOne(_PluginBase):
             "message": "已请求停止，当前步骤结束后将立即退出",
         }
 
-    def _run_manual_refresh(self, *, task_id: str, selected_task_id: str) -> None:
+    def _run_manual_refresh(
+        self,
+        *,
+        task_id: str,
+        selected_task_id: str,
+        run_mode: str = "all",
+    ) -> None:
         store = self._store
         if not store:
             self._manual_refresh_task_id = ""
             self._manual_refresh_selected_task_id = ""
+            self._manual_refresh_run_mode = "all"
             self._manual_refresh_lock.release()
             return
         try:
             logger.info(
-                f"RSS一条龙：开始手动添加串行处理，任务={selected_task_id}"
+                f"RSS一条龙：开始手动添加串行处理，任务={selected_task_id}，"
+                f"模式={'试跑一条' if run_mode == 'single' else '自动处理'}"
             )
-            self._process_manual_local_tasks(
-                selected_task_id,
-                stop_event=self._manual_refresh_stop_event,
-            )
-            if self._manual_refresh_stop_event.is_set():
+            try:
+                qb_result = QbSyncService(
+                    store=store,
+                    inventory_checker=LocalInventoryChecker([]),
+                    library_layout=self._library_layout,
+                    logger=logger,
+                ).run(
+                    task_id,
+                    force_recognition=True,
+                    stop_event=self._manual_refresh_stop_event,
+                    rss_task_id=selected_task_id,
+                    max_items=1 if run_mode == "single" else None,
+                    finish_task=False,
+                    run_mode=run_mode,
+                )
+            except Exception as error:
+                logger.error(
+                    "RSS一条龙：手动添加读取 qB 失败，继续检查本地目录：%s",
+                    error,
+                )
+                qb_result = {
+                    "mode": "manual",
+                    "run_mode": run_mode,
+                    "rss_task_id": selected_task_id,
+                    "handled": 0,
+                    "errors": [{"message": str(error)}],
+                }
+            if self._manual_refresh_stop_event.is_set() or qb_result.get("cancelled"):
                 store.finish_background_task(
                     task_id,
                     "cancelled",
                     result={
+                        **qb_result,
                         "mode": "manual",
+                        "run_mode": run_mode,
                         "rss_task_id": selected_task_id,
                         "stop_requested": True,
                     },
                     error_message="用户停止手动添加处理",
                 )
                 return
-            QbSyncService(
-                store=store,
-                inventory_checker=LocalInventoryChecker([]),
-                library_layout=self._library_layout,
-                logger=logger,
-            ).run(
-                task_id,
-                force_recognition=True,
+            if run_mode == "single" and int(qb_result.get("handled") or 0) > 0:
+                state = "failed" if qb_result.get("errors") else "succeeded"
+                store.finish_background_task(
+                    task_id,
+                    state,
+                    result={
+                        **qb_result,
+                        "mode": "manual",
+                        "run_mode": run_mode,
+                        "rss_task_id": selected_task_id,
+                        "phase": "qb",
+                    },
+                    error_message=(
+                        str((qb_result.get("errors") or [{}])[0].get("message") or "")
+                        if state == "failed" else ""
+                    ),
+                )
+                return
+            local_result = self._process_manual_local_tasks(
+                selected_task_id,
                 stop_event=self._manual_refresh_stop_event,
-                rss_task_id=selected_task_id,
+                max_items=1 if run_mode == "single" else None,
+            )
+            combined_result = {
+                **qb_result,
+                "mode": "manual",
+                "run_mode": run_mode,
+                "rss_task_id": selected_task_id,
+                "phase": "local" if local_result.get("handled") else "complete",
+                "handled": (
+                    int(qb_result.get("handled") or 0)
+                    + int(local_result.get("handled") or 0)
+                ),
+                "local": local_result,
+            }
+            if self._manual_refresh_stop_event.is_set() or local_result.get("cancelled"):
+                store.finish_background_task(
+                    task_id,
+                    "cancelled",
+                    result={**combined_result, "stop_requested": True},
+                    error_message="用户停止手动添加处理",
+                )
+                return
+            state = (
+                "failed"
+                if int(local_result.get("failed") or 0)
+                or (qb_result.get("errors") and not local_result.get("handled"))
+                else "succeeded"
+            )
+            store.finish_background_task(
+                task_id,
+                state,
+                result=combined_result,
+                error_message=(
+                    str(local_result.get("message") or "") if state == "failed" else ""
+                ),
             )
         except Exception as error:
             logger.error(f"RSS一条龙：手动添加处理失败：{error}", exc_info=True)
@@ -1508,6 +1613,7 @@ class RssAllInOne(_PluginBase):
         finally:
             self._manual_refresh_task_id = ""
             self._manual_refresh_selected_task_id = ""
+            self._manual_refresh_run_mode = "all"
             self._manual_refresh_stop_event.clear()
             self._manual_refresh_lock.release()
 
@@ -2340,13 +2446,19 @@ class RssAllInOne(_PluginBase):
         selected_task_id: str = "",
         *,
         stop_event: Optional[threading.Event] = None,
+        max_items: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Initialize enabled manual tasks' local directories exactly once."""
         store = self._store
         if not store:
             return {"processed": 0, "skipped": 0, "failed": 0}
         tasks = store.list_all_rss_tasks()
-        summary = {"processed": 0, "skipped": 0, "failed": 0}
+        summary = {
+            "processed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "handled": 0,
+        }
         changed = False
         for task in tasks:
             if stop_event and stop_event.is_set():
@@ -2386,6 +2498,7 @@ class RssAllInOne(_PluginBase):
                 result = self._file_manager_service().recognize_current_directory(
                     str(resolved),
                     stop_event=stop_event,
+                    max_items=max_items,
                     task_id=str(task.get("id") or ""),
                     task_name=str(task.get("name") or "手动添加"),
                     site_id=str(config.get("site_id") or ""),
@@ -2398,11 +2511,16 @@ class RssAllInOne(_PluginBase):
                 if result.get("cancelled"):
                     summary["cancelled"] = True
                     break
-                config["local_initialized"] = True
-                config["local_initialized_at"] = utc_now()
-                config["local_path_fingerprint"] = fingerprint
-                task["config"] = config
-                changed = True
+                summary["handled"] += int(result.get("handled") or 0)
+                summary["failed"] += int(result.get("failed") or 0)
+                summary["result"] = result
+                if result.get("exhausted") and not result.get("failed"):
+                    config["local_initialized"] = True
+                    config["local_initialized_at"] = utc_now()
+                    config["local_path_fingerprint"] = fingerprint
+                    config["force_reprocess_local"] = False
+                    task["config"] = config
+                    changed = True
                 logger.info(
                     "RSS一条龙：手动任务本地目录首次处理完成，任务=%s，新增=%s，重复=%s，失败=%s",
                     task.get("name") or task.get("id"),
@@ -2411,6 +2529,7 @@ class RssAllInOne(_PluginBase):
             except Exception as error:
                 logger.error("RSS一条龙：手动任务本地目录处理失败，任务=%s：%s", task.get("name") or task.get("id"), error, exc_info=True)
                 summary["failed"] += 1
+                summary["handled"] += 1
         if changed:
             try:
                 store.replace_rss_tasks(tasks)

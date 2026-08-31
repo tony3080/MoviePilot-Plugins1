@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 from .database import SQLiteStore, utc_now
 from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
-from .rss_feed import mask_url
+from .rss_feed import extract_torrent_id, mask_url
 
 
 QB_TASK_TYPE = "qb_refresh"
@@ -1231,6 +1231,9 @@ class QbSyncService:
         schedule_delete: bool = False,
         stop_event: Optional[threading.Event] = None,
         rss_task_id: Optional[str] = None,
+        max_items: Optional[int] = None,
+        finish_task: bool = True,
+        run_mode: str = "all",
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "downloaders": 0,
@@ -1241,8 +1244,12 @@ class QbSyncService:
             "existing": 0,
             "completed": 0,
             "completed_skipped": 0,
+            "handled": 0,
+            "limit_reached": False,
             "errors": [],
         }
+        item_limit = max(0, int(max_items or 0))
+        result["run_mode"] = "single" if run_mode == "single" else "all"
         configured_tasks = self.store.list_all_rss_tasks()
         if rss_task_id:
             selected_id = str(rss_task_id).strip()
@@ -1269,12 +1276,13 @@ class QbSyncService:
         if not scope.ready:
             message = "VT+ 没有已保存且同时配置 QB下载器、QB分类的 RSS 任务"
             result["errors"].append({"message": message})
-            self.store.finish_background_task(
-                task_id,
-                "failed",
-                result=result,
-                error_message=message,
-            )
+            if finish_task:
+                self.store.finish_background_task(
+                    task_id,
+                    "failed",
+                    result=result,
+                    error_message=message,
+                )
             return result
 
         batches: List[Tuple[DownloaderView, List[Dict[str, Any]]]] = []
@@ -1284,7 +1292,7 @@ class QbSyncService:
 
         for downloader in downloaders:
             if stop_event and stop_event.is_set():
-                return self._cancel(task_id, result)
+                return self._cancel(task_id, result, finish_task=finish_task)
             categories = scope.categories_for(downloader.name)
             if not categories:
                 self.store.mark_downloader_seen(downloader.name, [], utc_now())
@@ -1300,10 +1308,12 @@ class QbSyncService:
                     self.gateway.torrent_dict(item)
                     for item in self.gateway.list_torrents(downloader.name)
                 ]
-                torrents = [
+                torrents = sorted([
                     item for item in all_torrents
                     if scope.matches(downloader.name, item.get("category") or "")
-                ]
+                ], key=lambda item: str(
+                    item.get("title") or item.get("name") or ""
+                ).casefold())
                 result["filtered_out"] += len(all_torrents) - len(torrents)
                 seen_at = utc_now()
                 seen_hashes = [
@@ -1325,16 +1335,20 @@ class QbSyncService:
         total = sum(len(items) for _, items in batches)
         self.store.update_background_task(task_id, total=total, result=result)
         processed = succeeded = failed = 0
+        handled = 0
+        limit_reached = False
 
         for downloader, torrents in batches:
             for raw in torrents:
                 if stop_event and stop_event.is_set():
-                    return self._cancel(task_id, result)
+                    return self._cancel(task_id, result, finish_task=finish_task)
                 title = str(raw.get("title") or raw.get("name") or "").strip()
                 info_hash = str(raw.get("hash") or "").strip().lower()
                 processed += 1
                 if not info_hash:
                     failed += 1
+                    handled += 1
+                    result["handled"] = handled
                     result["errors"].append({
                         "downloader": downloader.name,
                         "title": title,
@@ -1343,19 +1357,47 @@ class QbSyncService:
                     self._update_progress(
                         task_id, title, processed, succeeded, failed, total, result
                     )
+                    if item_limit and handled >= item_limit:
+                        limit_reached = True
+                        break
                     continue
                 try:
-                    if _torrent_completed(raw):
-                        history = self.store.latest_rss_history_for_torrent(
-                            downloader.name, info_hash
-                        ) or {}
-                        history_payload = history.get("payload") or {}
-                        rule = scope.rule_for(
-                            downloader.name,
-                            raw.get("category") or "",
-                            history.get("task_id") or "",
-                            preferred_task_type="rss" if not history else "",
+                    history = self.store.latest_rss_history_for_torrent(
+                        downloader.name, info_hash
+                    ) or {}
+                    rule = scope.rule_for(
+                        downloader.name,
+                        raw.get("category") or "",
+                        history.get("task_id") or "",
+                        preferred_task_type="rss" if not history else "",
+                    )
+                    if (
+                        rule
+                        and rule.task_type == "manual"
+                        and not _torrent_completed(raw)
+                    ):
+                        result["incomplete_skipped"] = int(
+                            result.get("incomplete_skipped") or 0
+                        ) + 1
+                        self._update_progress(
+                            task_id,
+                            title,
+                            processed,
+                            succeeded,
+                            failed,
+                            total,
+                            result,
                         )
+                        continue
+                    if _torrent_completed(raw):
+                        if rule and rule.task_type == "manual" and not history:
+                            history = self._ensure_manual_history(
+                                task_rule=rule,
+                                downloader_id=downloader.name,
+                                info_hash=info_hash,
+                                raw=raw,
+                            )
+                        history_payload = history.get("payload") or {}
                         if (
                             bool(history_payload.get("completion_processed"))
                             and not _completion_requires_processing(rule, history)
@@ -1384,14 +1426,20 @@ class QbSyncService:
                         stop_event=stop_event,
                     )
                     succeeded += 1
+                    handled += 1
+                    result["handled"] = handled
                     result["scanned"] += 1
                     result[outcome] += 1
                     if _torrent_completed(raw):
                         result["completed"] += 1
                 except Exception as error:
                     if stop_event and stop_event.is_set():
-                        return self._cancel(task_id, result)
+                        return self._cancel(
+                            task_id, result, finish_task=finish_task
+                        )
                     failed += 1
+                    handled += 1
+                    result["handled"] = handled
                     result["errors"].append({
                         "downloader": downloader.name,
                         "hash": info_hash,
@@ -1406,14 +1454,22 @@ class QbSyncService:
                 self._update_progress(
                     task_id, title, processed, succeeded, failed, total, result
                 )
+                if item_limit and handled >= item_limit:
+                    limit_reached = True
+                    break
+            if limit_reached:
+                break
 
         if stop_event and stop_event.is_set():
-            return self._cancel(task_id, result)
+            return self._cancel(task_id, result, finish_task=finish_task)
+        result["handled"] = handled
+        result["limit_reached"] = limit_reached
         state = "succeeded" if batches else "failed"
         error_message = "" if batches else "所有 qBittorrent 节点均读取失败"
-        self.store.finish_background_task(
-            task_id, state, result=result, error_message=error_message
-        )
+        if finish_task:
+            self.store.finish_background_task(
+                task_id, state, result=result, error_message=error_message
+            )
         return result
 
     def _schedule_qb_delete(
@@ -1456,6 +1512,62 @@ class QbSyncService:
             "source_path": str(job.get("source_path") or source_path),
             "deletion_scope": "qb_task_and_save_path",
         }
+
+    def _ensure_manual_history(
+        self,
+        *,
+        task_rule: RssTaskQbRule,
+        downloader_id: str,
+        info_hash: str,
+        raw: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        existing = self.store.latest_rss_history_for_torrent(
+            downloader_id, info_hash
+        ) or {}
+        if existing:
+            return existing
+        source_url = _extract_torrent_source_url(raw)
+        torrent_id = extract_torrent_id(source_url)
+        media = self.store.get_media_item(
+            f"qb:{downloader_id}:{info_hash}"
+        ) or self.store.find_media_by_source_path(
+            str(raw.get("content_path") or raw.get("path") or "")
+        ) or {}
+        already_processed = bool(media)
+        payload: Dict[str, Any] = {
+            "downloader": downloader_id,
+            "info_hash": info_hash,
+            "manual_source": True,
+        }
+        if torrent_id:
+            payload["torrent_id"] = torrent_id
+        if already_processed:
+            payload.update({
+                "completion_processed": True,
+                "completion_processed_at": utc_now(),
+                "imported_to_library": True,
+            })
+        source_key = hashlib.sha256(
+            f"manual\n{task_rule.task_id}\n{downloader_id}\n{info_hash}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        self.store.upsert_rss_history({
+            "task_id": task_rule.task_id,
+            "source_key": source_key,
+            "content_key": f"{downloader_id}:{info_hash}",
+            "title": str(raw.get("title") or raw.get("name") or "").strip(),
+            "status": "processed" if already_processed else "queued",
+            "reason": (
+                "已有手动添加卡片，已补齐处理记录"
+                if already_processed else "等待手动添加处理"
+            ),
+            "detail_url_masked": mask_url(source_url),
+            "payload": payload,
+        })
+        return self.store.latest_rss_history_for_torrent(
+            downloader_id, info_hash
+        ) or {}
 
     def _sync_one(
         self,
@@ -1515,6 +1627,16 @@ class QbSyncService:
             rss_history.get("task_id") or "",
             preferred_task_type="rss" if not rss_history else "",
         )
+        if task_rule and task_rule.task_type == "manual" and not rss_history:
+            rss_history = self._ensure_manual_history(
+                task_rule=task_rule,
+                downloader_id=downloader.name,
+                info_hash=info_hash,
+                raw=raw,
+            )
+            completion_already_processed = bool(
+                (rss_history.get("payload") or {}).get("completion_processed")
+            )
         manual_labels: Dict[str, Any] = {}
         if task_rule and task_rule.task_type == "manual":
             raw = dict(raw)
@@ -2100,13 +2222,21 @@ class QbSyncService:
             result=result,
         )
 
-    def _cancel(self, task_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        self.store.finish_background_task(
-            task_id,
-            "cancelled",
-            result=result,
-            error_message="刷新任务已取消",
-        )
+    def _cancel(
+        self,
+        task_id: str,
+        result: Dict[str, Any],
+        *,
+        finish_task: bool = True,
+    ) -> Dict[str, Any]:
+        result["cancelled"] = True
+        if finish_task:
+            self.store.finish_background_task(
+                task_id,
+                "cancelled",
+                result=result,
+                error_message="刷新任务已取消",
+            )
         return result
 
     def _log(self, level: str, message: str) -> None:

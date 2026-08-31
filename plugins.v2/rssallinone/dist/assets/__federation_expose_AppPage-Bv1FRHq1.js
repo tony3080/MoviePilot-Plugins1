@@ -23,6 +23,7 @@ const _sfc_main$4 = {
   loading: { type: Boolean, default: false },
   testingTaskId: { type: String, default: '' },
   runningTaskId: { type: String, default: '' },
+  runningMode: { type: String, default: '' },
   stoppingTaskId: { type: String, default: '' },
   rssEnabled: { type: Boolean, default: true },
   controlling: { type: Boolean, default: false },
@@ -319,24 +320,69 @@ return (_ctx, _cache) => {
                             }, 1024))
                           : _createCommentVNode$4("", true),
                         _createVNode$4(_component_VSpacer),
-                        _createVNode$4(_component_VTooltip, { text: "立即执行已保存配置" }, {
-                          activator: _withCtx$4(({ props: tooltipProps }) => [
-                            _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
-                              icon: "mdi-play-circle-outline",
-                              size: "small",
-                              variant: "text",
-                              color: "success",
-                              loading: __props.runningTaskId === task.id,
-                              disabled: (task.config.task_type === 'rss' && !__props.rssEnabled) || !task.enabled || (task.config.task_type === 'rss' && !String(task.config.rss_url || '').trim()),
-                              "aria-label": "立即执行 RSS",
-                              onClick: _withModifiers$1($event => (emit('run', task)), ["stop"])
-                            }), null, 16, ["loading", "disabled", "onClick"])
-                          ]),
-                          _: 2
-                        }, 1024),
-                        (task.config.task_type === 'manual' && __props.runningTaskId === task.id)
+                        (task.config.task_type === 'rss')
                           ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
                               key: 1,
+                              text: "立即执行已保存配置"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-play-circle-outline",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "success",
+                                  loading: __props.runningTaskId === task.id,
+                                  disabled: !__props.rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim(),
+                                  "aria-label": "立即执行 RSS",
+                                  onClick: _withModifiers$1($event => (emit('run', { task, runMode: 'all' })), ["stop"])
+                                }), null, 16, ["loading", "disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual')
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 2,
+                              text: "试跑一条"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-debug-step-over",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "primary",
+                                  loading: __props.runningTaskId === task.id && __props.runningMode === 'single',
+                                  disabled: !task.enabled || __props.runningTaskId === task.id,
+                                  "aria-label": "试跑一条",
+                                  onClick: _withModifiers$1($event => (emit('run', { task, runMode: 'single' })), ["stop"])
+                                }), null, 16, ["loading", "disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual')
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 3,
+                              text: "自动处理剩余项目"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-play-circle-outline",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "success",
+                                  loading: __props.runningTaskId === task.id && __props.runningMode === 'all',
+                                  disabled: !task.enabled || __props.runningTaskId === task.id,
+                                  "aria-label": "自动处理剩余项目",
+                                  onClick: _withModifiers$1($event => (emit('run', { task, runMode: 'all' })), ["stop"])
+                                }), null, 16, ["loading", "disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual' && __props.runningTaskId === task.id)
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 4,
                               text: "立刻停止手动处理"
                             }, {
                               activator: _withCtx$4(({ props: tooltipProps }) => [
@@ -793,7 +839,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-5b49a9ae"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-1477ac9e"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
@@ -1904,6 +1950,7 @@ const qbMobileFiltersOpen = ref(false);
 const qbTask = ref(null);
 const rssTestingTaskId = ref('');
 const rssRunningTaskId = ref('');
+const manualRunningMode = ref('');
 const manualStoppingTaskId = ref('');
 const rssBackgroundTask = ref(null);
 const rssControlLoading = ref(false);
@@ -2261,6 +2308,9 @@ async function loadOverview() {
     rssRunningTaskId.value = String(
       response.manual_task?.result?.rss_task_id || '',
     );
+    manualRunningMode.value = String(
+      response.manual_task?.result?.run_mode || 'all',
+    );
     if (['queued', 'running'].includes(response.manual_task.state)) {
       scheduleRssPoll(response.manual_task.id);
     }
@@ -2563,14 +2613,20 @@ async function controlRss(enabled) {
   }
 }
 
-async function runRssTask(task) {
+async function runRssTask(request) {
+  const task = request?.task || request;
+  const runMode = request?.runMode === 'single' ? 'single' : 'all';
   const configuredTaskId = String(task?.id || '');
   rssRunningTaskId.value = configuredTaskId;
+  manualRunningMode.value = task?.config?.task_type === 'manual' ? runMode : '';
   errorMessage.value = '';
   successMessage.value = '';
   try {
     const response = unwrap(
-      await props.api.post('plugin/RssAllInOne/rss/run', { task_id: configuredTaskId }),
+      await props.api.post('plugin/RssAllInOne/rss/run', {
+        task_id: configuredTaskId,
+        run_mode: runMode,
+      }),
     );
     if (!response?.success || !response?.task_id) {
       throw new Error(response?.message || 'RSS 执行启动失败')
@@ -2580,11 +2636,17 @@ async function runRssTask(task) {
       state: response.state || 'queued',
       processed: 0,
       total: 0,
+      result: {
+        mode: task?.config?.task_type === 'manual' ? 'manual' : 'rss',
+        run_mode: runMode,
+        rss_task_id: configuredTaskId,
+      },
     };
     successMessage.value = response.message || 'RSS 执行已启动';
     scheduleRssPoll(response.task_id);
   } catch (error) {
     rssRunningTaskId.value = '';
+    manualRunningMode.value = '';
     errorMessage.value = error?.message || 'RSS 执行启动失败';
   }
 }
@@ -2629,16 +2691,19 @@ async function pollRssTask(taskId) {
     }
     const result = response.task.result || {};
     const manualMode = result.mode === 'manual';
+    const singleMode = manualMode && result.run_mode === 'single';
     successMessage.value = response.task.state === 'succeeded'
       ? (manualMode
-          ? `手动添加处理完成：识别 ${result.recognized || 0}，已存在 ${result.existing || 0}，未识别 ${result.unrecognized || 0}`
+          ? `${singleMode ? '手动添加试跑完成' : '手动添加自动处理完成'}：本次处理 ${result.handled || 0} 项`
           : `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`)
       : `${manualMode ? '手动添加处理' : 'RSS 执行'}已${response.task.state === 'cancelled' ? '停止' : '结束'}`;
     rssRunningTaskId.value = '';
+    manualRunningMode.value = '';
     manualStoppingTaskId.value = '';
     await loadOverview();
   } catch (error) {
     rssRunningTaskId.value = '';
+    manualRunningMode.value = '';
     manualStoppingTaskId.value = '';
     errorMessage.value = error?.message || '读取 RSS 执行进度失败';
   }
@@ -3811,6 +3876,7 @@ return (_ctx, _cache) => {
                           loading: loading.value,
                           "testing-task-id": rssTestingTaskId.value,
                           "running-task-id": rssRunningTaskId.value,
+                          "running-mode": manualRunningMode.value,
                           "stopping-task-id": manualStoppingTaskId.value,
                           "rss-enabled": rssEnabled.value,
                           controlling: rssControlLoading.value,
@@ -3820,7 +3886,7 @@ return (_ctx, _cache) => {
                           onRun: runRssTask,
                           onStop: stopManualTask,
                           onControl: controlRss
-                        }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id", "running-task-id", "stopping-task-id", "rss-enabled", "controlling"]))
+                        }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id", "running-task-id", "running-mode", "stopping-task-id", "rss-enabled", "controlling"]))
                       : (vtTab.value === 'rss_history')
                         ? (_openBlock(), _createBlock(_component_VDataTable, {
                             key: 1,
@@ -4089,6 +4155,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-5d8d064d"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-92058c7f"]]);
 
 export { AppPage as default };

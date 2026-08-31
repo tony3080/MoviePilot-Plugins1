@@ -8,6 +8,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   testingTaskId: { type: String, default: '' },
   runningTaskId: { type: String, default: '' },
+  runningMode: { type: String, default: '' },
   stoppingTaskId: { type: String, default: '' },
   rssEnabled: { type: Boolean, default: true },
   controlling: { type: Boolean, default: false },
@@ -242,7 +243,7 @@ watch(
               {{ task.config.qb_category }}
             </VChip>
             <VSpacer />
-            <VTooltip text="立即执行已保存配置">
+            <VTooltip v-if="task.config.task_type === 'rss'" text="立即执行已保存配置">
               <template #activator="{ props: tooltipProps }">
                 <VBtn
                   v-bind="tooltipProps"
@@ -251,9 +252,39 @@ watch(
                   variant="text"
                   color="success"
                   :loading="runningTaskId === task.id"
-                  :disabled="(task.config.task_type === 'rss' && !rssEnabled) || !task.enabled || (task.config.task_type === 'rss' && !String(task.config.rss_url || '').trim())"
+                  :disabled="!rssEnabled || !task.enabled || !String(task.config.rss_url || '').trim()"
                   aria-label="立即执行 RSS"
-                  @click.stop="emit('run', task)"
+                  @click.stop="emit('run', { task, runMode: 'all' })"
+                />
+              </template>
+            </VTooltip>
+            <VTooltip v-if="task.config.task_type === 'manual'" text="试跑一条">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-debug-step-over"
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  :loading="runningTaskId === task.id && runningMode === 'single'"
+                  :disabled="!task.enabled || runningTaskId === task.id"
+                  aria-label="试跑一条"
+                  @click.stop="emit('run', { task, runMode: 'single' })"
+                />
+              </template>
+            </VTooltip>
+            <VTooltip v-if="task.config.task_type === 'manual'" text="自动处理剩余项目">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-play-circle-outline"
+                  size="small"
+                  variant="text"
+                  color="success"
+                  :loading="runningTaskId === task.id && runningMode === 'all'"
+                  :disabled="!task.enabled || runningTaskId === task.id"
+                  aria-label="自动处理剩余项目"
+                  @click.stop="emit('run', { task, runMode: 'all' })"
                 />
               </template>
             </VTooltip>

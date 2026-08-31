@@ -43,6 +43,7 @@ const qbMobileFiltersOpen = ref(false)
 const qbTask = ref(null)
 const rssTestingTaskId = ref('')
 const rssRunningTaskId = ref('')
+const manualRunningMode = ref('')
 const manualStoppingTaskId = ref('')
 const rssBackgroundTask = ref(null)
 const rssControlLoading = ref(false)
@@ -444,6 +445,9 @@ async function loadOverview() {
     rssRunningTaskId.value = String(
       response.manual_task?.result?.rss_task_id || '',
     )
+    manualRunningMode.value = String(
+      response.manual_task?.result?.run_mode || 'all',
+    )
     if (['queued', 'running'].includes(response.manual_task.state)) {
       scheduleRssPoll(response.manual_task.id)
     }
@@ -746,14 +750,20 @@ async function controlRss(enabled) {
   }
 }
 
-async function runRssTask(task) {
+async function runRssTask(request) {
+  const task = request?.task || request
+  const runMode = request?.runMode === 'single' ? 'single' : 'all'
   const configuredTaskId = String(task?.id || '')
   rssRunningTaskId.value = configuredTaskId
+  manualRunningMode.value = task?.config?.task_type === 'manual' ? runMode : ''
   errorMessage.value = ''
   successMessage.value = ''
   try {
     const response = unwrap(
-      await props.api.post('plugin/RssAllInOne/rss/run', { task_id: configuredTaskId }),
+      await props.api.post('plugin/RssAllInOne/rss/run', {
+        task_id: configuredTaskId,
+        run_mode: runMode,
+      }),
     )
     if (!response?.success || !response?.task_id) {
       throw new Error(response?.message || 'RSS 执行启动失败')
@@ -763,11 +773,17 @@ async function runRssTask(task) {
       state: response.state || 'queued',
       processed: 0,
       total: 0,
+      result: {
+        mode: task?.config?.task_type === 'manual' ? 'manual' : 'rss',
+        run_mode: runMode,
+        rss_task_id: configuredTaskId,
+      },
     }
     successMessage.value = response.message || 'RSS 执行已启动'
     scheduleRssPoll(response.task_id)
   } catch (error) {
     rssRunningTaskId.value = ''
+    manualRunningMode.value = ''
     errorMessage.value = error?.message || 'RSS 执行启动失败'
   }
 }
@@ -812,16 +828,19 @@ async function pollRssTask(taskId) {
     }
     const result = response.task.result || {}
     const manualMode = result.mode === 'manual'
+    const singleMode = manualMode && result.run_mode === 'single'
     successMessage.value = response.task.state === 'succeeded'
       ? (manualMode
-          ? `手动添加处理完成：识别 ${result.recognized || 0}，已存在 ${result.existing || 0}，未识别 ${result.unrecognized || 0}`
+          ? `${singleMode ? '手动添加试跑完成' : '手动添加自动处理完成'}：本次处理 ${result.handled || 0} 项`
           : `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`)
       : `${manualMode ? '手动添加处理' : 'RSS 执行'}已${response.task.state === 'cancelled' ? '停止' : '结束'}`
     rssRunningTaskId.value = ''
+    manualRunningMode.value = ''
     manualStoppingTaskId.value = ''
     await loadOverview()
   } catch (error) {
     rssRunningTaskId.value = ''
+    manualRunningMode.value = ''
     manualStoppingTaskId.value = ''
     errorMessage.value = error?.message || '读取 RSS 执行进度失败'
   }
@@ -1722,6 +1741,7 @@ onBeforeUnmount(() => {
           :loading="loading"
           :testing-task-id="rssTestingTaskId"
           :running-task-id="rssRunningTaskId"
+          :running-mode="manualRunningMode"
           :stopping-task-id="manualStoppingTaskId"
           :rss-enabled="rssEnabled"
           :controlling="rssControlLoading"
