@@ -428,9 +428,11 @@ class SiteLabelParsingTest(unittest.TestCase):
 
     def test_ubits_without_detail_url_falls_back_to_search(self):
         search_page = """
-          <tr><td><a href="details.php?id=42">Demo</a>
-            <span class="tag">国语</span><span class="tag">特效字幕</span>
-          </td></tr>
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=42">Demo</a>
+              <span class="tag">国语</span><span class="tag">特效字幕</span>
+            </td></tr>
+          </table>
         """
 
         class Gateway:
@@ -496,8 +498,10 @@ class SiteLabelParsingTest(unittest.TestCase):
 
     def test_chd_multiple_results_require_exact_rss_torrent_id(self):
         page = """
-          <tr><td><a href="details.php?id=41">A</a><div class="tag-gy">国语</div></td></tr>
-          <tr><td><a href="details.php?id=42">B</a><div class="tag-txsub">特效</div></td></tr>
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=41">A</a><div class="tag-gy">国语</div></td></tr>
+            <tr><td><a href="details.php?id=42">B</a><div class="tag-txsub">特效</div></td></tr>
+          </table>
         """
         block, selected = rss_site_labels.select_exact_result(page, "42")
         self.assertEqual(selected, "42")
@@ -510,10 +514,13 @@ class SiteLabelParsingTest(unittest.TestCase):
 
     def test_multiple_results_without_id_are_skipped_even_when_title_matches(self):
         page = """
-          <tr><td><a href="details.php?id=41">Other.Release.2024.1080p</a></td></tr>
-          <tr><td><a href="details.php?id=42">Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits</a>
-            <span class="tag">国语</span><span class="tag">特效字幕</span>
-          </td></tr>
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=41">Other.Release.2024.1080p</a></td></tr>
+            <tr><td><a href="details.php?id=42">Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits</a>
+              <span class="tag">国语</span><span class="tag">特效字幕</span>
+            </td></tr>
+          </table>
+          <table class="recommend"><tr><td><a href="details.php?id=99">热门推荐</a></td></tr></table>
         """
         with self.assertRaises(rss_site_labels.SiteLabelError):
             rss_site_labels.select_exact_result(
@@ -524,11 +531,13 @@ class SiteLabelParsingTest(unittest.TestCase):
 
     def test_multiple_results_without_id_are_skipped_for_ubits_result_rows(self):
         page = """
-          <tr><td><a href="details.php?id=41">Other.Release.2024.1080p</a></td></tr>
-          <tr><td data-title="Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits">
-            <a href="details.php?id=42">查看详情</a>
-            <span class="tag">国语</span><span class="tag">特效字幕</span>
-          </td></tr>
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=41">Other.Release.2024.1080p</a></td></tr>
+            <tr><td data-title="Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits">
+              <a href="details.php?id=42">查看详情</a>
+              <span class="tag">国语</span><span class="tag">特效字幕</span>
+            </td></tr>
+          </table>
         """
         with self.assertRaises(rss_site_labels.SiteLabelError):
             rss_site_labels.select_exact_result(
@@ -539,6 +548,23 @@ class SiteLabelParsingTest(unittest.TestCase):
                     "DTS-HD.MA 5.1-UBits"
                 ),
             )
+
+    def test_search_result_parser_ignores_recommendation_tables(self):
+        page = """
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=42">唯一结果</a></td></tr>
+          </table>
+          <table class="hot"><tr><td><a href="details.php?id=99">热门推荐</a></td></tr></table>
+          <table class="classic"><tr><td><a href="details.php?id=100">经典推荐</a></td></tr></table>
+        """
+        block, selected = rss_site_labels.select_exact_result(page, "")
+        self.assertEqual(selected, "42")
+        self.assertIn("唯一结果", block)
+
+    def test_search_result_parser_requires_torrents_table(self):
+        page = '<tr><td><a href="details.php?id=42">孤立结果</a></td></tr>'
+        with self.assertRaises(rss_site_labels.SiteLabelError):
+            rss_site_labels.select_exact_result(page, "")
 
     def test_hdsky_optiontag_text_controls_both_labels(self):
         block = """

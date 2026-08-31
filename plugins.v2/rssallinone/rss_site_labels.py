@@ -477,7 +477,9 @@ def clean_search_title(value: object) -> str:
 
 
 def _candidate_blocks(page: str) -> List[Tuple[str, str]]:
-    source = str(page or "")
+    source = _search_results_table(page)
+    if not source:
+        return []
     matches = list(re.finditer(
         r"details\.php\?[^\"'<>]*?\bid=(\d+)", source, flags=re.I
     ))
@@ -497,6 +499,28 @@ def _candidate_blocks(page: str) -> List[Tuple[str, str]]:
             end += len("</tr>")
         candidates.append((torrent_id, source[start:end]))
     return candidates
+
+
+def _search_results_table(page: object) -> str:
+    """Return only the site's torrent search table, excluding recommendations."""
+    source = str(page or "")
+    for table in re.findall(
+        r"<table\b[^>]*>.*?</table>",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        opening = table.split(">", 1)[0]
+        class_match = re.search(
+            r"\bclass\s*=\s*(['\"])(.*?)\1",
+            opening,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not class_match:
+            continue
+        classes = re.split(r"\s+", class_match.group(2).strip())
+        if any(item.casefold() == "torrents" for item in classes):
+            return table
+    return ""
 
 
 def _ubits_tag_scope(page: str) -> str:
