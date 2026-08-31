@@ -125,6 +125,7 @@ class SiteLabelService:
             "request_url_masked": "",
             "reason": "未启用国语或特效识别" if not requested else "",
         }
+        search_query = ""
         if not requested:
             return result
 
@@ -149,6 +150,7 @@ class SiteLabelService:
                         or ""
                     ).strip()
                     query = clean_search_title(title)
+                    search_query = query
                     if not base_url:
                         raise SiteLabelError("站点身份缺少站点 URL")
                     if not query:
@@ -180,6 +182,7 @@ class SiteLabelService:
                 if not base_url:
                     raise SiteLabelError("站点身份缺少站点 URL")
                 query = clean_search_title(title)
+                search_query = query
                 if not query:
                     raise SiteLabelError("RSS 标题清理后无法用于站内搜索")
                 request_url = urljoin(
@@ -219,7 +222,8 @@ class SiteLabelService:
             self._log(
                 "error",
                 f"RSS一条龙：{'手动' if allow_search_without_detail else 'RSS'}站点标签识别失败 "
-                f"{site_kind or 'unknown'}：{error}",
+                f"{site_kind or 'unknown'}：{error}"
+                + (f"，搜索名称={search_query}" if search_query else ""),
             )
         return result
 
@@ -442,8 +446,7 @@ def select_exact_result(
             title_matches = [
                 candidate
                 for candidate in candidates
-                if _normalized_search_title(_candidate_title(candidate[1]))
-                == wanted_title
+                if _candidate_matches_search_title(candidate[1], wanted_title)
             ]
             if len(title_matches) == 1:
                 return title_matches[0][1], title_matches[0][0]
@@ -455,13 +458,52 @@ def select_exact_result(
 
 
 def _candidate_title(block: str) -> str:
-    """Read the title attached to a details.php result link."""
-    match = re.search(
-        r"<a\b[^>]*details\.php\?[^>]*>\s*(.*?)\s*</a>",
-        str(block or ""),
+    """Read the most useful release title attached to a details result."""
+    source = str(block or "")
+    matches = re.findall(
+        r"<a\b([^>]*details\.php\?[^>]*)>(.*?)</a>",
+        source,
         flags=re.IGNORECASE | re.DOTALL,
     )
-    return _plain_text(match.group(1)) if match else ""
+    candidates: List[str] = []
+    for attrs, content in matches:
+        text = _plain_text(content).strip()
+        if text:
+            candidates.append(text)
+        for key in ("title", "data-title", "aria-label"):
+            attr = re.search(
+                rf"\b{re.escape(key)}\s*=\s*['\"]([^'\"]+)['\"]",
+                attrs,
+                flags=re.IGNORECASE,
+            )
+            if attr and attr.group(1).strip():
+                candidates.append(html.unescape(attr.group(1).strip()))
+    if candidates:
+        return max(candidates, key=len)
+    return ""
+
+
+def _candidate_matches_search_title(block: str, wanted_title: str) -> bool:
+    """Match a search result by its title or release text when no ID exists."""
+    wanted = _normalized_search_title(wanted_title)
+    if not wanted:
+        return False
+    title = _normalized_search_title(_candidate_title(block))
+    if title == wanted or wanted in title:
+        return True
+    for attribute_title in re.findall(
+        r"\b(?:title|data-title|aria-label)\s*=\s*['\"]([^'\"]+)['\"]",
+        str(block or ""),
+        flags=re.IGNORECASE,
+    ):
+        normalized = _normalized_search_title(attribute_title)
+        if normalized == wanted or wanted in normalized:
+            return True
+    # Some UBits layouts put the release name in a table cell or data attribute
+    # instead of the details link text.  A full normalized-title occurrence in
+    # the isolated result row is still deterministic and safe to use.
+    plain = _normalized_search_title(_plain_text(block))
+    return bool(plain and wanted in plain)
 
 
 def _normalized_search_title(value: object) -> str:
