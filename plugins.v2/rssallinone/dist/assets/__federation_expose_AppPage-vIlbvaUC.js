@@ -28,7 +28,7 @@ const _sfc_main$4 = {
   rssEnabled: { type: Boolean, default: true },
   controlling: { type: Boolean, default: false },
 },
-  emits: ['save', 'reload', 'test', 'run', 'stop', 'control'],
+  emits: ['save', 'reload', 'test', 'run', 'stop', 'clear-manual', 'control'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -396,6 +396,25 @@ return (_ctx, _cache) => {
                                   "aria-label": "立刻停止手动处理",
                                   onClick: _withModifiers$1($event => (emit('stop', task)), ["stop"])
                                 }), null, 16, ["loading", "disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual')
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 5,
+                              text: "清理手动添加 qB 记录"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-broom-outline",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "warning",
+                                  disabled: __props.runningTaskId === task.id,
+                                  "aria-label": "清理手动添加 qB 记录",
+                                  onClick: _withModifiers$1($event => (emit('clear-manual', task)), ["stop"])
+                                }), null, 16, ["disabled", "onClick"])
                               ]),
                               _: 2
                             }, 1024))
@@ -839,7 +858,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-1477ac9e"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-d8fbfe7a"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
@@ -2672,6 +2691,36 @@ async function stopManualTask(task) {
   }
 }
 
+async function clearManualTask(task) {
+  const taskId = String(task?.id || '');
+  if (!taskId) return
+  const taskName = String(task?.name || taskId);
+  if (!window.confirm(
+    `只清理手动添加任务“${taskName}”的 qB 插件记录？\n\n` +
+    '本地目录识别卡片、qB任务和本地文件都会保留。',
+  )) return
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/data/clear-task-records',
+      {
+        task_id: taskId,
+        qb_category: String(task?.config?.qb_category || ''),
+        confirm: 'CLEAR_MANUAL_TASK',
+      },
+    ));
+    if (!response?.success) throw new Error(response?.message || '清理手动添加记录失败')
+    const counts = response.counts || {};
+    successMessage.value = response.message || (
+      `已清理 qB 卡片 ${counts.media || 0} 条，历史 ${counts.history || 0} 条`
+    );
+    await loadActive();
+  } catch (error) {
+    errorMessage.value = error?.message || '清理手动添加记录失败';
+  }
+}
+
 function scheduleRssPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(rssPollTimer);
@@ -3885,6 +3934,7 @@ return (_ctx, _cache) => {
                           onTest: testRssTask,
                           onRun: runRssTask,
                           onStop: stopManualTask,
+                          onClearManual: clearManualTask,
                           onControl: controlRss
                         }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id", "running-task-id", "running-mode", "stopping-task-id", "rss-enabled", "controlling"]))
                       : (vtTab.value === 'rss_history')
@@ -4155,6 +4205,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-92058c7f"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-32d271c9"]]);
 
 export { AppPage as default };

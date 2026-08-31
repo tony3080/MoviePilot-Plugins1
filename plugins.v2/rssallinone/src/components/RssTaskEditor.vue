@@ -14,7 +14,7 @@ const props = defineProps({
   controlling: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['save', 'reload', 'test', 'run', 'stop', 'control'])
+const emit = defineEmits(['save', 'reload', 'test', 'run', 'stop', 'clear-manual', 'control'])
 
 const tasks = ref([])
 const expanded = ref([])
@@ -300,6 +300,20 @@ watch(
                   :disabled="stoppingTaskId === task.id"
                   aria-label="立刻停止手动处理"
                   @click.stop="emit('stop', task)"
+                />
+              </template>
+            </VTooltip>
+            <VTooltip v-if="task.config.task_type === 'manual'" text="清理手动添加 qB 记录">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-broom-outline"
+                  size="small"
+                  variant="text"
+                  color="warning"
+                  :disabled="runningTaskId === task.id"
+                  aria-label="清理手动添加 qB 记录"
+                  @click.stop="emit('clear-manual', task)"
                 />
               </template>
             </VTooltip>

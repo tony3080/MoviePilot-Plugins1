@@ -809,6 +809,36 @@ async function stopManualTask(task) {
   }
 }
 
+async function clearManualTask(task) {
+  const taskId = String(task?.id || '')
+  if (!taskId) return
+  const taskName = String(task?.name || taskId)
+  if (!window.confirm(
+    `只清理手动添加任务“${taskName}”的 qB 插件记录？\n\n` +
+    '本地目录识别卡片、qB任务和本地文件都会保留。',
+  )) return
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/data/clear-task-records',
+      {
+        task_id: taskId,
+        qb_category: String(task?.config?.qb_category || ''),
+        confirm: 'CLEAR_MANUAL_TASK',
+      },
+    ))
+    if (!response?.success) throw new Error(response?.message || '清理手动添加记录失败')
+    const counts = response.counts || {}
+    successMessage.value = response.message || (
+      `已清理 qB 卡片 ${counts.media || 0} 条，历史 ${counts.history || 0} 条`
+    )
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '清理手动添加记录失败'
+  }
+}
+
 function scheduleRssPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(rssPollTimer)
@@ -1750,6 +1780,7 @@ onBeforeUnmount(() => {
           @test="testRssTask"
           @run="runRssTask"
           @stop="stopManualTask"
+          @clear-manual="clearManualTask"
           @control="controlRss"
         />
         <VDataTable
