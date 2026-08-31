@@ -861,6 +861,69 @@ class ReadOnlyQbSyncTest(unittest.TestCase):
                 "qb-main", "later"
             ))
 
+    def test_manual_incomplete_torrent_enters_qb_management(self) -> None:
+        class Gateway:
+            @staticmethod
+            def list_downloaders():
+                return [qb_sync.DownloaderView(
+                    name="qb-main",
+                    type="qbittorrent",
+                    enabled=True,
+                    default=True,
+                    ready=True,
+                )]
+
+            @staticmethod
+            def list_torrents(_downloader):
+                return [{
+                    "hash": "INCOMPLETE",
+                    "title": "Incomplete.Movie.2026",
+                    "state": "downloading",
+                    "category": "manual",
+                    "content_path": "/downloads/incomplete.mkv",
+                    "progress": 0.25,
+                    "size": 4,
+                }]
+
+            @staticmethod
+            def torrent_dict(item):
+                return dict(item)
+
+            @staticmethod
+            def recognize(_title):
+                return None, None
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            self.add_rss_task(
+                store,
+                task_id="manual-task",
+                category="manual",
+                task_type="manual",
+            )
+            store.create_background_task("manual-incomplete", qb_sync.QB_TASK_TYPE)
+
+            result = qb_sync.QbSyncService(
+                store=store,
+                gateway=Gateway(),
+            ).run(
+                "manual-incomplete",
+                rss_task_id="manual-task",
+                finish_task=False,
+            )
+
+            self.assertEqual(result["handled"], 1)
+            self.assertEqual(result.get("incomplete_skipped", 0), 0)
+            snapshot = store.get_torrent_snapshot("qb-main", "incomplete")
+            self.assertIsNotNone(snapshot)
+            self.assertEqual(snapshot["present"], 1)
+            self.assertIsNone(store.get_media_item("qb:qb-main:incomplete"))
+
     def test_manual_completed_history_without_card_is_processed_again(self) -> None:
         class Gateway:
             @staticmethod

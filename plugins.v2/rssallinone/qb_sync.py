@@ -1396,24 +1396,6 @@ class QbSyncService:
                         history.get("task_id") or "",
                         preferred_task_type="rss" if not history else "",
                     )
-                    if (
-                        rule
-                        and rule.task_type == "manual"
-                        and not _torrent_completed(raw)
-                    ):
-                        result["incomplete_skipped"] = int(
-                            result.get("incomplete_skipped") or 0
-                        ) + 1
-                        self._update_progress(
-                            task_id,
-                            title,
-                            processed,
-                            succeeded,
-                            failed,
-                            total,
-                            result,
-                        )
-                        continue
                     if _torrent_completed(raw):
                         if rule and rule.task_type == "manual" and not history:
                             history = self._ensure_manual_history(
@@ -1724,12 +1706,7 @@ class QbSyncService:
             if comment_url:
                 raw["comment"] = comment_url
                 raw["source_url_masked"] = mask_url(comment_url)
-        if (
-            task_rule
-            and task_rule.task_type == "manual"
-            and task_rule.site_id
-            and _torrent_completed(raw)
-        ):
+        if task_rule and task_rule.task_type == "manual" and task_rule.site_id:
             try:
                 from .rss_execute import MoviePilotRssGateway
                 from .rss_rename import QbSourceRenameService
@@ -1789,6 +1766,12 @@ class QbSyncService:
                             self.gateway.rename_torrent_name(
                                 server, info_hash, display_name
                             )
+                            # Recognition and the eventual qB snapshot must
+                            # use the authoritative post-rename title.  The
+                            # snapshot is persisted only after this block.
+                            title = display_name
+                            raw["title"] = display_name
+                            raw["name"] = display_name
                     raw = dict(raw)
                     raw["manual_labels"] = manual_labels
             except Exception as error:
