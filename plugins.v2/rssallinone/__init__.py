@@ -52,6 +52,7 @@ from .rss_site_labels import (
     chd_hr_page_url,
     identify_site_kind,
     parse_chd_hr_torrent_ids,
+    count_chd_hr_torrent_links,
     parse_chd_hr_total_count,
 )
 from .rss_tasks import normalize_rss_tasks
@@ -84,7 +85,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.97"
+    plugin_version = "0.13.98"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2410,34 +2411,37 @@ class RssAllInOne(_PluginBase):
             # fetch every numbered page without guessing a fixed limit.
             first_page = MoviePilotRssGateway.fetch_site_html(list_url, access)
             ids = parse_chd_hr_torrent_ids(first_page)
+            link_count = count_chd_hr_torrent_links(first_page)
             total_count = parse_chd_hr_total_count(first_page)
             page_count = (
                 max(1, (total_count + CHD_HR_PAGE_SIZE - 1) // CHD_HR_PAGE_SIZE)
                 if total_count
                 else 1
             )
-            page_stats = [len(ids)]
+            page_stats = [link_count]
             logger.info(
                 f"RSS一条龙：彩虹岛 HR 页面读取，页码=0，"
-                f"解析={len(ids)}，地址={list_url}"
+                f"解析={link_count}，唯一={len(ids)}，地址={list_url}"
             )
             for page_number in range(1, page_count):
                 page_url = chd_hr_page_url(list_url, page_number)
                 page_html = MoviePilotRssGateway.fetch_site_html(page_url, access)
                 page_ids = parse_chd_hr_torrent_ids(page_html)
-                page_stats.append(len(page_ids))
+                page_link_count = count_chd_hr_torrent_links(page_html)
+                page_stats.append(page_link_count)
                 ids.extend(page_ids)
                 logger.info(
                     f"RSS一条龙：彩虹岛 HR 页面读取，页码={page_number}，"
-                    f"解析={len(page_ids)}，地址={page_url}"
+                    f"解析={page_link_count}，唯一={len(page_ids)}，地址={page_url}"
                 )
             parsed_before_dedupe = len(ids)
+            parsed_link_count = sum(page_stats)
             ids = list(dict.fromkeys(ids))
-            if total_count > 0 and len(ids) != total_count:
+            if total_count > 0 and parsed_link_count != total_count:
                 raise ChdHrError(
                     f"HR 页面记录不完整：页面显示 {total_count} 条，"
-                    f"实际解析 {len(ids)} 条，分页解析={page_stats}，"
-                    f"去重前={parsed_before_dedupe}"
+                    f"实际解析 {parsed_link_count} 条，唯一种子 {len(ids)} 条，"
+                    f"分页解析={page_stats}，去重前={parsed_before_dedupe}"
                 )
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error

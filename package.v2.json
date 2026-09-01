@@ -54,7 +54,7 @@
     "name": "RSS一条龙",
     "description": "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。",
     "labels": "RSS,下载管理",
-    "version": "0.13.97",
+    "version": "0.13.98",
     "icon": "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/main/plugins.v2/rssallinone/assets/dragon.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -62,6 +62,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.13.98": "修正重复记录校验",
       "v0.13.97": "优化页面数据读取",
       "v0.13.96": "完善存量处理与识别流程",
       "v0.13.95": "完善任务保护与清理流程",

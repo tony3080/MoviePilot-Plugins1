@@ -362,35 +362,19 @@ def parse_chd_hr_torrent_ids(page: str) -> list[str]:
         re.IGNORECASE,
     ):
         raise ChdHrError("彩虹岛 HR 页面内容无效")
-    # The HR counter and table can briefly disagree, and NexusPHP versions
-    # differ in the order/encoding of query parameters. Prefer the dedicated
-    # torrent table and parse its detail links by query parameters rather than
-    # requiring the exact ``id=...&hit=1`` spelling. Falling back to the old
-    # strict pattern keeps pages without a table protected from recommendation
-    # links elsewhere in the document.
-    scope = _chd_hr_table(text) or _search_results_table(text)
-    ids: list[str] = []
-    fragments = [scope] if scope else [text]
-    for fragment in fragments:
-        for match in CHD_HR_DETAIL_HREF_PATTERN.finditer(fragment):
-            href = html.unescape(str(match.group(2) or "")).strip()
-            parsed = urlparse(href)
-            if parsed.path.casefold().rstrip("/").split("/")[-1] != "details.php":
-                continue
-            query = parse_qs(parsed.query)
-            torrent_id = str((query.get("id") or [""])[0]).strip()
-            # Without a dedicated HR table, retain the hit=1 guard so links
-            # from recommendation sections cannot be mistaken for HR rows.
-            if not scope and str((query.get("hit") or [""])[0]).strip() != "1":
-                continue
-            if torrent_id.isdigit():
-                ids.append(torrent_id)
-        if ids:
-            break
-    if not ids and not scope:
-        # Keep compatibility with malformed-but-common markup where href
-        # attributes cannot be parsed by HTMLParser-style matching.
-        ids = CHD_HR_DETAIL_ID_PATTERN.findall(text)
+    # CHDBits uses a fixed details.php?id=...&hit=1 link for every HR row.
+    # Select the matching records table first, then count only those links;
+    # header cells such as 类型/标题/H&R百分比 contain no matching link and are
+    # therefore never included. If the site's markup changes enough that the
+    # table cannot be isolated, retain the same strict link scan as a fallback.
+    scope = _chd_hr_table(text)
+    if scope:
+        ids = CHD_HR_DETAIL_ID_PATTERN.findall(html.unescape(scope))
+    else:
+        search_scope = _search_results_table(text)
+        ids = _detail_ids_from_links(search_scope) if search_scope else []
+        if not ids:
+            ids = CHD_HR_DETAIL_ID_PATTERN.findall(html.unescape(text))
 
     unique: list[str] = []
     seen = set()
@@ -402,14 +386,26 @@ def parse_chd_hr_torrent_ids(page: str) -> list[str]:
     return unique
 
 
+def count_chd_hr_torrent_links(page: str) -> int:
+    """Count HR detail links before ID de-duplication."""
+    text = str(page or "")
+    if re.search(r"未登录|takelogin\.php|该页面必须在登录后才能访问", text):
+        raise ChdHrError("彩虹岛 HR 页面未登录")
+    if not re.search(
+        r"<title[^>]*>\s*CHDBits\s*::\s*Hit\s+And\s+Runs\b",
+        text,
+        re.IGNORECASE,
+    ):
+        raise ChdHrError("彩虹岛 HR 页面内容无效")
+    scope = _chd_hr_table(text)
+    return len(CHD_HR_DETAIL_ID_PATTERN.findall(html.unescape(scope or text)))
+
+
 def _chd_hr_table(page: object) -> str:
     """Return the fixed-width table used by NexusPHP's HR list page."""
     source = str(page or "")
-    for table in re.findall(
-        r"<table\b[^>]*>.*?</table>",
-        source,
-        flags=re.IGNORECASE | re.DOTALL,
-    ):
+    candidates: list[tuple[int, str]] = []
+    for table in _html_tables(source):
         opening = table.split(">", 1)[0]
         # CHDBits uses border=1/cellspacing=0/cellpadding=5/width=1000
         # for the HR records table. Accept quoted or unquoted attributes and
@@ -432,8 +428,48 @@ def _chd_hr_table(page: object) -> str:
             and normalized.get("cellspacing") == "0"
             and normalized.get("cellpadding") == "5"
         ):
-            return table
-    return ""
+            link_count = len(
+                CHD_HR_DETAIL_ID_PATTERN.findall(html.unescape(table))
+            )
+            candidates.append((link_count, table))
+    if not candidates:
+        return ""
+    link_count, table = max(candidates, key=lambda item: item[0])
+    return table if link_count > 0 else ""
+
+
+def _html_tables(page: object) -> list[str]:
+    """Extract complete tables while respecting nested table elements."""
+    source = str(page or "")
+    token_pattern = re.compile(r"<table\b[^>]*>|</table\s*>", re.IGNORECASE)
+    tokens = list(token_pattern.finditer(source))
+    tables: list[str] = []
+    for index, token in enumerate(tokens):
+        if token.group(0).casefold().startswith("</table"):
+            continue
+        depth = 0
+        for candidate in tokens[index:]:
+            if candidate.group(0).casefold().startswith("</table"):
+                depth -= 1
+                if depth == 0:
+                    tables.append(source[token.start():candidate.end()])
+                    break
+            else:
+                depth += 1
+    return tables
+
+
+def _detail_ids_from_links(fragment: object) -> list[str]:
+    ids: list[str] = []
+    for match in CHD_HR_DETAIL_HREF_PATTERN.finditer(str(fragment or "")):
+        href = html.unescape(str(match.group(2) or "")).strip()
+        parsed = urlparse(href)
+        if parsed.path.casefold().rstrip("/").split("/")[-1] != "details.php":
+            continue
+        torrent_id = str((parse_qs(parsed.query).get("id") or [""])[0]).strip()
+        if torrent_id.isdigit():
+            ids.append(torrent_id)
+    return ids
 
 
 def _decode_nexus_uid(value: object) -> str:

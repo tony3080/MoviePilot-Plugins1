@@ -108,7 +108,14 @@ class ChdHrParseTest(unittest.TestCase):
             <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
             <table border="1" cellspacing="0" cellpadding="5" width="1000">
               <tr><th>类型</th><th>标题</th><th>H&amp;R百分比</th></tr>
-              <tr><td><a href="details.php?id=571440&amp;hit=1">one</a></td></tr>
+              <tr><td class="rowfollow" width="100%" align="left">
+                <a href="details.php?id=577076&amp;hit=1"
+                   title="King Kong 2005 USA Extended V2 BluRay Remux UHD HDR10 2160p DTS-XMA7.1-CHD">
+                  <b>King Kong 2005 USA Extended V2 BluRay Remux UHD HDR10 2160p DTS-XMA7.1-CHD</b>
+                </a>
+                <b>[<font class="free">免费</font>]</b><br>
+                金刚 美版原盘REMUX 国粤英三语
+              </td></tr>
               <tr><td><a href="details.php?id=571331&amp;hit=1">two</a></td></tr>
             </table>
             <table class="recommend"><tr><td>
@@ -117,8 +124,9 @@ class ChdHrParseTest(unittest.TestCase):
         """
         self.assertEqual(
             rss_site_labels.parse_chd_hr_torrent_ids(page),
-            ["571440", "571331"],
+            ["577076", "571331"],
         )
+        self.assertEqual(rss_site_labels.count_chd_hr_torrent_links(page), 2)
 
     def test_fixed_width_hr_table_wins_over_other_torrents_table(self) -> None:
         rows = "".join(
@@ -131,6 +139,10 @@ class ChdHrParseTest(unittest.TestCase):
               <a href="details.php?id=999999&amp;hit=1">推荐</a>
             </td></tr></table>
             <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              <tr><th>其它固定宽度表格</th></tr>
+            </table>
+            <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              <tr><th>类型</th><th>标题</th><th>H&amp;R百分比</th></tr>
               {rows}
             </table>
         """
@@ -138,6 +150,35 @@ class ChdHrParseTest(unittest.TestCase):
             len(rss_site_labels.parse_chd_hr_torrent_ids(page)),
             26,
         )
+
+    def test_fixed_width_hr_table_supports_nested_tables(self) -> None:
+        page = """
+            <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
+            <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              <tr><th><table><tr><td>表头图标</td></tr></table></th></tr>
+              <tr><td class="rowfollow">
+                <a href="details.php?id=577076&amp;hit=1"><b>King Kong</b></a>
+              </td></tr>
+            </table>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_chd_hr_torrent_ids(page),
+            ["577076"],
+        )
+
+    def test_duplicate_hr_link_counts_as_two_records_but_one_unique_id(self) -> None:
+        page = """
+            <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
+            <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              <tr><th>类型</th><th>标题</th><th>H&amp;R百分比</th></tr>
+              <tr><td class="rowfollow"><a href="details.php?id=575919&amp;hit=1">one</a></td></tr>
+              <tr><td class="rowfollow"><a href="details.php?id=575919&amp;hit=1">one</a></td></tr>
+            </table>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_chd_hr_torrent_ids(page), ["575919"]
+        )
+        self.assertEqual(rss_site_labels.count_chd_hr_torrent_links(page), 2)
 
 
 if __name__ == "__main__":
