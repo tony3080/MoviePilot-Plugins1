@@ -485,9 +485,32 @@ class RssExecutionService:
                             "site_labels": outcome.get("site_labels") or {},
                         },
                     )
+                    info_hash = str(outcome.get("info_hash") or "").strip().lower()
+                    torrent_id = str(prepared_entry.get("torrent_id") or "").strip()
+                    if (
+                        bool(config.get("hr_enabled"))
+                        and info_hash
+                        and torrent_id.isdigit()
+                        and outcome_status in {"queued", "queued_warning"}
+                    ):
+                        self.store.upsert_hr_torrent({
+                            "task_id": task_id,
+                            "downloader_id": downloader,
+                            "info_hash": info_hash,
+                            "torrent_id": torrent_id,
+                            "category": category,
+                            "state": "downloading",
+                            "hardlink_state": "pending",
+                            "downstream_state": "pending",
+                            "delete_files": bool(config.get("delete_files")),
+                            "safe_to_delete": False,
+                            "details": {
+                                "created_from": "rss",
+                                "source_key": prepared_entry.get("source_key") or "",
+                            },
+                        })
                     if source_key:
                         existing_sources.add(source_key)
-                    info_hash = str(outcome.get("info_hash") or "").strip().lower()
                     if (
                         self.on_source_ready
                         and info_hash

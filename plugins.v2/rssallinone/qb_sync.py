@@ -1677,6 +1677,33 @@ class QbSyncService:
             completion_already_processed = bool(
                 (rss_history.get("payload") or {}).get("completion_processed")
             )
+        hr_record = (
+            self.store.get_hr_torrent(
+                task_rule.task_id, downloader.name, info_hash
+            )
+            if task_rule and task_rule.hr_enabled
+            else None
+        )
+        if hr_record:
+            hardlink_state = str(
+                hr_record.get("hardlink_state") or "pending"
+            ).strip()
+            if not torrent_completed:
+                hr_state = "downloading"
+            elif hardlink_state == "linked":
+                hr_state = "seeding"
+            elif hardlink_state == "failed":
+                hr_state = "protected"
+            else:
+                hr_state = "completed_pending_link"
+            self.store.update_hr_torrent(
+                task_rule.task_id,
+                downloader.name,
+                info_hash,
+                source_path=content_path,
+                state=hr_state,
+                completed_at=utc_now() if torrent_completed else None,
+            )
         manual_labels: Dict[str, Any] = {}
         if task_rule and task_rule.task_type == "manual":
             raw = dict(raw)
@@ -2136,6 +2163,18 @@ class QbSyncService:
                     "qb_source_path": content_path,
                     "deletion_scope": "persisted_file_mappings_only",
                 }
+                if hr_record:
+                    hr_details = dict(hr_record.get("details") or {})
+                    hr_details["realtime_hardlink"] = realtime_hardlink
+                    self.store.update_hr_torrent(
+                        task_rule.task_id,
+                        downloader.name,
+                        info_hash,
+                        state="seeding",
+                        hardlink_state="linked",
+                        safe_to_delete=True,
+                        details=hr_details,
+                    )
             except Exception as error:
                 realtime_error = str(error)
                 realtime_hardlink = {
@@ -2146,6 +2185,18 @@ class QbSyncService:
                     "error": realtime_error,
                 }
                 details["realtime_hardlink"] = realtime_hardlink
+                if hr_record:
+                    hr_details = dict(hr_record.get("details") or {})
+                    hr_details["realtime_hardlink"] = realtime_hardlink
+                    self.store.update_hr_torrent(
+                        task_rule.task_id,
+                        downloader.name,
+                        info_hash,
+                        state="protected",
+                        hardlink_state="failed",
+                        safe_to_delete=False,
+                        details=hr_details,
+                    )
         if create_candidate and not imported_record:
             self.store.upsert_media_item({
                 "id": media_id,

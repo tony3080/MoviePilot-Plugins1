@@ -492,6 +492,37 @@ class MediaActionService:
                 preserved_paths=protected,
                 stop_roots=self._source_cleanup_roots(mappings),
             )
+            details = item.get("details") or {}
+            task_id = str(
+                (details.get("import_control") or {}).get("task_id") or ""
+            ).strip()
+            downloader_id = str(item.get("downloader_id") or "").strip()
+            info_hash = str(item.get("info_hash") or "").strip().lower()
+            if task_id and downloader_id and info_hash:
+                inventory_verified = bool(mappings) and all(
+                    bool(mapping.get("inventory_exists")) for mapping in mappings
+                )
+                self.store.update_hr_torrent(
+                    task_id,
+                    downloader_id,
+                    info_hash,
+                    downstream_state=(
+                        "cleaned_after_inventory"
+                        if inventory_verified else "missing_unknown"
+                    ),
+                    safe_to_delete=inventory_verified,
+                    details={
+                        **((self.store.get_hr_torrent(
+                            task_id, downloader_id, info_hash
+                        ) or {}).get("details") or {}),
+                        "downstream_cleanup": {
+                            "inventory_verified": inventory_verified,
+                            "completed_at": utc_now(),
+                            "sources_deleted": sources_deleted,
+                            "hardlinks_deleted": links_deleted,
+                        },
+                    },
+                )
             cleanup = self.store.delete_completed_media_workflow(item.get("id"))
         return {
             "message": (

@@ -67,7 +67,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.94"
+    plugin_version = "0.13.95"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1924,6 +1924,7 @@ class RssAllInOne(_PluginBase):
         # MoviePilot 新版返回 DownloaderTorrent（Pydantic 对象），旧版可能返回字典。
         # HR 扫描后续需要多次读取字段，统一转换，避免直接调用对象的 .get。
         category_torrents: list[dict[str, Any]] = []
+        all_qb_hashes: set[str] = set()
         for item in all_torrents:
             try:
                 torrent = MoviePilotQbGateway.torrent_dict(item)
@@ -1932,6 +1933,9 @@ class RssAllInOne(_PluginBase):
                     f"RSS一条龙：HR扫描跳过无法转换的 qB 任务，任务={task_name}：{error}"
                 )
                 continue
+            normalized_hash = str(torrent.get("hash") or "").strip().lower()
+            if normalized_hash:
+                all_qb_hashes.add(normalized_hash)
             if str(torrent.get("category") or "").strip() == category:
                 category_torrents.append(torrent)
         
@@ -1940,75 +1944,82 @@ class RssAllInOne(_PluginBase):
             f"分类={category}，种子总数={len(category_torrents)}"
         )
         
-        seen: set[tuple[str, str]] = set()
+        hr_records = self._store.list_hr_torrents_for_task(task_id)
+        managed_records = {
+            str(record.get("info_hash") or "").strip().lower(): record
+            for record in hr_records
+            if str(record.get("downloader_id") or "").strip() == downloader
+            and str(record.get("category") or "").strip() == category
+            and str(record.get("info_hash") or "").strip()
+        }
         stats = {
             "qb_total": len(category_torrents),
+            "managed": 0,
+            "unmanaged": 0,
             "completed": 0,
             "incomplete": 0,
-            "no_torrent_id": 0,
-            "duplicate": 0,
-            "candidate": 0,
             "in_hr": 0,
+            "protected": 0,
             "deleted": 0,
             "already_absent": 0,
             "failed": 0,
         }
-
-        # 构建 hash -> torrent_id 映射（从 RSS 历史记录）
-        hash_to_torrent_id: dict[str, str] = {}
-        if self._store:
-            for hist in self._store.list_all_rss_history():
-                if hist.get("task_id") != task_id:
-                    continue
-                payload = hist.get("payload") if isinstance(hist.get("payload"), dict) else {}
-                h = str(payload.get("info_hash") or "").strip().lower()
-                tid = str(payload.get("torrent_id") or "").strip()
-                if h and tid and tid.isdigit():
-                    hash_to_torrent_id[h] = tid
-        
-        logger.info(
-            f"RSS一条龙：RSS历史映射构建完成，任务={task_name}，"
-            f"有效映射数={len(hash_to_torrent_id)}"
-        )
-        
+        seen_hashes: set[str] = set()
         for torrent in category_torrents:
             info_hash = str(torrent.get("hash") or "").strip().lower()
             if not info_hash:
                 continue
-            
-            # 检查是否完成
+            record = managed_records.get(info_hash)
+            if not record:
+                # Only torrents registered by a future RSS add are managed.
+                # Existing category contents must never become deletion
+                # candidates through title, comment or RSS-history guessing.
+                stats["unmanaged"] += 1
+                continue
+            stats["managed"] += 1
+            seen_hashes.add(info_hash)
+
             if not self._torrent_is_completed(torrent):
                 stats["incomplete"] += 1
+                self._store.update_hr_torrent(
+                    task_id, downloader, info_hash,
+                    state="downloading",
+                    source_path=str(
+                        torrent.get("content_path")
+                        or torrent.get("save_path")
+                        or record.get("source_path")
+                        or ""
+                    ).strip(),
+                )
                 continue
-            
             stats["completed"] += 1
-            
-            # 从 RSS 历史记录查询 torrent_id
-            torrent_id = hash_to_torrent_id.get(info_hash, "")
-            
-            # 如果历史中没有，尝试从 comment URL 提取
-            if not torrent_id or not torrent_id.isdigit():
-                from .rss_feed import extract_torrent_id
-                comment = str(torrent.get("comment") or "").strip()
-                torrent_id = extract_torrent_id(comment)
-            
-            if not torrent_id or not torrent_id.isdigit():
-                stats["no_torrent_id"] += 1
-                continue
-            
-            key = (downloader, info_hash)
-            if key in seen:
-                stats["duplicate"] += 1
-                continue
-            seen.add(key)
-            
-            stats["candidate"] += 1
-            
+            torrent_id = str(record.get("torrent_id") or "").strip()
             if torrent_id in hr_ids:
                 stats["in_hr"] += 1
+                self._store.update_hr_torrent(
+                    task_id, downloader, info_hash, state="seeding"
+                )
                 continue
-            
-            # 不在 HR 名单中，删除
+            safe_to_delete, safety_reason = self._hr_record_safe_to_delete(record)
+            if not safe_to_delete:
+                stats["protected"] += 1
+                self._store.update_hr_torrent(
+                    task_id, downloader, info_hash,
+                    state="protected",
+                    details={
+                        **(record.get("details") or {}),
+                        "last_protection_reason": safety_reason,
+                        "last_protected_at": utc_now(),
+                    },
+                )
+                logger.warning(
+                    f"RSS一条龙：HR到期但安全保护未通过，已保留 "
+                    f"{downloader}/{info_hash}，硬链接状态="
+                    f"{record.get('hardlink_state') or 'unknown'}，下游状态="
+                    f"{record.get('downstream_state') or 'unknown'}，原因={safety_reason}"
+                )
+                continue
+
             try:
                 result = self._delete_completed_qb_torrent(
                     downloader_id=downloader,
@@ -2020,21 +2031,55 @@ class RssAllInOne(_PluginBase):
                     stats["incomplete"] += 1
                 elif result == "missing":
                     stats["already_absent"] += 1
+                    self._store.update_hr_torrent(
+                        task_id, downloader, info_hash,
+                        state="missing", deleted_at=utc_now(),
+                    )
                 else:
                     stats["deleted"] += 1
+                    self._store.update_hr_torrent(
+                        task_id, downloader, info_hash,
+                        state="deleted", deleted_at=utc_now(),
+                    )
             except Exception as error:
                 stats["failed"] += 1
                 logger.error(
                     f"RSS一条龙：HR 扫描删除失败 "
                     f"{downloader}/{info_hash}：{error}"
                 )
-        
+
+        for info_hash, record in managed_records.items():
+            if info_hash in seen_hashes:
+                continue
+            if info_hash in all_qb_hashes:
+                stats["protected"] += 1
+                self._store.update_hr_torrent(
+                    task_id, downloader, info_hash,
+                    state="protected",
+                    details={
+                        **(record.get("details") or {}),
+                        "last_protection_reason": "qB 分类已改变",
+                        "last_protected_at": utc_now(),
+                    },
+                )
+                continue
+            stats["already_absent"] += 1
+            self._store.update_hr_torrent(
+                task_id, downloader, info_hash,
+                state="missing", deleted_at=utc_now(),
+                details={
+                    **(record.get("details") or {}),
+                    "missing_from_qb_at": utc_now(),
+                },
+            )
+
         logger.info(
             f"RSS一条龙：HR扫描结束，任务={task_name}，"
-            f"qB总数={stats['qb_total']}，已完成={stats['completed']}，"
-            f"有效候选={stats['candidate']}，仍在HR名单={stats['in_hr']}，已删除={stats['deleted']}，"
-            f"已不存在={stats['already_absent']}，未完成={stats['incomplete']}，"
-            f"无种子ID={stats['no_torrent_id']}，重复={stats['duplicate']}，失败={stats['failed']}"
+            f"qB总数={stats['qb_total']}，已接管={stats['managed']}，"
+            f"未接管旧任务={stats['unmanaged']}，已完成={stats['completed']}，"
+            f"未完成={stats['incomplete']}，仍在HR名单={stats['in_hr']}，"
+            f"安全保护未通过={stats['protected']}，已删除={stats['deleted']}，"
+            f"已不存在={stats['already_absent']}，失败={stats['failed']}"
         )
 
 
@@ -2099,8 +2144,6 @@ class RssAllInOne(_PluginBase):
         return bool(config.get("hr_enabled"))
 
     def _chd_hr_torrent_ids(self, access: Any) -> set[str]:
-        beijing = timezone(timedelta(hours=8))
-        today = datetime.now(beijing).date().isoformat()
         access_key = "|".join((
             str(getattr(access, "site_url", "") or "").strip(),
             str(getattr(access, "site_key", "") or "").strip(),
@@ -2119,8 +2162,15 @@ class RssAllInOne(_PluginBase):
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
         self._chd_hr_url_cache[access_key] = list_url
         cached = self._chd_hr_cache.get(list_url)
-        if isinstance(cached, dict) and cached.get("date") == today:
-            return set(cached.get("ids") or [])
+        if isinstance(cached, dict):
+            try:
+                fetched_at = datetime.fromisoformat(str(cached.get("fetched_at") or ""))
+                if fetched_at.tzinfo is None:
+                    fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - fetched_at < timedelta(minutes=5):
+                    return set(cached.get("ids") or [])
+            except (TypeError, ValueError):
+                pass
         try:
             # CHD displays at most 25 HR rows per page.  The first page also
             # exposes the total count next to the H&R link, so use it to
@@ -2138,6 +2188,11 @@ class RssAllInOne(_PluginBase):
                 page_html = MoviePilotRssGateway.fetch_site_html(page_url, access)
                 ids.extend(parse_chd_hr_torrent_ids(page_html))
             ids = list(dict.fromkeys(ids))
+            if total_count > 0 and len(ids) != total_count:
+                raise ChdHrError(
+                    f"HR 页面记录不完整：页面显示 {total_count} 条，"
+                    f"实际解析 {len(ids)} 条"
+                )
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
         if total_count:
@@ -2145,8 +2200,34 @@ class RssAllInOne(_PluginBase):
                 f"RSS一条龙：彩虹岛 HR 分页读取完成，记录总数={total_count}，"
                 f"页数={page_count}，唯一种子数={len(ids)}",
             )
-        self._chd_hr_cache[list_url] = {"date": today, "ids": set(ids)}
-        return set(ids)
+        result = set(ids)
+        self._chd_hr_cache[list_url] = {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "ids": result,
+        }
+        return result
+
+    @staticmethod
+    def _hr_record_safe_to_delete(record: Dict[str, Any]) -> tuple[bool, str]:
+        if not bool(record.get("safe_to_delete")):
+            return False, "记录尚未通过删除安全校验"
+        downstream_state = str(record.get("downstream_state") or "").strip()
+        if downstream_state == "cleaned_after_inventory":
+            return True, "下游文件已在库存验证后由插件清理"
+        if str(record.get("hardlink_state") or "").strip() != "linked":
+            return False, "实时硬链接未成功建立"
+        realtime = (record.get("details") or {}).get("realtime_hardlink") or {}
+        targets = [
+            str(item.get("target") or "").strip()
+            for item in (realtime.get("files") or [])
+            if isinstance(item, dict) and str(item.get("target") or "").strip()
+        ]
+        if not targets:
+            return False, "缺少实时硬链接文件凭据"
+        missing = [target for target in targets if not Path(target).is_file()]
+        if missing:
+            return False, f"实时硬链接文件缺失 {len(missing)} 个且没有库存清理凭据"
+        return True, "实时硬链接文件仍然存在"
 
     @staticmethod
     def _torrent_is_completed(torrent: Dict[str, Any]) -> bool:

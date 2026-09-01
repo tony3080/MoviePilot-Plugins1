@@ -1875,6 +1875,8 @@ class PluginLifecycleTest(unittest.TestCase):
                     "hr-release": {"hash": "hr-release", "progress": 1.0, "state": "pausedUP", "category": "movie", "comment": "https://ptchdbits.co/details.php?id=599999"},
                     "hr-noid": {"hash": "hr-noid", "progress": 1.0, "state": "pausedUP", "category": "movie", "comment": ""},
                     "hr-downloading": {"hash": "hr-downloading", "progress": 0.1, "state": "pausedDL", "category": "movie", "comment": "https://ptchdbits.co/details.php?id=588888"},
+                    "hr-protected": {"hash": "hr-protected", "progress": 1.0, "state": "pausedUP", "category": "movie"},
+                    "hr-moved": {"hash": "hr-moved", "progress": 1.0, "state": "pausedUP", "category": "other"},
                 }
                 histories = (
                     ("hr-hold", "571440"),
@@ -1899,6 +1901,47 @@ class PluginLifecycleTest(unittest.TestCase):
                         "status": "processed",
                         "payload": payload,
                     })
+                for info_hash, torrent_id in (
+                    ("hr-hold", "571440"),
+                    ("hr-release", "599999"),
+                    ("hr-downloading", "588888"),
+                ):
+                    plugin._store.upsert_hr_torrent({
+                        "task_id": "movies",
+                        "downloader_id": "qb-main",
+                        "info_hash": info_hash,
+                        "torrent_id": torrent_id,
+                        "category": "movie",
+                        "state": "seeding",
+                        "hardlink_state": "linked",
+                        "downstream_state": "cleaned_after_inventory",
+                        "delete_files": True,
+                        "safe_to_delete": True,
+                    })
+                plugin._store.upsert_hr_torrent({
+                    "task_id": "movies",
+                    "downloader_id": "qb-main",
+                    "info_hash": "hr-protected",
+                    "torrent_id": "577777",
+                    "category": "movie",
+                    "state": "completed_pending_link",
+                    "hardlink_state": "pending",
+                    "downstream_state": "pending",
+                    "delete_files": True,
+                    "safe_to_delete": False,
+                })
+                plugin._store.upsert_hr_torrent({
+                    "task_id": "movies",
+                    "downloader_id": "qb-main",
+                    "info_hash": "hr-moved",
+                    "torrent_id": "566666",
+                    "category": "movie",
+                    "state": "seeding",
+                    "hardlink_state": "linked",
+                    "downstream_state": "cleaned_after_inventory",
+                    "delete_files": True,
+                    "safe_to_delete": True,
+                })
                 plugin._store.schedule_qb_delete(
                     task_id="movies",
                     task_name="彩虹岛",
@@ -1986,7 +2029,31 @@ class PluginLifecycleTest(unittest.TestCase):
                     module.MoviePilotRssGateway.fetch_site_html = original_fetch
                 self.assertEqual(removed, [("qb-main", "hr-release", True)])
                 remaining = set(torrents)
-                self.assertEqual(remaining, {"hr-hold", "hr-noid", "hr-downloading"})
+                self.assertEqual(remaining, {
+                    "hr-hold", "hr-noid", "hr-downloading",
+                    "hr-protected", "hr-moved",
+                })
+                self.assertIsNone(
+                    plugin._store.get_hr_torrent("movies", "qb-main", "hr-noid")
+                )
+                self.assertEqual(
+                    plugin._store.get_hr_torrent(
+                        "movies", "qb-main", "hr-release"
+                    )["state"],
+                    "deleted",
+                )
+                self.assertEqual(
+                    plugin._store.get_hr_torrent(
+                        "movies", "qb-main", "hr-protected"
+                    )["state"],
+                    "protected",
+                )
+                self.assertEqual(
+                    plugin._store.get_hr_torrent(
+                        "movies", "qb-main", "hr-moved"
+                    )["state"],
+                    "protected",
+                )
                 self.assertGreaterEqual(len(fetch_calls), 1)
             finally:
                 for name, value in previous.items():

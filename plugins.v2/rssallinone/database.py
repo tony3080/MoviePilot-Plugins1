@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 _SQLITE_WRITE_LOCK = threading.RLock()
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -224,6 +224,28 @@ class SQLiteStore:
                     CREATE INDEX IF NOT EXISTS idx_qb_delete_jobs_due
                         ON qb_delete_jobs(state, due_at);
 
+                    CREATE TABLE IF NOT EXISTS hr_torrents (
+                        task_id TEXT NOT NULL,
+                        downloader_id TEXT NOT NULL,
+                        info_hash TEXT NOT NULL,
+                        torrent_id TEXT NOT NULL,
+                        category TEXT NOT NULL DEFAULT '',
+                        source_path TEXT NOT NULL DEFAULT '',
+                        state TEXT NOT NULL DEFAULT 'downloading',
+                        hardlink_state TEXT NOT NULL DEFAULT 'pending',
+                        downstream_state TEXT NOT NULL DEFAULT 'pending',
+                        delete_files INTEGER NOT NULL DEFAULT 0,
+                        safe_to_delete INTEGER NOT NULL DEFAULT 0,
+                        details_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        deleted_at TEXT,
+                        PRIMARY KEY (task_id, downloader_id, info_hash)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_hr_torrents_task_state
+                        ON hr_torrents(task_id, state, updated_at DESC);
+
                     CREATE TABLE IF NOT EXISTS import_watches (
                         id TEXT PRIMARY KEY,
                         media_id TEXT NOT NULL,
@@ -317,6 +339,7 @@ class SQLiteStore:
                 self._migrate_v5(connection)
                 self._migrate_v6(connection)
                 self._migrate_v7(connection)
+                self._migrate_v8(connection)
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -498,6 +521,34 @@ class SQLiteStore:
                 "ALTER TABLE emby_callback_events "
                 "ADD COLUMN result_json TEXT NOT NULL DEFAULT '{}'"
             )
+
+    @staticmethod
+    def _migrate_v8(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS hr_torrents (
+                task_id TEXT NOT NULL,
+                downloader_id TEXT NOT NULL,
+                info_hash TEXT NOT NULL,
+                torrent_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '',
+                source_path TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'downloading',
+                hardlink_state TEXT NOT NULL DEFAULT 'pending',
+                downstream_state TEXT NOT NULL DEFAULT 'pending',
+                delete_files INTEGER NOT NULL DEFAULT 0,
+                safe_to_delete INTEGER NOT NULL DEFAULT 0,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                deleted_at TEXT,
+                PRIMARY KEY (task_id, downloader_id, info_hash)
+            );
+            CREATE INDEX IF NOT EXISTS idx_hr_torrents_task_state
+                ON hr_torrents(task_id, state, updated_at DESC);
+            """
+        )
 
     def health(self) -> Dict[str, Any]:
         with self.connection() as connection:
@@ -994,6 +1045,92 @@ class SQLiteStore:
                 (downloader, normalized_hash),
             )
         return bool(cursor.rowcount)
+
+    def upsert_hr_torrent(self, record: Dict[str, Any]) -> None:
+        task_id = str(record.get("task_id") or "").strip()
+        downloader = str(record.get("downloader_id") or "").strip()
+        info_hash = str(record.get("info_hash") or "").strip().lower()
+        torrent_id = str(record.get("torrent_id") or "").strip()
+        if not task_id or not downloader or not info_hash or not torrent_id.isdigit():
+            raise ValueError("HR记录缺少任务、下载器、info-hash或torrent_id")
+        now = str(record.get("updated_at") or utc_now())
+        with self.write_connection() as connection:
+            connection.execute(
+                """INSERT INTO hr_torrents(
+                    task_id, downloader_id, info_hash, torrent_id, category,
+                    source_path, state, hardlink_state, downstream_state,
+                    delete_files, safe_to_delete, details_json, created_at,
+                    updated_at, completed_at, deleted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(task_id, downloader_id, info_hash) DO UPDATE SET
+                    torrent_id = excluded.torrent_id,
+                    category = excluded.category,
+                    source_path = CASE
+                        WHEN excluded.source_path != '' THEN excluded.source_path
+                        ELSE hr_torrents.source_path END,
+                    state = excluded.state,
+                    hardlink_state = excluded.hardlink_state,
+                    downstream_state = excluded.downstream_state,
+                    delete_files = excluded.delete_files,
+                    safe_to_delete = excluded.safe_to_delete,
+                    details_json = excluded.details_json,
+                    updated_at = excluded.updated_at,
+                    completed_at = COALESCE(excluded.completed_at, hr_torrents.completed_at),
+                    deleted_at = COALESCE(excluded.deleted_at, hr_torrents.deleted_at)""",
+                (
+                    task_id, downloader, info_hash, torrent_id,
+                    str(record.get("category") or "").strip(),
+                    str(record.get("source_path") or "").strip(),
+                    str(record.get("state") or "downloading").strip(),
+                    str(record.get("hardlink_state") or "pending").strip(),
+                    str(record.get("downstream_state") or "pending").strip(),
+                    int(bool(record.get("delete_files"))),
+                    int(bool(record.get("safe_to_delete"))),
+                    self._json_dump(record.get("details") or {}),
+                    str(record.get("created_at") or now), now,
+                    record.get("completed_at"), record.get("deleted_at"),
+                ),
+            )
+
+    def get_hr_torrent(
+        self, task_id: object, downloader_id: object, info_hash: object
+    ) -> Optional[Dict[str, Any]]:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM hr_torrents
+                   WHERE task_id = ? AND downloader_id = ? AND info_hash = ?""",
+                (
+                    str(task_id or "").strip(),
+                    str(downloader_id or "").strip(),
+                    str(info_hash or "").strip().lower(),
+                ),
+            ).fetchone()
+        return self._decode_row(row) if row else None
+
+    def list_hr_torrents_for_task(self, task_id: object) -> List[Dict[str, Any]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM hr_torrents
+                   WHERE task_id = ? AND state NOT IN ('deleted', 'missing')
+                   ORDER BY created_at ASC""",
+                (str(task_id or "").strip(),),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
+    def update_hr_torrent(
+        self,
+        task_id: object,
+        downloader_id: object,
+        info_hash: object,
+        **changes: Any,
+    ) -> bool:
+        current = self.get_hr_torrent(task_id, downloader_id, info_hash)
+        if not current:
+            return False
+        current.update(changes)
+        current["updated_at"] = utc_now()
+        self.upsert_hr_torrent(current)
+        return True
 
     def clear_card_data(self) -> Dict[str, int]:
         with self.write_connection() as connection:

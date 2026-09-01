@@ -181,6 +181,29 @@ class RssExecutionServiceTest(unittest.TestCase):
         self.assertEqual(row["status"], "queued")
         self.assertEqual(row["content_key"], "qb-main:abc123")
 
+    def test_hr_enabled_rss_add_registers_independent_hr_record(self):
+        gateway = FakeGateway()
+
+        result = self._run(gateway, hr_enabled=True, delete_files=True)
+
+        self.assertEqual(result["queued"], 1)
+        record = self.store.get_hr_torrent("task-1", "qb-main", "abc123")
+        self.assertIsNotNone(record)
+        self.assertEqual(record["torrent_id"], "42")
+        self.assertEqual(record["state"], "downloading")
+        self.assertFalse(bool(record["safe_to_delete"]))
+        self.assertTrue(bool(record["delete_files"]))
+
+    def test_existing_qb_torrent_is_not_adopted_by_hr(self):
+        gateway = FakeGateway(existing="existing123")
+
+        result = self._run(gateway, hr_enabled=True, delete_files=True)
+
+        self.assertEqual(result["existing"], 1)
+        self.assertIsNone(
+            self.store.get_hr_torrent("task-1", "qb-main", "existing123")
+        )
+
     def test_file_preference_falls_back_to_url_after_four_attempts(self):
         gateway = FakeGateway(add_results=[
             rss_execute.AddResult(False, reason="temporary") for _ in range(4)
