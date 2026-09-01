@@ -273,6 +273,10 @@ CHD_HR_DETAIL_ID_PATTERN = re.compile(
     r"details\.php\?id=(\d+)(?:&|&amp;)hit=1",
     re.IGNORECASE,
 )
+CHD_HR_DETAIL_HREF_PATTERN = re.compile(
+    r"<a\b[^>]*\bhref\s*=\s*([\"'])(.*?)\1",
+    re.IGNORECASE | re.DOTALL,
+)
 CHD_HR_USER_ID_PATTERN = re.compile(
     r"userdetails\.php\?id=(\d+)",
     re.IGNORECASE,
@@ -358,14 +362,78 @@ def parse_chd_hr_torrent_ids(page: str) -> list[str]:
         re.IGNORECASE,
     ):
         raise ChdHrError("彩虹岛 HR 页面内容无效")
+    # The HR counter and table can briefly disagree, and NexusPHP versions
+    # differ in the order/encoding of query parameters. Prefer the dedicated
+    # torrent table and parse its detail links by query parameters rather than
+    # requiring the exact ``id=...&hit=1`` spelling. Falling back to the old
+    # strict pattern keeps pages without a table protected from recommendation
+    # links elsewhere in the document.
+    scope = _chd_hr_table(text) or _search_results_table(text)
+    ids: list[str] = []
+    fragments = [scope] if scope else [text]
+    for fragment in fragments:
+        for match in CHD_HR_DETAIL_HREF_PATTERN.finditer(fragment):
+            href = html.unescape(str(match.group(2) or "")).strip()
+            parsed = urlparse(href)
+            if parsed.path.casefold().rstrip("/").split("/")[-1] != "details.php":
+                continue
+            query = parse_qs(parsed.query)
+            torrent_id = str((query.get("id") or [""])[0]).strip()
+            # Without a dedicated HR table, retain the hit=1 guard so links
+            # from recommendation sections cannot be mistaken for HR rows.
+            if not scope and str((query.get("hit") or [""])[0]).strip() != "1":
+                continue
+            if torrent_id.isdigit():
+                ids.append(torrent_id)
+        if ids:
+            break
+    if not ids and not scope:
+        # Keep compatibility with malformed-but-common markup where href
+        # attributes cannot be parsed by HTMLParser-style matching.
+        ids = CHD_HR_DETAIL_ID_PATTERN.findall(text)
+
     unique: list[str] = []
     seen = set()
-    for torrent_id in CHD_HR_DETAIL_ID_PATTERN.findall(text):
+    for torrent_id in ids:
         if torrent_id in seen:
             continue
         seen.add(torrent_id)
         unique.append(torrent_id)
     return unique
+
+
+def _chd_hr_table(page: object) -> str:
+    """Return the fixed-width table used by NexusPHP's HR list page."""
+    source = str(page or "")
+    for table in re.findall(
+        r"<table\b[^>]*>.*?</table>",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        opening = table.split(">", 1)[0]
+        # CHDBits uses border=1/cellspacing=0/cellpadding=5/width=1000
+        # for the HR records table. Accept quoted or unquoted attributes and
+        # tolerate arbitrary attribute order/whitespace.
+        attr_matches = re.finditer(
+            r"([\w:-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+            opening,
+            flags=re.IGNORECASE,
+        )
+        attrs = {
+            match.group(1).casefold(): str(
+                match.group(2) or match.group(3) or match.group(4) or ""
+            )
+            for match in attr_matches
+        }
+        normalized = {key: str(value).strip().casefold() for key, value in attrs.items()}
+        if (
+            normalized.get("border") == "1"
+            and normalized.get("width") == "1000"
+            and normalized.get("cellspacing") == "0"
+            and normalized.get("cellpadding") == "5"
+        ):
+            return table
+    return ""
 
 
 def _decode_nexus_uid(value: object) -> str:

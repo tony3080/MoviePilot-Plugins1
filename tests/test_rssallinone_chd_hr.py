@@ -86,6 +86,59 @@ class ChdHrParseTest(unittest.TestCase):
             "https://ptchdbits.co/hnr.php?id=1794",
         )
 
+    def test_parse_torrent_table_accepts_variant_detail_links(self) -> None:
+        page = """
+            <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
+            <table class="torrents">
+              <tr><td><a href="details.php?hit=1&amp;id=571440">one</a></td></tr>
+              <tr><td><a href="/details.php?id=571331&amp;foo=1&amp;hit=1">two</a></td></tr>
+              <tr><td><a href="details.php?id=571222">three</a></td></tr>
+            </table>
+            <table class="recommend"><tr><td>
+              <a href="details.php?id=999999&amp;hit=1">推荐</a>
+            </td></tr></table>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_chd_hr_torrent_ids(page),
+            ["571440", "571331", "571222"],
+        )
+
+    def test_parse_fixed_width_hr_table(self) -> None:
+        page = """
+            <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
+            <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              <tr><th>类型</th><th>标题</th><th>H&amp;R百分比</th></tr>
+              <tr><td><a href="details.php?id=571440&amp;hit=1">one</a></td></tr>
+              <tr><td><a href="details.php?id=571331&amp;hit=1">two</a></td></tr>
+            </table>
+            <table class="recommend"><tr><td>
+              <a href="details.php?id=999999&amp;hit=1">推荐</a>
+            </td></tr></table>
+        """
+        self.assertEqual(
+            rss_site_labels.parse_chd_hr_torrent_ids(page),
+            ["571440", "571331"],
+        )
+
+    def test_fixed_width_hr_table_wins_over_other_torrents_table(self) -> None:
+        rows = "".join(
+            f'<tr><td><a href="details.php?id={index}&amp;hit=1">row</a></td></tr>'
+            for index in range(1, 27)
+        )
+        page = f"""
+            <title>CHDBits :: Hit And Runs - Powered by NexusPHP</title>
+            <table class="torrents"><tr><td>
+              <a href="details.php?id=999999&amp;hit=1">推荐</a>
+            </td></tr></table>
+            <table border="1" cellspacing="0" cellpadding="5" width="1000">
+              {rows}
+            </table>
+        """
+        self.assertEqual(
+            len(rss_site_labels.parse_chd_hr_torrent_ids(page)),
+            26,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

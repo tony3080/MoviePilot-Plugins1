@@ -84,7 +84,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.96"
+    plugin_version = "0.13.97"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -2416,15 +2416,28 @@ class RssAllInOne(_PluginBase):
                 if total_count
                 else 1
             )
+            page_stats = [len(ids)]
+            logger.info(
+                f"RSS一条龙：彩虹岛 HR 页面读取，页码=0，"
+                f"解析={len(ids)}，地址={list_url}"
+            )
             for page_number in range(1, page_count):
                 page_url = chd_hr_page_url(list_url, page_number)
                 page_html = MoviePilotRssGateway.fetch_site_html(page_url, access)
-                ids.extend(parse_chd_hr_torrent_ids(page_html))
+                page_ids = parse_chd_hr_torrent_ids(page_html)
+                page_stats.append(len(page_ids))
+                ids.extend(page_ids)
+                logger.info(
+                    f"RSS一条龙：彩虹岛 HR 页面读取，页码={page_number}，"
+                    f"解析={len(page_ids)}，地址={page_url}"
+                )
+            parsed_before_dedupe = len(ids)
             ids = list(dict.fromkeys(ids))
             if total_count > 0 and len(ids) != total_count:
                 raise ChdHrError(
                     f"HR 页面记录不完整：页面显示 {total_count} 条，"
-                    f"实际解析 {len(ids)} 条"
+                    f"实际解析 {len(ids)} 条，分页解析={page_stats}，"
+                    f"去重前={parsed_before_dedupe}"
                 )
         except Exception as error:
             raise RuntimeError(f"读取彩虹岛 HR 列表失败：{error}") from error
