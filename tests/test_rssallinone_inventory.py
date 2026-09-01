@@ -40,6 +40,7 @@ inventory = load_package_module("inventory")
 layout = load_package_module("layout")
 qb_sync = load_package_module("qb_sync")
 file_manager = load_package_module("file_manager")
+rss_rename = load_package_module("rss_rename")
 
 
 class QbTaskScopeTest(unittest.TestCase):
@@ -694,6 +695,119 @@ class MoviePilotNamingPlanTest(unittest.TestCase):
 
 
 class ReadOnlyQbSyncTest(unittest.TestCase):
+    def test_manual_qb_pending_mandarin_skips_disallowed_category(self) -> None:
+        class Gateway:
+            @staticmethod
+            def get_server(_downloader):
+                raise AssertionError("disallowed category must not rename qB")
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            store.upsert_rss_history({
+                "task_id": "manual-task",
+                "source_key": "manual-source",
+                "content_key": "qb-main:manualhash",
+                "title": "Manual.Show",
+                "status": "queued",
+                "payload": {
+                    "downloader": "qb-main",
+                    "info_hash": "manualhash",
+                    "site_labels": {
+                        "source": "manual",
+                        "mandarin": True,
+                        "mandarin_pending": True,
+                    },
+                },
+            })
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "manualhash"
+            )
+
+            result = qb_sync.QbSyncService(
+                store=store, gateway=Gateway()
+            )._apply_pending_mandarin_label(
+                history=history,
+                downloader_id="qb-main",
+                info_hash="manualhash",
+                category="国产剧",
+                rename_torrent_title=True,
+            )
+
+            self.assertIsNone(result)
+            labels = store.latest_rss_history_for_torrent(
+                "qb-main", "manualhash"
+            )["payload"]["site_labels"]
+            self.assertFalse(labels["mandarin_pending"])
+            self.assertTrue(labels["mandarin_skipped"])
+            self.assertFalse(labels["mandarin_allowed"])
+
+    def test_manual_qb_pending_mandarin_applies_allowed_category(self) -> None:
+        renamed_titles = []
+
+        class Gateway:
+            @staticmethod
+            def get_server(_downloader):
+                return object()
+
+            @staticmethod
+            def rename_torrent_name(_server, _info_hash, title):
+                renamed_titles.append(title)
+
+        class Renamer:
+            def __init__(self, _gateway):
+                pass
+
+            @staticmethod
+            def apply(*_args, **_kwargs):
+                return {
+                    "status": "renamed",
+                    "final_files": [{"name": "Movie-国配-REMUX-U版.mkv"}],
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = database.SQLiteStore(Path(directory) / "state.db")
+            store.initialize()
+            store.upsert_rss_history({
+                "task_id": "manual-task",
+                "source_key": "manual-source",
+                "content_key": "qb-main:manualhash",
+                "title": "Manual.Movie",
+                "status": "queued",
+                "payload": {
+                    "downloader": "qb-main",
+                    "info_hash": "manualhash",
+                    "site_labels": {
+                        "source": "manual",
+                        "mandarin": True,
+                        "mandarin_pending": True,
+                    },
+                },
+            })
+            history = store.latest_rss_history_for_torrent(
+                "qb-main", "manualhash"
+            )
+
+            with mock.patch.object(rss_rename, "QbSourceRenameService", Renamer):
+                result = qb_sync.QbSyncService(
+                    store=store, gateway=Gateway()
+                )._apply_pending_mandarin_label(
+                    history=history,
+                    downloader_id="qb-main",
+                    info_hash="manualhash",
+                    category="外语电影",
+                    rename_torrent_title=True,
+                )
+
+            self.assertEqual(result["status"], "renamed")
+            self.assertEqual(renamed_titles, ["Movie-国配-REMUX-U版"])
+            labels = store.latest_rss_history_for_torrent(
+                "qb-main", "manualhash"
+            )["payload"]["site_labels"]
+            self.assertFalse(labels["mandarin_pending"])
+            self.assertTrue(labels["mandarin_applied"])
+            self.assertTrue(labels["mandarin_allowed"])
+
     def test_manual_override_preserves_specials_and_category(self) -> None:
         override = qb_sync._normalize_manual_override({
             "media_type": "tv",

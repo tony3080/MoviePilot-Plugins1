@@ -40,7 +40,9 @@ from .qb_sync import (
     QB_TASK_TYPE,
     QbSyncService,
     RssTaskQbScope,
+    _manual_mandarin_category_policy,
 )
+from .rss_rename import QbSourceRenameService
 from .rss_feed import RssFeedError, RssPreviewService
 from .rss_execute import RSS_RUN_TASK_TYPE, RssExecutionError, RssExecutionService, MoviePilotRssGateway
 from .rss_site_labels import (
@@ -60,6 +62,21 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 RSS_MAX_CONCURRENT_RUNS = 2
 
 
+def _recognized_media_category(record: Dict[str, Any], details: Dict[str, Any]) -> str:
+    candidates = [
+        (details.get("inventory") or {}).get("category"),
+        details.get("automatic_category"),
+        (details.get("media") or {}).get("category"),
+    ]
+    if "recognition_state" not in record:
+        candidates.append(record.get("category"))
+    for value in candidates:
+        text = str(value or "").strip()
+        if text and text not in {"未识别", "未分类"}:
+            return text
+    return ""
+
+
 class RssAllInOne(_PluginBase):
     plugin_name = "RSS一条龙"
     plugin_desc = "统一管理 PT RSS、qBittorrent、媒体识别与硬链接入库流程。"
@@ -67,7 +84,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.95"
+    plugin_version = "0.13.96"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -109,6 +126,7 @@ class RssAllInOne(_PluginBase):
         self._manual_refresh_task_id = ""
         self._manual_refresh_selected_task_id = ""
         self._manual_refresh_run_mode = "all"
+        self._manual_mandarin_repair_lock = threading.Lock()
         self._qb_delete_lock = threading.Lock()
         self._rss_queue_lock = threading.RLock()
         self._rss_active_run_ids: Dict[str, str] = {}
@@ -403,6 +421,7 @@ class RssAllInOne(_PluginBase):
             self._api("/files/task", self.api_files_task, "GET", "查询文件批量识别任务"),
             self._api("/data/clear-cards", self.api_clear_cards, "POST", "清空 QB 与入库卡片"),
             self._api("/data/clear-task-records", self.api_clear_task_records, "POST", "清理指定任务数据库记录"),
+            self._api("/data/repair-manual-mandarin", self.api_repair_manual_mandarin, "POST", "修复手动添加存量国配"),
             self._api("/categories", self.api_categories, "GET", "可用媒体分类"),
             self._api("/overview", self.api_overview, "GET", "框架总览"),
             self._api("/health", self.api_health, "GET", "依赖与数据库状态"),
@@ -828,6 +847,220 @@ class RssAllInOne(_PluginBase):
             "message": "手动添加任务的 qB 数据库记录已清理，本地卡片和文件均未处理",
             "counts": counts,
         }
+
+    def api_repair_manual_mandarin(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Repair only recognized manual cards with a persisted Mandarin hit."""
+
+        task_id = str((payload or {}).get("task_id") or "").strip()
+        if not task_id:
+            return {"success": False, "message": "缺少 task_id"}
+        store = self._require_store()
+        task = store.get_rss_task(task_id) or {}
+        config = task.get("config") or {}
+        if str(config.get("task_type") or "rss").strip().casefold() != "manual":
+            return {"success": False, "message": "该任务不是手动添加任务，拒绝修复"}
+        if not self._manual_mandarin_repair_lock.acquire(blocking=False):
+            return {"success": False, "message": "手动添加存量国配修复正在执行"}
+
+        summary = {
+            "scanned": 0,
+            "eligible": 0,
+            "unchanged_allowed": 0,
+            "skipped_unidentified": 0,
+            "skipped_no_label": 0,
+            "repaired": 0,
+            "failed": 0,
+            "results": [],
+        }
+        seen_media: set[str] = set()
+        try:
+            for snapshot in store.list_torrent_snapshots_for_task(task_id):
+                summary["scanned"] += 1
+                snapshot_media_id = str(snapshot.get("media_id") or "").strip()
+                if snapshot_media_id:
+                    seen_media.add(snapshot_media_id)
+                details = dict(snapshot.get("details") or {})
+                labels = dict(details.get("site_labels") or details.get("manual_labels") or {})
+                if not labels:
+                    history = store.latest_rss_history_for_torrent(
+                        snapshot.get("downloader_id"), snapshot.get("info_hash")
+                    ) or {}
+                    labels = dict((history.get("payload") or {}).get("site_labels") or {})
+                if not bool(labels.get("mandarin")):
+                    summary["skipped_no_label"] += 1
+                    continue
+                category = _recognized_media_category(snapshot, details)
+                if str(snapshot.get("recognition_state") or "") != "identified" or not category:
+                    summary["skipped_unidentified"] += 1
+                    continue
+                policy = _manual_mandarin_category_policy(category)
+                if policy != "skip":
+                    summary["unchanged_allowed"] += 1
+                    continue
+                summary["eligible"] += 1
+                downloader_id = str(snapshot.get("downloader_id") or "").strip()
+                info_hash = str(snapshot.get("info_hash") or "").strip().lower()
+                try:
+                    server = self._qb_sync_service().gateway.get_server(downloader_id)
+                    rename_result = QbSourceRenameService(
+                        self._qb_sync_service().gateway
+                    ).apply(
+                        server,
+                        info_hash,
+                        rss_title=str(snapshot.get("name") or ""),
+                        rename_enabled=False,
+                        rename_rules="",
+                        add_chinese_title=False,
+                        add_cn=False,
+                        add_fx=False,
+                        remove_cn=True,
+                    )
+                    if rename_result.get("status") == "failed":
+                        raise RuntimeError(rename_result.get("error") or "移除国配标记失败")
+                    self._qb_sync_service().refresh_item(
+                        downloader_id,
+                        info_hash,
+                        allow_completion_transition=False,
+                    )
+                    summary["repaired"] += 1
+                    summary["results"].append({
+                        "kind": "qb",
+                        "downloader_id": downloader_id,
+                        "info_hash": info_hash,
+                        "category": category,
+                        "status": "repaired",
+                    })
+                except Exception as error:
+                    summary["failed"] += 1
+                    summary["results"].append({
+                        "kind": "qb",
+                        "downloader_id": downloader_id,
+                        "info_hash": info_hash,
+                        "category": category,
+                        "status": "failed",
+                        "message": str(error),
+                    })
+
+            for item in store.list_media_for_task(task_id):
+                media_id = str(item.get("id") or "").strip()
+                if not media_id or media_id in seen_media:
+                    continue
+                seen_media.add(media_id)
+                summary["scanned"] += 1
+                details = dict(item.get("details") or {})
+                labels = dict(details.get("site_labels") or details.get("manual_labels") or {})
+                if not labels:
+                    history = store.latest_rss_history_for_torrent(
+                        item.get("downloader_id"), item.get("info_hash")
+                    ) or {}
+                    labels = dict((history.get("payload") or {}).get("site_labels") or {})
+                if not bool(labels.get("mandarin")):
+                    summary["skipped_no_label"] += 1
+                    continue
+                category = _recognized_media_category(item, details)
+                if str(item.get("state") or "") == "unidentified" or not category:
+                    summary["skipped_unidentified"] += 1
+                    continue
+                if _manual_mandarin_category_policy(category) != "skip":
+                    summary["unchanged_allowed"] += 1
+                    continue
+                summary["eligible"] += 1
+                source_kind = str(
+                    (details.get("source_identity") or {}).get("kind") or ""
+                ).strip()
+                if source_kind == "qb_download":
+                    downloader_id = str(item.get("downloader_id") or "").strip()
+                    info_hash = str(item.get("info_hash") or "").strip().lower()
+                    snapshot = (
+                        store.get_torrent_snapshot(downloader_id, info_hash)
+                        if downloader_id and info_hash
+                        else None
+                    )
+                    try:
+                        if snapshot and snapshot.get("present"):
+                            service = self._qb_sync_service()
+                            gateway = service.gateway
+                            rename_result = QbSourceRenameService(gateway).apply(
+                                gateway.get_server(downloader_id),
+                                info_hash,
+                                rss_title=str(item.get("source_name") or item.get("title") or ""),
+                                rename_enabled=False,
+                                rename_rules="",
+                                add_chinese_title=False,
+                                add_cn=False,
+                                add_fx=False,
+                                remove_cn=True,
+                            )
+                            if rename_result.get("status") == "failed":
+                                raise RuntimeError(rename_result.get("error") or "移除国配标记失败")
+                            refreshed = service.refresh_item(
+                                downloader_id,
+                                info_hash,
+                                allow_completion_transition=False,
+                            )
+                        else:
+                            refreshed = self._file_manager_service().remove_manual_mandarin_marker(media_id)
+                        summary["repaired"] += 1
+                        summary["results"].append({
+                            "kind": "media",
+                            "media_id": media_id,
+                            "category": category,
+                            "status": "repaired",
+                            "item": refreshed.get("item") if isinstance(refreshed, dict) else refreshed,
+                        })
+                    except Exception as error:
+                        summary["failed"] += 1
+                        summary["results"].append({
+                            "kind": "media",
+                            "media_id": media_id,
+                            "category": category,
+                            "status": "failed",
+                            "message": str(error),
+                        })
+                    continue
+                if source_kind not in {"local_folder", "local_file", "realtime_hardlink"}:
+                    summary["failed"] += 1
+                    summary["results"].append({
+                        "kind": "media",
+                        "media_id": media_id,
+                        "status": "failed",
+                        "message": "qB 任务当前不可用，无法安全修改源路径",
+                    })
+                    continue
+                try:
+                    result = self._file_manager_service().remove_manual_mandarin_marker(media_id)
+                    summary["repaired"] += 1
+                    summary["results"].append({
+                        "kind": "media",
+                        "media_id": media_id,
+                        "category": category,
+                        "status": "repaired",
+                        "item": result.get("item"),
+                    })
+                except Exception as error:
+                    summary["failed"] += 1
+                    summary["results"].append({
+                        "kind": "media",
+                        "media_id": media_id,
+                        "category": category,
+                        "status": "failed",
+                        "message": str(error),
+                    })
+            return {
+                "success": summary["failed"] == 0,
+                "partial": summary["repaired"] > 0 and summary["failed"] > 0,
+                "message": (
+                    f"存量国配修复完成：修正 {summary['repaired']} 项，"
+                    f"允许分类保持 {summary['unchanged_allowed']} 项，"
+                    f"未识别跳过 {summary['skipped_unidentified']} 项，"
+                    f"失败 {summary['failed']} 项"
+                ),
+                "summary": summary,
+            }
+        finally:
+            self._manual_mandarin_repair_lock.release()
 
     def api_media_delete(
         self, payload: Optional[Dict[str, Any]] = None

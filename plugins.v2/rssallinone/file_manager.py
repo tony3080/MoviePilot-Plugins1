@@ -13,6 +13,7 @@ from .inventory import LocalInventoryChecker, inventory_title_for_tmdb_folder
 from .layout import LibraryLayout
 from .qb_sync import (
     MoviePilotQbGateway,
+    _manual_mandarin_category_policy,
     build_source_target_mappings,
     preserve_refresh_workflow_state,
 )
@@ -187,6 +188,42 @@ class LocalFileManagerService:
             stop_event=stop_event,
         )
 
+    def remove_manual_mandarin_marker(self, media_id: object) -> Dict[str, Any]:
+        identity = str(media_id or "").strip()
+        item = self.store.get_media_item(identity)
+        if not item:
+            raise FileManagerError("媒体记录不存在")
+        details = dict(item.get("details") or {})
+        source_kind = str(
+            (details.get("source_identity") or {}).get("kind") or ""
+        ).strip()
+        if source_kind not in {
+            "local_folder",
+            "local_file",
+            "realtime_hardlink",
+            "qb_download",
+        }:
+            raise FileManagerError("该卡片不是手动添加的本地文件记录")
+        source = _local_entry(item.get("source_path"))
+        files = [source] if source.is_file() else self._media_files(source)
+        if not files:
+            raise FileManagerError("目录中没有可处理的媒体文件")
+        files = self._rename_local_files(files, "", remove_cn=True)
+        if source.is_dir():
+            old_source = source
+            source = self._rename_local_directory(source, "", remove_cn=True)
+            files = [source / path.relative_to(old_source) for path in files]
+        else:
+            source = files[0]
+        import_control = dict(details.get("import_control") or {})
+        return self.recognize_entry(
+            source,
+            manual_override=details.get("manual_override"),
+            refresh_media_id=identity,
+            task_id=import_control.get("task_id"),
+            task_name=import_control.get("task_name"),
+        )
+
     def recognize_current_directory(
         self,
         path: object,
@@ -321,7 +358,15 @@ class LocalFileManagerService:
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
             raise FileManagerError("手动添加处理已停止")
-        site_labels: Dict[str, Any] = {}
+        requested_media_id = str(refresh_media_id or "").strip()
+        requested_item = (
+            self.store.get_media_item(requested_media_id)
+            if requested_media_id else None
+        ) or {}
+        override = _normalize_override(manual_override)
+        site_labels: Dict[str, Any] = dict(
+            (requested_item.get("details") or {}).get("site_labels") or {}
+        )
         if site_id and (recognize_cn or recognize_fx):
             try:
                 from .rss_execute import MoviePilotRssGateway
@@ -353,13 +398,12 @@ class LocalFileManagerService:
                     "status": "failed",
                     "reason": str(error)[:500],
                 }
-        add_cn = bool(site_labels.get("mandarin"))
         add_fx = bool(site_labels.get("effects"))
-        if str(rename_rules or "").strip() or add_cn or add_fx:
+        if str(rename_rules or "").strip() or add_fx:
             files = self._rename_local_files(
                 files,
                 rename_rules,
-                add_cn=add_cn,
+                add_cn=False,
                 add_fx=add_fx,
             )
             if source.is_dir():
@@ -367,17 +411,64 @@ class LocalFileManagerService:
                 source = self._rename_local_directory(
                     source,
                     rename_rules,
-                    add_cn=add_cn,
+                    add_cn=False,
                     add_fx=add_fx,
                 )
                 files = [source / item.relative_to(old_source) for item in files]
             elif files:
                 source = files[0]
 
-        media_id, source_hash = _source_identity(source)
-        requested_media_id = str(refresh_media_id or "").strip()
-        if requested_media_id and requested_media_id != media_id:
-            raise FileManagerError("刷新记录与当前源项目身份不一致")
+        category_probe = str(override.get("category") or "").strip()
+        if site_labels.get("mandarin") and not category_probe:
+            try:
+                if override.get("media_type") and override.get("tmdb_id"):
+                    _probe_meta, probe_media = self.gateway.recognize_manual(
+                        source.name,
+                        override["media_type"],
+                        override["tmdb_id"],
+                        override.get("season"),
+                    )
+                else:
+                    _probe_meta, probe_media = self.gateway.recognize(source.name)
+                category_probe = str(
+                    getattr(probe_media, "category", "") or ""
+                ).strip()
+            except Exception:
+                category_probe = ""
+        add_cn = False
+        if site_labels.get("mandarin"):
+            category_policy = _manual_mandarin_category_policy(category_probe)
+            add_cn = category_policy == "apply"
+            site_labels.update({
+                "source": "manual",
+                "media_category": category_probe,
+                "mandarin_allowed": add_cn,
+                "mandarin_pending": category_policy == "pending",
+                "mandarin_applied": add_cn,
+                "mandarin_skipped": category_policy == "skip",
+            })
+            if category_policy == "skip":
+                site_labels["mandarin_skip_reason"] = (
+                    f"媒体分类“{category_probe}”不检查国语标签"
+                )
+        if add_cn:
+            files = self._rename_local_files(
+                files, "", add_cn=True, add_fx=False
+            )
+            if source.is_dir():
+                old_source = source
+                source = self._rename_local_directory(
+                    source, "", add_cn=True, add_fx=False
+                )
+                files = [source / item.relative_to(old_source) for item in files]
+            elif files:
+                source = files[0]
+
+        generated_media_id, generated_source_hash = _source_identity(source)
+        media_id = requested_media_id or generated_media_id
+        source_hash = str(
+            requested_item.get("info_hash") or generated_source_hash
+        ).strip()
 
         existing = self.store.find_media_by_source_path(str(source))
         if existing and not requested_media_id:
@@ -392,7 +483,6 @@ class LocalFileManagerService:
             owner = self.store.get_media_item(owners[0]) or {"id": owners[0]}
             return self._duplicate_result(owner, "源文件已经属于入库管理卡片")
 
-        override = _normalize_override(manual_override)
         title = source.name
         if override.get("media_type") and override.get("tmdb_id"):
             meta, media = self.gateway.recognize_manual(
@@ -419,6 +509,9 @@ class LocalFileManagerService:
             }
             for index, item in enumerate(files)
         ]
+        previous_import_control = dict(
+            (requested_item.get("details") or {}).get("import_control") or {}
+        )
         details: Dict[str, Any] = {
             "torrent": {
                 "name": title,
@@ -437,8 +530,14 @@ class LocalFileManagerService:
                 "deletion_scope": "persisted_file_mappings_only",
             },
             "import_control": {
-                "task_id": str(task_id or "").strip(),
-                "task_name": str(task_name or "文件管理").strip(),
+                "task_id": str(
+                    task_id or previous_import_control.get("task_id") or ""
+                ).strip(),
+                "task_name": str(
+                    task_name
+                    or previous_import_control.get("task_name")
+                    or "文件管理"
+                ).strip(),
                 "import_enabled": True,
                 "torrent_completed": True,
             },
@@ -610,6 +709,7 @@ class LocalFileManagerService:
         *,
         add_cn: bool = False,
         add_fx: bool = False,
+        remove_cn: bool = False,
     ) -> List[Path]:
         from .rss_rename import parse_rename_rules, transform_name
         rules = parse_rename_rules(rules_text)
@@ -622,6 +722,7 @@ class LocalFileManagerService:
                 rules=rules,
                 add_cn=add_cn,
                 add_fx=add_fx,
+                remove_cn=remove_cn,
             )
             if new_name == current.name:
                 renamed.append(current)
@@ -640,6 +741,7 @@ class LocalFileManagerService:
         *,
         add_cn: bool = False,
         add_fx: bool = False,
+        remove_cn: bool = False,
     ) -> Path:
         from .rss_rename import parse_rename_rules, transform_name
         rules = parse_rename_rules(rules_text)
@@ -650,6 +752,7 @@ class LocalFileManagerService:
             rules=rules,
             add_cn=add_cn,
             add_fx=add_fx,
+            remove_cn=remove_cn,
         )
         if new_name == current.name:
             return current

@@ -159,6 +159,7 @@ def transform_name(
     chinese_title: str = "",
     add_cn: bool = False,
     add_fx: bool = False,
+    remove_cn: bool = False,
 ) -> str:
     transformed = str(name or "")
     for rule in rules:
@@ -171,6 +172,7 @@ def transform_name(
         is_file=is_file,
         add_cn=add_cn,
         add_fx=add_fx,
+        remove_cn=remove_cn,
         anchors=[rule.replacement for rule in rules if rule.replacement],
     )
     _validate_name(transformed)
@@ -183,6 +185,7 @@ def normalize_markers(
     is_file: bool,
     add_cn: bool,
     add_fx: bool,
+    remove_cn: bool = False,
     anchors: Sequence[str] = (),
 ) -> str:
     stem, suffix = _split_extension(name, is_file)
@@ -193,17 +196,19 @@ def normalize_markers(
     detected_fx = bool(re.search(
         rf"(?:^|{separator})(?:特效)(?={separator}|$)", stem
     ))
-    if not (add_cn or add_fx or detected_cn or detected_fx):
+    if not (add_cn or add_fx or remove_cn or detected_cn or detected_fx):
         return name
     stem = re.sub(
         rf"(?:^|{separator})(?:国配|特效)(?={separator}|$)", "", stem
     )
     stem = re.sub(r"-{2,}", "-", stem).strip("-")
     markers = []
-    if add_cn or detected_cn:
+    if not remove_cn and (add_cn or detected_cn):
         markers.append("国配")
     if add_fx or detected_fx:
         markers.append("特效")
+    if not markers:
+        return f"{stem}{suffix}"
     marker_text = "-".join(markers)
     for anchor_text in reversed(list(anchors)):
         anchor_text = str(anchor_text or "").strip()
@@ -257,8 +262,11 @@ class QbSourceRenameService:
         add_chinese_title: bool,
         add_cn: bool = False,
         add_fx: bool = False,
+        remove_cn: bool = False,
     ) -> Dict[str, Any]:
-        enabled = bool(rename_enabled or add_chinese_title or add_cn or add_fx)
+        enabled = bool(
+            rename_enabled or add_chinese_title or add_cn or add_fx or remove_cn
+        )
         chinese_title = extract_chinese_title(rss_title) if add_chinese_title else ""
         rules = parse_rename_rules(rename_rules) if rename_enabled else []
         if not enabled:
@@ -281,6 +289,7 @@ class QbSourceRenameService:
             chinese_title=chinese_title,
             add_cn=add_cn,
             add_fx=add_fx,
+            remove_cn=remove_cn,
         )
         if not file_ops and not directory_ops:
             final_files, read_error = self._safe_list(server, info_hash)
@@ -514,6 +523,7 @@ def build_rename_plan(
     chinese_title: str,
     add_cn: bool,
     add_fx: bool,
+    remove_cn: bool = False,
 ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     file_items = list(files or [])
     file_ops: List[Tuple[str, str]] = []
@@ -533,6 +543,7 @@ def build_rename_plan(
             chinese_title=chinese_title,
             add_cn=add_cn,
             add_fx=add_fx,
+            remove_cn=remove_cn,
         )
         new_path = old_path.with_name(new_name).as_posix()
         if new_path != old_path.as_posix():
@@ -551,6 +562,7 @@ def build_rename_plan(
             chinese_title=chinese_title,
             add_cn=add_cn,
             add_fx=add_fx,
+            remove_cn=remove_cn,
         )
         new_path = old_path.with_name(new_name).as_posix()
         if new_path != old_path.as_posix():

@@ -839,6 +839,31 @@ async function clearManualTask(task) {
   }
 }
 
+async function repairManualMandarin(task) {
+  const taskId = String(task?.id || '')
+  if (!taskId) return
+  const taskName = String(task?.name || taskId)
+  if (!window.confirm(
+    `只修复手动添加任务“${taskName}”中已识别且明确命中国配的存量卡片？\n\n` +
+    '允许国配的媒体分类不会修改，未识别卡片会跳过。',
+  )) return
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/data/repair-manual-mandarin',
+      { task_id: taskId },
+    ))
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || '修复存量国配失败')
+    }
+    successMessage.value = response.message || '存量国配修复完成'
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '修复存量国配失败'
+  }
+}
+
 function scheduleRssPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(rssPollTimer)
@@ -1781,6 +1806,7 @@ onBeforeUnmount(() => {
           @run="runRssTask"
           @stop="stopManualTask"
           @clear-manual="clearManualTask"
+          @repair-manual-mandarin="repairManualMandarin"
           @control="controlRss"
         />
         <VDataTable

@@ -698,6 +698,19 @@ class SQLiteStore:
             ).fetchone()
         return self._decode_row(row) if row else None
 
+    def list_media_for_task(self, task_id: object) -> List[Dict[str, Any]]:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return []
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM media_items
+                   WHERE json_extract(details_json, '$.import_control.task_id') = ?
+                   ORDER BY updated_at DESC, id ASC""",
+                (normalized,),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
+
     def find_media_by_source_path(self, source_path: object) -> Optional[Dict[str, Any]]:
         identity = _path_identity(source_path)
         if not identity:
@@ -1106,6 +1119,22 @@ class SQLiteStore:
                 ),
             ).fetchone()
         return self._decode_row(row) if row else None
+
+    def list_torrent_snapshots_for_task(
+        self, task_id: object
+    ) -> List[Dict[str, Any]]:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return []
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT * FROM torrent_snapshots
+                   WHERE present = 1
+                     AND json_extract(details_json, '$.import_control.task_id') = ?
+                   ORDER BY updated_at DESC, downloader_id ASC, info_hash ASC""",
+                (normalized,),
+            ).fetchall()
+        return [self._decode_row(row) for row in rows]
 
     def list_hr_torrents_for_task(self, task_id: object) -> List[Dict[str, Any]]:
         with self.connection() as connection:
@@ -1892,6 +1921,17 @@ class SQLiteStore:
                    ORDER BY position ASC, created_at ASC"""
             ).fetchall()
         return [self._decode_row(row) for row in rows]
+
+    def get_rss_task(self, task_id: object) -> Optional[Dict[str, Any]]:
+        normalized = str(task_id or "").strip()
+        if not normalized:
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM rss_tasks WHERE id = ?",
+                (normalized,),
+            ).fetchone()
+        return self._decode_row(row) if row else None
 
     def replace_rss_tasks(
         self,

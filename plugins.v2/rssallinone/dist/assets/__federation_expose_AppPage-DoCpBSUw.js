@@ -28,7 +28,7 @@ const _sfc_main$4 = {
   rssEnabled: { type: Boolean, default: true },
   controlling: { type: Boolean, default: false },
 },
-  emits: ['save', 'reload', 'test', 'run', 'stop', 'clear-manual', 'control'],
+  emits: ['save', 'reload', 'test', 'run', 'stop', 'clear-manual', 'repair-manual-mandarin', 'control'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -414,6 +414,25 @@ return (_ctx, _cache) => {
                                   disabled: __props.runningTaskId === task.id,
                                   "aria-label": "清理手动添加 qB 记录",
                                   onClick: _withModifiers$1($event => (emit('clear-manual', task)), ["stop"])
+                                }), null, 16, ["disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual')
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 6,
+                              text: "修复存量国配"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-flag-remove-outline",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "info",
+                                  disabled: __props.runningTaskId === task.id,
+                                  "aria-label": "修复存量国配",
+                                  onClick: _withModifiers$1($event => (emit('repair-manual-mandarin', task)), ["stop"])
                                 }), null, 16, ["disabled", "onClick"])
                               ]),
                               _: 2
@@ -858,7 +877,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-d8fbfe7a"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-09b8818a"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
@@ -2721,6 +2740,31 @@ async function clearManualTask(task) {
   }
 }
 
+async function repairManualMandarin(task) {
+  const taskId = String(task?.id || '');
+  if (!taskId) return
+  const taskName = String(task?.name || taskId);
+  if (!window.confirm(
+    `只修复手动添加任务“${taskName}”中已识别且明确命中国配的存量卡片？\n\n` +
+    '允许国配的媒体分类不会修改，未识别卡片会跳过。',
+  )) return
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const response = unwrap(await props.api.post(
+      'plugin/RssAllInOne/data/repair-manual-mandarin',
+      { task_id: taskId },
+    ));
+    if (!response?.success && !response?.partial) {
+      throw new Error(response?.message || '修复存量国配失败')
+    }
+    successMessage.value = response.message || '存量国配修复完成';
+    await loadActive();
+  } catch (error) {
+    errorMessage.value = error?.message || '修复存量国配失败';
+  }
+}
+
 function scheduleRssPoll(taskId) {
   if (!taskId) return
   window.clearTimeout(rssPollTimer);
@@ -3935,6 +3979,7 @@ return (_ctx, _cache) => {
                           onRun: runRssTask,
                           onStop: stopManualTask,
                           onClearManual: clearManualTask,
+                          onRepairManualMandarin: repairManualMandarin,
                           onControl: controlRss
                         }, null, 8, ["items", "downloaders", "sites", "loading", "testing-task-id", "running-task-id", "running-mode", "stopping-task-id", "rss-enabled", "controlling"]))
                       : (vtTab.value === 'rss_history')
@@ -4205,6 +4250,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-32d271c9"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f81ad22a"]]);
 
 export { AppPage as default };

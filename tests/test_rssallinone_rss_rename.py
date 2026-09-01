@@ -182,6 +182,22 @@ class RenamePlanTest(unittest.TestCase):
         )
         self.assertEqual(value, "Movie-国配-特效-REMUX-U版.mkv")
 
+    def test_remove_cn_marker_preserves_effects_and_extension(self):
+        value = rss_rename.transform_name(
+            "Movie-国配-特效-REMUX-U版.mkv",
+            is_file=True,
+            remove_cn=True,
+        )
+        self.assertEqual(value, "Movie-特效-REMUX-U版.mkv")
+
+    def test_remove_cn_marker_can_remove_only_marker(self):
+        value = rss_rename.transform_name(
+            "Movie-国配.mkv",
+            is_file=True,
+            remove_cn=True,
+        )
+        self.assertEqual(value, "Movie.mkv")
+
     def test_rule_replacement_is_used_as_marker_anchor_without_remux(self):
         value = rss_rename.transform_name(
             "Movie.V2.mkv",

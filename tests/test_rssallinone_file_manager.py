@@ -7,6 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,9 +32,150 @@ def load_module(name: str):
 
 database = load_module("database")
 file_manager = load_module("file_manager")
+rss_execute = load_module("rss_execute")
+rss_site_labels = load_module("rss_site_labels")
 
 
 class LocalFileManagerTest(unittest.TestCase):
+    @staticmethod
+    def _manual_label_gateway(category):
+        class Media:
+            title = "Demo"
+            tmdb_id = None
+            season = None
+
+            def __init__(self):
+                self.category = category
+
+        class Gateway:
+            @staticmethod
+            def recognize(_title):
+                return types.SimpleNamespace(begin_season=None), Media()
+
+            @staticmethod
+            def recognize_manual(_title, _media_type, _tmdb_id, _season):
+                return types.SimpleNamespace(begin_season=None), Media()
+
+            @staticmethod
+            def media_type(_media):
+                return "tv" if category == "国产剧" else "movie"
+
+            @staticmethod
+            def media_payload(media):
+                return {"title": media.title, "category": media.category}
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {}
+
+        return Gateway()
+
+    def _recognize_with_manual_labels(self, root, category):
+        class Labels:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            @staticmethod
+            def detect(**_kwargs):
+                return {
+                    "status": "matched",
+                    "mandarin": True,
+                    "effects": True,
+                    "request_url_masked": "https://example.invalid/details.php?id=1",
+                }
+
+        project = root / "Demo.2026"
+        project.mkdir()
+        (project / "Demo.2026.mkv").write_bytes(b"movie")
+        store = database.SQLiteStore(root / "state.db")
+        store.initialize()
+        service = file_manager.LocalFileManagerService(
+            store, gateway=self._manual_label_gateway(category)
+        )
+        with mock.patch.object(
+            rss_execute.MoviePilotRssGateway,
+            "site_access",
+            return_value=object(),
+        ), mock.patch.object(rss_site_labels, "SiteLabelService", Labels):
+            return service.recognize_entry(
+                project,
+                site_id="site-1",
+                recognize_cn=True,
+                recognize_fx=True,
+            )
+
+    def test_manual_local_mandarin_is_skipped_for_disallowed_category(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            result = self._recognize_with_manual_labels(root, "国产剧")
+
+            item = result["item"]
+            source = Path(item["source_path"])
+            self.assertIn("特效", source.name)
+            self.assertNotIn("国配", source.name)
+            self.assertNotIn("国配", next(source.glob("*.mkv")).name)
+            labels = item["details"]["site_labels"]
+            self.assertFalse(labels["mandarin_allowed"])
+            self.assertTrue(labels["mandarin_skipped"])
+
+    def test_manual_local_mandarin_is_applied_for_allowed_category(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            result = self._recognize_with_manual_labels(root, "外语电影")
+
+            item = result["item"]
+            source = Path(item["source_path"])
+            self.assertIn("国配", source.name)
+            self.assertIn("国配", next(source.glob("*.mkv")).name)
+            labels = item["details"]["site_labels"]
+            self.assertTrue(labels["mandarin_allowed"])
+            self.assertTrue(labels["mandarin_applied"])
+
+    def test_manual_local_unclassified_mandarin_is_kept_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            result = self._recognize_with_manual_labels(root, "")
+
+            item = result["item"]
+            source = Path(item["source_path"])
+            self.assertNotIn("国配", source.name)
+            self.assertNotIn("国配", next(source.glob("*.mkv")).name)
+            labels = item["details"]["site_labels"]
+            self.assertTrue(labels["mandarin_pending"])
+            self.assertFalse(labels["mandarin_applied"])
+
+    def test_manual_local_pending_mandarin_applies_after_manual_recognition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initial = self._recognize_with_manual_labels(root, "")
+            item = initial["item"]
+            original_id = item["id"]
+            store = database.SQLiteStore(root / "state.db")
+            store.initialize()
+            service = file_manager.LocalFileManagerService(
+                store, gateway=self._manual_label_gateway("")
+            )
+
+            refreshed = service.recognize_entry(
+                item["source_path"],
+                manual_override={
+                    "media_type": "movie",
+                    "tmdb_id": 42,
+                    "category": "外语电影",
+                },
+                refresh_media_id=original_id,
+            )
+
+            refreshed_item = refreshed["item"]
+            self.assertEqual(refreshed_item["id"], original_id)
+            self.assertIn("国配", Path(refreshed_item["source_path"]).name)
+            labels = refreshed_item["details"]["site_labels"]
+            self.assertFalse(labels["mandarin_pending"])
+            self.assertTrue(labels["mandarin_applied"])
+
     def test_same_filename_in_different_paths_has_distinct_source_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

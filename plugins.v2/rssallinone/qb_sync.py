@@ -1704,7 +1704,9 @@ class QbSyncService:
                 state=hr_state,
                 completed_at=utc_now() if torrent_completed else None,
             )
-        manual_labels: Dict[str, Any] = {}
+        manual_labels: Dict[str, Any] = dict(
+            (rss_history.get("payload") or {}).get("site_labels") or {}
+        )
         if task_rule and task_rule.task_type == "manual":
             raw = dict(raw)
             comment_url = _extract_torrent_source_url(raw)
@@ -1752,16 +1754,26 @@ class QbSyncService:
                     logger=self.logger,
                     min_request_interval_seconds=task_rule.query_interval,
                 )
-                manual_labels = label_service.detect(
-                    access=access,
-                    title=title,
-                    detail_url=comment_url,
-                    torrent_id=torrent_id,
-                    cn_keywords="国语,国配",
-                    recognize_cn=True,
-                    recognize_fx=True,
-                    allow_search_without_detail=True,
-                )
+                if str(manual_labels.get("source") or "") != "manual":
+                    manual_labels = label_service.detect(
+                        access=access,
+                        title=title,
+                        detail_url=comment_url,
+                        torrent_id=torrent_id,
+                        cn_keywords="国语,国配",
+                        recognize_cn=True,
+                        recognize_fx=True,
+                        allow_search_without_detail=True,
+                    )
+                    manual_labels.update({
+                        "source": "manual",
+                        "media_category": "",
+                        "mandarin_allowed": False,
+                        "mandarin_pending": bool(
+                            manual_labels.get("mandarin")
+                        ),
+                        "mandarin_applied": False,
+                    })
                 if stop_event and stop_event.is_set():
                     raise RuntimeError("手动添加处理已停止")
                 manual_source_url = str(
@@ -1770,10 +1782,19 @@ class QbSyncService:
                 if manual_source_url:
                     raw["source_url_masked"] = mask_url(manual_source_url)
                     raw["comment"] = manual_source_url
+                source_processing_key = hashlib.sha256(
+                    (
+                        f"{task_rule.rename_rules}\n"
+                        f"effects={bool(manual_labels.get('effects'))}"
+                    ).encode("utf-8")
+                ).hexdigest()
                 if (
-                    manual_labels.get("mandarin")
-                    or manual_labels.get("effects")
-                    or task_rule.rename_rules
+                    str(manual_labels.get("source_processing_key") or "")
+                    != source_processing_key
+                    and (
+                        manual_labels.get("effects")
+                        or task_rule.rename_rules
+                    )
                 ):
                     server = self.gateway.get_server(downloader.name)
                     rename_result = QbSourceRenameService(self.gateway).apply(
@@ -1783,7 +1804,7 @@ class QbSyncService:
                         rename_enabled=bool(task_rule.rename_rules),
                         rename_rules=task_rule.rename_rules,
                         add_chinese_title=False,
-                        add_cn=bool(manual_labels.get("mandarin")),
+                        add_cn=False,
                         add_fx=bool(manual_labels.get("effects")),
                     )
                     manual_labels["rename"] = rename_result
@@ -1801,6 +1822,20 @@ class QbSyncService:
                             raw["name"] = display_name
                     raw = dict(raw)
                     raw["manual_labels"] = manual_labels
+                if str(
+                    (manual_labels.get("rename") or {}).get("status") or ""
+                ) != "failed":
+                    manual_labels["source_processing_key"] = source_processing_key
+                history_payload = dict(rss_history.get("payload") or {})
+                history_payload["site_labels"] = manual_labels
+                self.store.upsert_rss_history({
+                    **rss_history,
+                    "payload": history_payload,
+                    "updated_at": utc_now(),
+                })
+                rss_history = self.store.latest_rss_history_for_torrent(
+                    downloader.name, info_hash
+                ) or rss_history
             except Exception as error:
                 if stop_event and stop_event.is_set():
                     raise RuntimeError("手动添加处理已停止") from error
@@ -1921,16 +1956,15 @@ class QbSyncService:
             category = str(override.get("category") or automatic_category).strip()
             poster = self.gateway.poster(media)
             pending_labels = _pending_mandarin_labels(rss_history)
-            if (
-                _valid_tmdb_id(tmdb_id)
-                and pending_labels
-                and _allows_mandarin_category(category)
-            ):
+            if _valid_tmdb_id(tmdb_id) and pending_labels:
                 rename_result = self._apply_pending_mandarin_label(
                     history=rss_history,
                     downloader_id=downloader.name,
                     info_hash=info_hash,
                     category=category,
+                    rename_torrent_title=bool(
+                        task_rule and task_rule.task_type == "manual"
+                    ),
                 )
                 if rename_result and rename_result.get("status") != "failed":
                     # Re-read the renamed qB files and run recognition again so
@@ -1946,6 +1980,12 @@ class QbSyncService:
                         allow_completion_transition=allow_completion_transition,
                         stop_event=stop_event,
                     )
+                rss_history = self.store.latest_rss_history_for_torrent(
+                    downloader.name, info_hash
+                ) or rss_history
+                manual_labels = dict(
+                    (rss_history.get("payload") or {}).get("site_labels") or {}
+                )
             if not _valid_tmdb_id(tmdb_id):
                 recognition_error = "MoviePilot 未返回有效 TMDB ID"
                 inventory_details = {
@@ -2328,14 +2368,31 @@ class QbSyncService:
         downloader_id: str,
         info_hash: str,
         category: str,
+        rename_torrent_title: bool = False,
     ) -> Optional[Dict[str, Any]]:
         payload = dict(history.get("payload") or {})
         labels = dict(payload.get("site_labels") or {})
         if not labels.get("mandarin_pending") or not labels.get("mandarin"):
             return None
-        if not _allows_mandarin_category(category):
+        category_policy = _manual_mandarin_category_policy(category)
+        if category_policy == "pending":
+            labels["media_category"] = str(category or "").strip()
+            labels["mandarin_allowed"] = False
+            payload["site_labels"] = labels
+            self.store.upsert_rss_history({
+                **history,
+                "payload": payload,
+                "updated_at": utc_now(),
+            })
+            return None
+        if category_policy == "skip":
             labels["mandarin_pending"] = False
             labels["mandarin_skipped"] = True
+            labels["mandarin_allowed"] = False
+            labels["media_category"] = str(category or "").strip()
+            labels["mandarin_skip_reason"] = (
+                f"媒体分类“{category}”不检查国语标签"
+            )
             payload["site_labels"] = labels
             self.store.upsert_rss_history({
                 **history,
@@ -2366,12 +2423,22 @@ class QbSyncService:
         if result.get("status") != "failed":
             labels["mandarin_pending"] = False
             labels["mandarin_applied"] = True
+            labels["mandarin_allowed"] = True
+            labels["media_category"] = str(category or "").strip()
             payload["site_labels"] = labels
             self.store.upsert_rss_history({
                 **history,
                 "payload": payload,
                 "updated_at": utc_now(),
             })
+            if rename_torrent_title:
+                display_name = _rename_result_display_name(result)
+                if display_name:
+                    self.gateway.rename_torrent_name(
+                        self.gateway.get_server(downloader_id),
+                        info_hash,
+                        display_name,
+                    )
             self._log(
                 "info",
                 f"RSS一条龙：延迟添加国配标签完成 "
@@ -2562,6 +2629,15 @@ def _allows_mandarin_category(category: object) -> bool:
     from .rss_execute import MANDARIN_MEDIA_CATEGORIES
 
     return str(category or "").strip() in MANDARIN_MEDIA_CATEGORIES
+
+
+def _manual_mandarin_category_policy(category: object) -> str:
+    normalized = str(category or "").strip()
+    if not normalized:
+        return "pending"
+    if _allows_mandarin_category(normalized):
+        return "apply"
+    return "skip"
 
 
 def _completion_requires_processing(
