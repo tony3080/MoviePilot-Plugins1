@@ -187,6 +187,17 @@ class RenamePlanTest(unittest.TestCase):
         )
         self.assertEqual(value, "Movie-国配-特效-REMUX-U版.mkv")
 
+    def test_chinese_title_invalid_filename_punctuation_is_safely_converted(self):
+        value = rss_rename.transform_name(
+            "Aquaman.and.the.Lost.Kingdom.mkv",
+            is_file=True,
+            chinese_title="海王2:失落的王国",
+        )
+        self.assertEqual(
+            value,
+            "[海王2：失落的王国].Aquaman.and.the.Lost.Kingdom.mkv",
+        )
+
     def test_existing_mandarin_marker_moves_before_remux_rule_anchor(self):
         value = rss_rename.transform_name(
             "Movie.V2-REMUX-U版-国配.mkv",

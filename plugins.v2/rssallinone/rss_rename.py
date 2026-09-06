@@ -9,6 +9,17 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+FILENAME_TITLE_TRANSLATION = str.maketrans({
+    "\\": "＼",
+    "/": "／",
+    ":": "：",
+    "*": "＊",
+    "?": "？",
+    '"': "＂",
+    "<": "＜",
+    ">": "＞",
+    "|": "｜",
+})
 CHINESE_TEXT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 NOISE_WORDS = {
     "国语", "国配", "國語", "國配", "粤语", "普通话", "双语", "多语",
@@ -141,6 +152,13 @@ def extract_chinese_title(rss_title: object) -> str:
     return (preferred or candidates)[0]
 
 
+def sanitize_filename_title(value: object) -> str:
+    """Make a detail-page/RSS Chinese title safe as a filename component."""
+    text = str(value or "").translate(FILENAME_TITLE_TRANSLATION)
+    text = re.sub(r"[\x00-\x1f]", " ", text)
+    return re.sub(r"\s+", " ", text).strip(" .")
+
+
 def _trim_technical_title_suffix(value: str) -> str:
     text = str(value or "").strip()
     cutoffs = []
@@ -176,9 +194,10 @@ def transform_name(
     transformed = str(name or "")
     for rule in rules:
         transformed = rule.apply(transformed)
-    if chinese_title and not has_meaningful_chinese(transformed):
+    safe_chinese_title = sanitize_filename_title(chinese_title)
+    if safe_chinese_title and not has_meaningful_chinese(transformed):
         stem, suffix = _split_extension(transformed, is_file)
-        transformed = f"[{chinese_title}].{stem}{suffix}"
+        transformed = f"[{safe_chinese_title}].{stem}{suffix}"
     transformed = normalize_markers(
         transformed,
         is_file=is_file,
