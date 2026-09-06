@@ -58,6 +58,9 @@ const managedHeaders = [
   { title: '订阅', key: 'title', minWidth: 200 },
   { title: '季度', key: 'season', width: 80 },
   { title: '目标总集数', key: 'expected_total', width: 112 },
+  { title: '当前进度', key: 'observed_progress', width: 110 },
+  { title: 'TMDB季总集数', key: 'tmdb_check', minWidth: 150 },
+  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 100 },
   { title: '状态', key: 'status', width: 180 },
   { title: '下次检查', key: 'check_after', minWidth: 190 },
   { title: '说明', key: 'reason', minWidth: 260 },
@@ -116,6 +119,17 @@ const supplementStatusLabels = {
 }
 const managedItems = computed(() => managed.value.map(item => ({
   ...item,
+  check_after: item.check_after || item.stale_check_after || '-',
+  observed_progress: (
+    item.observed_completed !== null
+    && item.observed_completed !== undefined
+    && item.observed_total !== null
+    && item.observed_total !== undefined
+  ) ? `${item.observed_completed}/${item.observed_total}` : '-',
+  tmdb_check: item.tmdb_season_total
+    ? `${item.tmdb_season_total} 集`
+    : '-',
+  douban_rechecked_total: item.douban_rechecked_total || '-',
   status: managedStatusLabels[item.status] || item.status || '-',
 })))
 const translatedSupplementItems = computed(() => Object.values(

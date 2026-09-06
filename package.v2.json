@@ -1,9 +1,9 @@
 {
   "DoubanSubscribe": {
     "name": "豆瓣订阅助手",
-    "description": "从 RSS 和猫眼榜单发现剧集，锁定豆瓣总集数，并补搜今日未更新订阅。",
+    "description": "从 RSS 和猫眼榜单发现剧集，锁定并复核豆瓣总集数，补搜未更新订阅。",
     "labels": "订阅",
-    "version": "0.5.8",
+    "version": "0.5.9",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -11,6 +11,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.5.9": "新增连续 10 天未更新订阅的总集数复核；仅比较 TMDB 当前季总集数、豆瓣总集数与 MoviePilot 已获得集数，三者一致时自动修正并完成订阅，不判断 TMDB Ended 状态；手动总集数大于 200 集的订阅不参与此规则",
       "v0.5.8": "重新发布 0.5.7 功能版本，用于安装中断后的完整更新拉取；插件逻辑不变",
       "v0.5.7": "增加首播年份下限配置；设置 2026 时仅订阅 2026 年及以后首播的剧集，较早条目在 IMDb/TMDB 查询前跳过并持久缓存，降低门槛后自动恢复处理",
       "v0.5.6": "修复 MoviePilot 严格标题子串过滤导致 TMDB 原始候选丢失的问题；父剧基础名搜索为空时受控调用内置 TMDB 原始搜索，并继续执行真实分季与可信度校验",
