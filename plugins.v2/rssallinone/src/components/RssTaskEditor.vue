@@ -331,6 +331,21 @@ watch(
                 />
               </template>
             </VTooltip>
+            <VTooltip v-if="task.config.task_type === 'manual'" text="修复存量详情页、中文标题和标签位置">
+              <template #activator="{ props: tooltipProps }">
+                <VBtn
+                  v-bind="tooltipProps"
+                  icon="mdi-database-refresh-outline"
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  :loading="runningTaskId === task.id && runningMode === 'repair'"
+                  :disabled="!task.enabled || runningTaskId === task.id"
+                  aria-label="修复存量元数据"
+                  @click.stop="emit('run', { task, runMode: 'repair' })"
+                />
+              </template>
+            </VTooltip>
             <VTooltip text="测试 RSS">
               <template #activator="{ props: tooltipProps }">
                 <VBtn
@@ -496,7 +511,7 @@ watch(
           <div class="switch-grid">
             <template v-for="option in booleanOptions" :key="option.key">
               <VSwitch
-                v-if="task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key)"
+                v-if="task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key)"
                 v-model="task.config[option.key]"
                 :label="option.label"
                 density="compact"

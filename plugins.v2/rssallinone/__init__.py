@@ -85,7 +85,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.98"
+    plugin_version = "0.13.99"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -1624,7 +1624,7 @@ class RssAllInOne(_PluginBase):
             run_mode = str((payload or {}).get("run_mode") or "all").strip().casefold()
             return self._start_manual_refresh(
                 task_id,
-                "single" if run_mode == "single" else "all",
+                run_mode if run_mode in {"single", "repair"} else "all",
             )
         return self._start_rss_run(task_id=task_id, source="manual")
 
@@ -1649,7 +1649,7 @@ class RssAllInOne(_PluginBase):
             self._manual_refresh_task_id = task_id
             self._manual_refresh_selected_task_id = selected_task_id
             self._manual_refresh_run_mode = (
-                "single" if run_mode == "single" else "all"
+                run_mode if run_mode in {"single", "repair"} else "all"
             )
             task = next(
                 (
@@ -1696,7 +1696,11 @@ class RssAllInOne(_PluginBase):
             "message": (
                 "手动添加试跑已启动，本次只处理一条"
                 if self._manual_refresh_run_mode == "single"
-                else "手动添加自动处理已启动"
+                else (
+                    "手动添加存量元数据修复已启动"
+                    if self._manual_refresh_run_mode == "repair"
+                    else "手动添加自动处理已启动"
+                )
             ),
             "task_id": task_id,
             "run_mode": self._manual_refresh_run_mode,
@@ -1750,10 +1754,36 @@ class RssAllInOne(_PluginBase):
             self._manual_refresh_lock.release()
             return
         try:
+            mode_label = {
+                "single": "试跑一条",
+                "repair": "修复存量元数据",
+            }.get(run_mode, "自动处理")
             logger.info(
                 f"RSS一条龙：开始手动添加串行处理，任务={selected_task_id}，"
-                f"模式={'试跑一条' if run_mode == 'single' else '自动处理'}"
+                f"模式={mode_label}"
             )
+            if run_mode == "repair":
+                result = self._repair_manual_metadata_task(
+                    task_id=task_id,
+                    selected_task_id=selected_task_id,
+                    stop_event=self._manual_refresh_stop_event,
+                )
+                state = "cancelled" if result.get("cancelled") else (
+                    "failed" if result.get("failed") and not result.get("repaired")
+                    else "succeeded"
+                )
+                store.finish_background_task(
+                    task_id,
+                    state,
+                    result=result,
+                    error_message=(
+                        "用户停止手动添加处理"
+                        if state == "cancelled"
+                        else str(result.get("message") or "") if state == "failed"
+                        else ""
+                    ),
+                )
+                return
             try:
                 qb_result = QbSyncService(
                     store=store,
@@ -1873,6 +1903,170 @@ class RssAllInOne(_PluginBase):
             self._manual_refresh_run_mode = "all"
             self._manual_refresh_stop_event.clear()
             self._manual_refresh_lock.release()
+
+    def _repair_manual_metadata_task(
+        self,
+        *,
+        task_id: str,
+        selected_task_id: str,
+        stop_event: threading.Event,
+    ) -> Dict[str, Any]:
+        """Refresh saved manual cards without changing their workflow state."""
+
+        store = self._require_store()
+        task = store.get_rss_task(selected_task_id) or {}
+        config = task.get("config") if isinstance(task.get("config"), dict) else {}
+        if str(config.get("task_type") or "rss").strip().casefold() != "manual":
+            raise ValueError("该任务不是手动添加任务，拒绝修复")
+
+        snapshots = store.list_torrent_snapshots_for_task(selected_task_id)
+        local_items = []
+        for item in store.list_media_for_task(selected_task_id):
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            source_kind = str(
+                (details.get("source_identity") or {}).get("kind") or ""
+            ).strip()
+            if source_kind in {"local_folder", "local_file"}:
+                local_items.append(item)
+
+        total = len(snapshots) + len(local_items)
+        result: Dict[str, Any] = {
+            "mode": "manual",
+            "run_mode": "repair",
+            "rss_task_id": selected_task_id,
+            "total": total,
+            "handled": 0,
+            "repaired": 0,
+            "failed": 0,
+            "cancelled": False,
+            "errors": [],
+        }
+        processed = succeeded = failed = 0
+
+        def update_progress(current_item: object) -> None:
+            store.update_background_task(
+                task_id,
+                current_item=str(current_item or ""),
+                processed=processed,
+                succeeded=succeeded,
+                failed=failed,
+                total=total,
+                result=result,
+            )
+
+        logger.info(
+            "RSS一条龙：手动添加存量元数据修复开始，任务=%s，qB=%s，本地=%s",
+            task.get("name") or selected_task_id,
+            len(snapshots),
+            len(local_items),
+        )
+
+        qb_service = self._qb_sync_service()
+        for snapshot in snapshots:
+            if stop_event.is_set():
+                result["cancelled"] = True
+                break
+            downloader_id = str(snapshot.get("downloader_id") or "").strip()
+            info_hash = str(snapshot.get("info_hash") or "").strip().lower()
+            title = str(snapshot.get("name") or info_hash).strip()
+            try:
+                qb_service.refresh_item(
+                    downloader_id,
+                    info_hash,
+                    allow_completion_transition=False,
+                    force_manual_metadata_refresh=True,
+                )
+                succeeded += 1
+                result["repaired"] += 1
+            except Exception as error:
+                failed += 1
+                result["failed"] += 1
+                result["errors"].append({
+                    "kind": "qb",
+                    "downloader_id": downloader_id,
+                    "info_hash": info_hash,
+                    "title": title,
+                    "message": str(error),
+                })
+                logger.error(
+                    "RSS一条龙：手动 qB 存量元数据修复失败 %s/%s：%s",
+                    downloader_id,
+                    info_hash,
+                    error,
+                )
+            processed += 1
+            result["handled"] = processed
+            update_progress(title)
+
+        if not result["cancelled"]:
+            for item in local_items:
+                if stop_event.is_set():
+                    result["cancelled"] = True
+                    break
+                media_id = str(item.get("id") or "").strip()
+                source_path = str(item.get("source_path") or "").strip()
+                details = item.get("details") if isinstance(item.get("details"), dict) else {}
+                labels = details.get("site_labels") if isinstance(details.get("site_labels"), dict) else {}
+                torrent = details.get("torrent") if isinstance(details.get("torrent"), dict) else {}
+                search_title = str(
+                    labels.get("search_title")
+                    or torrent.get("name")
+                    or item.get("source_name")
+                    or Path(source_path).name
+                ).strip()
+                try:
+                    self._file_manager_service().recognize_entry(
+                        source_path,
+                        stop_event=stop_event,
+                        manual_override=details.get("manual_override"),
+                        refresh_media_id=media_id,
+                        task_id=selected_task_id,
+                        task_name=str(task.get("name") or "手动添加"),
+                        site_id=str(config.get("site_id") or ""),
+                        recognize_cn=True,
+                        recognize_fx=True,
+                        add_chinese_title=self._as_bool(
+                            config.get("add_chinese_title", False)
+                        ),
+                        cn_keywords=str(config.get("cn_keywords") or "国语,国配"),
+                        query_interval=config.get("query_interval") or 60,
+                        rename_rules=str(config.get("rename_rules") or ""),
+                        site_search_title=search_title,
+                    )
+                    succeeded += 1
+                    result["repaired"] += 1
+                except Exception as error:
+                    if stop_event.is_set():
+                        result["cancelled"] = True
+                        break
+                    failed += 1
+                    result["failed"] += 1
+                    result["errors"].append({
+                        "kind": "local",
+                        "media_id": media_id,
+                        "source_path": source_path,
+                        "title": search_title,
+                        "message": str(error),
+                    })
+                    logger.error(
+                        "RSS一条龙：手动本地存量元数据修复失败 %s：%s",
+                        source_path,
+                        error,
+                    )
+                processed += 1
+                result["handled"] = processed
+                update_progress(search_title)
+
+        result["message"] = (
+            f"存量元数据修复{'已停止' if result['cancelled'] else '完成'}："
+            f"修正 {result['repaired']} 项，失败 {result['failed']} 项"
+        )
+        logger.info(
+            "RSS一条龙：%s，任务=%s",
+            result["message"],
+            task.get("name") or selected_task_id,
+        )
+        return result
 
     def api_rss_control(
         self,
@@ -2859,6 +3053,9 @@ class RssAllInOne(_PluginBase):
                     site_id=str(config.get("site_id") or ""),
                     recognize_cn=True,
                     recognize_fx=True,
+                    add_chinese_title=self._as_bool(
+                        config.get("add_chinese_title", False)
+                    ),
                     cn_keywords=str(config.get("cn_keywords") or "国语,国配"),
                     query_interval=config.get("query_interval") or 60,
                     rename_rules=str(config.get("rename_rules") or ""),

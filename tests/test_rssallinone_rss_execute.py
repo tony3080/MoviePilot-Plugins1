@@ -549,6 +549,97 @@ class SiteLabelParsingTest(unittest.TestCase):
             "https://ubits.club/details.php?id=42",
         )
 
+    def test_manual_search_resolves_detail_page_and_subtitle(self):
+        search_page = """
+          <table class="torrents" cellspacing="0" cellpadding="5" width="100%">
+            <tr><td><a href="details.php?id=42">Demo</a>
+              <span class="tag">国配</span><span class="tag">特效字幕</span>
+            </td></tr>
+          </table>
+        """
+        detail_page = """
+          <table><tr>
+            <td class="rowhead nowrap" valign="top" align="right">副标题</td>
+            <td class="rowfollow" valign="top" align="left">
+              南国野兽/南方野兽乐园(台)/南荒的童话(港) [DIY 简繁双语四字幕]
+            </td>
+          </tr></table>
+        """
+
+        class Gateway:
+            calls = []
+
+            @classmethod
+            def fetch_site_html(cls, url, access):
+                cls.calls.append(url)
+                return detail_page if "details.php" in url else search_page
+
+        access = types.SimpleNamespace(
+            site_key="UBits",
+            site_url="https://ubits.club",
+            referer="https://ubits.club",
+        )
+        labels = rss_site_labels.SiteLabelService(
+            Gateway(), sleeper=lambda _seconds: None
+        ).detect(
+            access=access,
+            title="Beasts.of.the.Southern.Wild.2012.REMUX-UBits",
+            detail_url=(
+                "https://ubits.club/torrents.php?"
+                "search=Beasts.of.the.Southern.Wild.2012.REMUX-UBits"
+            ),
+            torrent_id="",
+            cn_keywords="国语,国配",
+            recognize_cn=True,
+            recognize_fx=True,
+            add_chinese_title=True,
+            allow_search_without_detail=True,
+        )
+
+        self.assertEqual(len(Gateway.calls), 2)
+        self.assertEqual(labels["torrent_id"], "42")
+        self.assertEqual(labels["chinese_title"], "南国野兽")
+        self.assertIn("details.php?id=42", labels["request_url_masked"])
+
+    def test_manual_detail_link_is_preserved_as_canonical_p_link(self):
+        detail_page = """
+          <table><tr>
+            <td class="rowhead">副标题</td>
+            <td class="rowfollow">私法行动/暗黑蓝色 [DIY 简繁字幕]</td>
+          </tr><tr><td>标签</td><td><span class="tag">国配</span></td></tr></table>
+        """
+
+        class Gateway:
+            calls = []
+
+            @classmethod
+            def fetch_site_html(cls, url, access):
+                cls.calls.append(url)
+                return detail_page
+
+        access = types.SimpleNamespace(
+            site_key="UBits",
+            site_url="https://ubits.club",
+            referer="https://ubits.club",
+        )
+        labels = rss_site_labels.SiteLabelService(
+            Gateway(), sleeper=lambda _seconds: None
+        ).detect(
+            access=access,
+            title="Dark.Blue.2002.AUS.UHD",
+            detail_url="https://ubits.club/details.php?id=99&hit=1",
+            torrent_id="",
+            cn_keywords="国语,国配",
+            recognize_cn=True,
+            recognize_fx=False,
+            add_chinese_title=True,
+            allow_search_without_detail=True,
+        )
+
+        self.assertEqual(Gateway.calls, ["https://ubits.club/details.php?id=99"])
+        self.assertEqual(labels["chinese_title"], "私法行动")
+        self.assertEqual(labels["request_url_masked"], "https://ubits.club/details.php?id=99")
+
     def test_chd_multiple_results_require_exact_rss_torrent_id(self):
         page = """
           <table class="torrents" cellspacing="0" cellpadding="5" width="100%">

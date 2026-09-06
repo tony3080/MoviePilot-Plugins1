@@ -110,6 +110,16 @@ def parse_rename_rules(value: object) -> List[RenameRule]:
 def extract_chinese_title(rss_title: object) -> str:
     title = re.sub(r"<!\[CDATA\[|\]\]>", "", str(rss_title or ""), flags=re.IGNORECASE)
     candidates: List[str] = []
+    # Detail-page subtitles put the useful Chinese titles before the first
+    # bracket. Prefer that section over technical notes such as [DIY ...].
+    leading = re.split(r"\s*(?:\[|【)", title, maxsplit=1)[0]
+    if CHINESE_TEXT.search(leading):
+        for raw_candidate in re.split(r"\s*(?:/|\|)\s*", leading):
+            candidate = re.sub(
+                r"\([^)]*\)|（[^）]*）", "", raw_candidate
+            ).strip(" ._-[]")
+            if candidate and CHINESE_TEXT.search(candidate) and has_meaningful_chinese(candidate):
+                candidates.append(candidate)
     for bracket in _top_level_brackets(title):
         bracket = LEADING_RELEASE_BADGE.sub("", bracket)
         bracket = re.split(r"\s*\|\s*", bracket, maxsplit=1)[0]
@@ -123,6 +133,8 @@ def extract_chinese_title(rss_title: object) -> str:
             if not has_meaningful_chinese(candidate):
                 continue
             candidates.append(candidate)
+    if not candidates and CHINESE_TEXT.search(title) and has_meaningful_chinese(title):
+        candidates.append(re.sub(r"\s+", " ", title).strip(" ._-[]"))
     if not candidates:
         return ""
     preferred = [item for item in candidates if 2 <= len(item) <= 20]
@@ -210,25 +222,41 @@ def normalize_markers(
     if not markers:
         return f"{stem}{suffix}"
     marker_text = "-".join(markers)
-    for anchor_text in reversed(list(anchors)):
-        anchor_text = str(anchor_text or "").strip()
-        if not anchor_text or re.search(r"\\\d|\\g<|\$\d", anchor_text):
-            continue
-        positions = list(re.finditer(
-            re.escape(anchor_text), stem, flags=re.IGNORECASE
-        ))
-        if not positions:
-            continue
-        matched = positions[-1]
-        position = matched.start()
-        prefix_end = position
-        if position > 0 and re.fullmatch(separator, stem[position - 1]):
-            prefix_end -= 1
-        prefix = stem[:prefix_end].rstrip("-._ ")
-        tail = stem[position:].lstrip("-._ ")
-        if prefix:
-            return f"{prefix}-{marker_text}-{tail}{suffix}"
-        return f"{marker_text}-{tail}{suffix}"
+    # Keep site markers immediately before the technical REMUX/edition part.
+    # Generic custom-rule anchors are only a fallback; otherwise a marker can
+    # end up after a user-defined recognition token.
+    anchor_candidates = list(reversed(list(anchors)))
+
+    def insert_before_anchor(candidates: Sequence[str]) -> str:
+        for anchor_text in candidates:
+            anchor_text = str(anchor_text or "").strip()
+            if not anchor_text or re.search(r"\\\d|\\g<|\$\d", anchor_text):
+                continue
+            positions = list(re.finditer(
+                re.escape(anchor_text), stem, flags=re.IGNORECASE
+            ))
+            if not positions:
+                continue
+            matched = positions[-1]
+            position = matched.start()
+            prefix_end = position
+            if position > 0 and re.fullmatch(separator, stem[position - 1]):
+                prefix_end -= 1
+            prefix = stem[:prefix_end].rstrip("-._ ")
+            tail = stem[position:].lstrip("-._ ")
+            if prefix:
+                return f"{prefix}-{marker_text}-{tail}{suffix}"
+            return f"{marker_text}-{tail}{suffix}"
+        return ""
+
+    remux_rule_anchors = [
+        item for item in anchor_candidates
+        if re.search(r"(?i)REMUX", str(item or ""))
+    ]
+    anchored = insert_before_anchor(remux_rule_anchors)
+    if anchored:
+        return anchored
+
     anchor = list(re.finditer(
         rf"(?i)(?:^|{separator})REMUX(?={separator}|$)", stem
     ))
@@ -241,6 +269,14 @@ def normalize_markers(
         if prefix:
             return f"{prefix}-{marker_text}-{tail}{suffix}"
         return f"{marker_text}-{tail}{suffix}"
+
+    generic_anchors = [
+        item for item in anchor_candidates
+        if not re.search(r"(?i)REMUX", str(item or ""))
+    ]
+    anchored = insert_before_anchor(generic_anchors)
+    if anchored:
+        return anchored
     return f"{stem}-{marker_text}{suffix}"
 
 

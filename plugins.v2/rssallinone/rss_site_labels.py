@@ -112,18 +112,22 @@ class SiteLabelService:
         cn_keywords: object,
         recognize_cn: bool,
         recognize_fx: bool,
+        add_chinese_title: bool = False,
         allow_search_without_detail: bool = False,
     ) -> Dict[str, Any]:
-        requested = bool(recognize_cn or recognize_fx)
+        requested = bool(recognize_cn or recognize_fx or add_chinese_title)
         result = {
             "requested": requested,
             "status": "skipped",
             "site_kind": "",
             "mandarin": False,
             "effects": False,
+            "chinese_title": "",
+            "subtitle": "",
             "torrent_id": str(torrent_id or "").strip(),
             "request_url_masked": "",
-            "reason": "未启用国语或特效识别" if not requested else "",
+            "search_title": str(title or "").strip(),
+            "reason": "未启用国语、特效或中文标题识别" if not requested else "",
         }
         search_query = ""
         if not requested:
@@ -136,51 +140,68 @@ class SiteLabelService:
             return result
 
         try:
-            if site_kind == "ubits":
-                request_url = _ubits_detail_url(access, detail_url, torrent_id)
-                if request_url:
-                    page = self._request(request_url, access)
-                    mandarin, effects = parse_ubits_labels(
-                        page, _keywords(cn_keywords)
-                    )
-                elif allow_search_without_detail:
-                    base_url = str(
-                        getattr(access, "site_url", "")
-                        or getattr(access, "referer", "")
-                        or ""
-                    ).strip()
+            base_url = str(
+                getattr(access, "site_url", "")
+                or getattr(access, "referer", "")
+                or detail_url
+                or ""
+            ).strip()
+            if not base_url:
+                raise SiteLabelError("站点身份缺少站点 URL")
+            supplied_detail_id = _detail_url_torrent_id(detail_url)
+            selected_id = str(torrent_id or supplied_detail_id).strip()
+            label_page = ""
+            detail_page = ""
+
+            # Manual processing may start from a qB comment, an old search-page
+            # P link, or no link at all.  Resolve all three forms to the real
+            # torrent detail page before persisting the link or subtitle.
+            if allow_search_without_detail:
+                if supplied_detail_id:
+                    selected_id = supplied_detail_id
+                    if site_kind != "ubits":
+                        query = clean_search_title(title)
+                        search_query = query
+                        if query:
+                            search_url = urljoin(
+                                base_url.rstrip("/") + "/",
+                                f"torrents.php?search={quote(query)}",
+                            )
+                            search_page = self._request(search_url, access)
+                            label_page, _matched_id = select_exact_result(
+                                search_page, selected_id, search_title=query
+                            )
+                else:
                     query = clean_search_title(title)
                     search_query = query
-                    if not base_url:
-                        raise SiteLabelError("站点身份缺少站点 URL")
                     if not query:
-                        raise SiteLabelError("RSS 标题清理后无法用于站内搜索")
-                    request_url = urljoin(
-                        base_url.rstrip("/") + "/",
-                        f"torrents.php?search={quote(query)}",
+                        raise SiteLabelError("手动任务名称清理后无法用于站内搜索")
+                    search_url = (
+                        str(detail_url or "").strip()
+                        if _is_search_url(detail_url)
+                        else urljoin(
+                            base_url.rstrip("/") + "/",
+                            f"torrents.php?search={quote(query)}",
+                        )
                     )
-                    page = self._request(request_url, access)
-                    block, selected_id = select_exact_result(
-                        page, torrent_id, search_title=query
+                    search_page = self._request(search_url, access)
+                    label_page, selected_id = select_exact_result(
+                        search_page, selected_id, search_title=query
                     )
-                    result["torrent_id"] = selected_id
-                    base = urlparse(base_url)
-                    request_url = (
-                        f"{base.scheme}://{base.netloc}/details.php?id={selected_id}"
-                    )
-                    mandarin, effects = parse_ubits_labels(
-                        block, _keywords(cn_keywords)
-                    )
-                else:
+                request_url = _canonical_detail_url(
+                    access, selected_id, base_url=base_url
+                )
+                detail_page = self._request(request_url, access)
+                if not label_page:
+                    label_page = detail_page
+                result["torrent_id"] = selected_id
+            elif site_kind == "ubits":
+                request_url = _ubits_detail_url(access, detail_url, torrent_id)
+                if not _detail_url_torrent_id(request_url):
                     raise SiteLabelError("UBits RSS 条目缺少详情页链接")
+                detail_page = self._request(request_url, access)
+                label_page = detail_page
             else:
-                base_url = str(
-                    getattr(access, "site_url", "")
-                    or getattr(access, "referer", "")
-                    or ""
-                ).strip()
-                if not base_url:
-                    raise SiteLabelError("站点身份缺少站点 URL")
                 query = clean_search_title(title)
                 search_query = query
                 if not query:
@@ -189,19 +210,27 @@ class SiteLabelService:
                     base_url.rstrip("/") + "/",
                     f"torrents.php?search={quote(query)}",
                 )
-                page = self._request(request_url, access)
-                block, selected_id = select_exact_result(
-                    page, torrent_id, search_title=query
+                search_page = self._request(request_url, access)
+                label_page, selected_id = select_exact_result(
+                    search_page, torrent_id, search_title=query
                 )
                 result["torrent_id"] = selected_id
-                if site_kind == "chd":
-                    mandarin, effects = parse_chd_labels(
-                        block, _keywords(cn_keywords)
-                    )
-                else:
-                    mandarin, effects = parse_hdsky_labels(
-                        block, _keywords(cn_keywords)
-                    )
+            if site_kind == "ubits":
+                mandarin, effects = parse_ubits_labels(
+                    label_page, _keywords(cn_keywords)
+                )
+            elif site_kind == "chd":
+                mandarin, effects = parse_chd_labels(
+                    label_page, _keywords(cn_keywords)
+                )
+            else:
+                mandarin, effects = parse_hdsky_labels(
+                    label_page, _keywords(cn_keywords)
+                )
+            subtitle = extract_detail_subtitle(detail_page)
+            if subtitle:
+                result["subtitle"] = subtitle
+                result["chinese_title"] = extract_chinese_title(subtitle)
             applied_mandarin = bool(mandarin and recognize_cn)
             applied_effects = bool(effects and recognize_fx)
             result.update({
@@ -530,6 +559,67 @@ def parse_hdsky_labels(block: str, keywords: Sequence[str]) -> Tuple[bool, bool]
         _contains_any(item["text"], ("特效", "特效字幕")) for item in tags
     )
     return mandarin, effects
+
+
+def extract_detail_subtitle(page: object) -> str:
+    """Read the torrent detail page's 副标题 cell."""
+    source = str(page or "")
+    match = re.search(
+        r"<td\b[^>]*\bclass\s*=\s*([\"'])[^\"']*\browhead\b[^\"']*\1[^>]*>"
+        r"\s*副标题\s*</td>\s*"
+        r"<td\b[^>]*\bclass\s*=\s*([\"'])[^\"']*\browfollow\b[^\"']*\2[^>]*>"
+        r"(.*?)</td>",
+        source,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", _plain_text(match.group(3))).strip()
+
+
+def extract_chinese_title(value: object) -> str:
+    """Use the RSS title parser for a detail-page subtitle."""
+    from .rss_rename import extract_chinese_title as _extract
+
+    return str(_extract(value) or "").strip()
+
+
+def _canonical_detail_url(
+    access: Any,
+    torrent_id: object,
+    *,
+    base_url: object = "",
+) -> str:
+    wanted = str(torrent_id or "").strip()
+    supplied = str(base_url or "").strip()
+    base = supplied or str(
+        getattr(access, "site_url", "")
+        or getattr(access, "referer", "")
+        or ""
+    ).strip()
+    parsed = urlparse(base)
+    if wanted and parsed.scheme and parsed.netloc:
+        return urljoin(
+            f"{parsed.scheme}://{parsed.netloc}/",
+            f"details.php?id={wanted}",
+        )
+    return supplied
+
+
+def _detail_url_torrent_id(value: object) -> str:
+    parsed = urlparse(html.unescape(str(value or "")).strip())
+    if parsed.path.casefold().rstrip("/").split("/")[-1] != "details.php":
+        return ""
+    torrent_id = str((parse_qs(parsed.query).get("id") or [""])[0]).strip()
+    return torrent_id if torrent_id.isdigit() else ""
+
+
+def _is_search_url(value: object) -> bool:
+    parsed = urlparse(html.unescape(str(value or "")).strip())
+    return (
+        parsed.path.casefold().rstrip("/").split("/")[-1] == "torrents.php"
+        and bool((parse_qs(parsed.query).get("search") or [""])[0])
+    )
 
 
 def select_exact_result(

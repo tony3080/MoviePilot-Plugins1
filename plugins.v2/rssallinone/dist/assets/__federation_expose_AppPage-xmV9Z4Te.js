@@ -438,6 +438,26 @@ return (_ctx, _cache) => {
                               _: 2
                             }, 1024))
                           : _createCommentVNode$4("", true),
+                        (task.config.task_type === 'manual')
+                          ? (_openBlock$4(), _createBlock$4(_component_VTooltip, {
+                              key: 7,
+                              text: "修复存量详情页、中文标题和标签位置"
+                            }, {
+                              activator: _withCtx$4(({ props: tooltipProps }) => [
+                                _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
+                                  icon: "mdi-database-refresh-outline",
+                                  size: "small",
+                                  variant: "text",
+                                  color: "primary",
+                                  loading: __props.runningTaskId === task.id && __props.runningMode === 'repair',
+                                  disabled: !task.enabled || __props.runningTaskId === task.id,
+                                  "aria-label": "修复存量元数据",
+                                  onClick: _withModifiers$1($event => (emit('run', { task, runMode: 'repair' })), ["stop"])
+                                }), null, 16, ["loading", "disabled", "onClick"])
+                              ]),
+                              _: 2
+                            }, 1024))
+                          : _createCommentVNode$4("", true),
                         _createVNode$4(_component_VTooltip, { text: "测试 RSS" }, {
                           activator: _withCtx$4(({ props: tooltipProps }) => [
                             _createVNode$4(_component_VBtn, _mergeProps$2({ ref_for: true }, tooltipProps, {
@@ -847,7 +867,7 @@ return (_ctx, _cache) => {
                             return (_openBlock$4(), _createElementBlock$3(_Fragment$2, {
                               key: option.key
                             }, [
-                              (task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','add_chinese_title','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key))
+                              (task.config.task_type === 'rss' || !['pause_on_add','push_torrent_file','recognize_cn','recognize_fx','rename_enabled','download_enabled','delete_files','hr_enabled'].includes(option.key))
                                 ? (_openBlock$4(), _createBlock$4(_component_VSwitch, {
                                     key: 0,
                                     modelValue: task.config[option.key],
@@ -877,7 +897,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-09b8818a"]]);
+const RssTaskEditor = /*#__PURE__*/_export_sfc(_sfc_main$4, [['__scopeId',"data-v-01c27333"]]);
 
 const {resolveComponent:_resolveComponent$3,createVNode:_createVNode$3,createElementVNode:_createElementVNode$3,withCtx:_withCtx$3,openBlock:_openBlock$3,createBlock:_createBlock$3,createCommentVNode:_createCommentVNode$3,createElementBlock:_createElementBlock$2,mergeProps:_mergeProps$1,withModifiers:_withModifiers,toDisplayString:_toDisplayString$3,createTextVNode:_createTextVNode$3,normalizeProps:_normalizeProps,guardReactiveProps:_guardReactiveProps,normalizeClass:_normalizeClass$1} = await importShared('vue');
 
@@ -2653,7 +2673,13 @@ async function controlRss(enabled) {
 
 async function runRssTask(request) {
   const task = request?.task || request;
-  const runMode = request?.runMode === 'single' ? 'single' : 'all';
+  const runMode = ['single', 'repair'].includes(request?.runMode)
+    ? request.runMode
+    : 'all';
+  if (runMode === 'repair' && !window.confirm(
+    `修复手动添加任务“${task?.name || task?.id || ''}”的存量元数据？\n\n` +
+    '会逐张重新读取种子详情页，并修正本地文件、目录和 qB 任务名称。',
+  )) return
   const configuredTaskId = String(task?.id || '');
   rssRunningTaskId.value = configuredTaskId;
   manualRunningMode.value = task?.config?.task_type === 'manual' ? runMode : '';
@@ -2785,9 +2811,10 @@ async function pollRssTask(taskId) {
     const result = response.task.result || {};
     const manualMode = result.mode === 'manual';
     const singleMode = manualMode && result.run_mode === 'single';
+    const repairMode = manualMode && result.run_mode === 'repair';
     successMessage.value = response.task.state === 'succeeded'
       ? (manualMode
-          ? `${singleMode ? '手动添加试跑完成' : '手动添加自动处理完成'}：本次处理 ${result.handled || 0} 项`
+          ? `${repairMode ? '手动添加存量元数据修复完成' : (singleMode ? '手动添加试跑完成' : '手动添加自动处理完成')}：本次处理 ${result.handled || 0} 项，失败 ${result.failed || 0} 项`
           : `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`)
       : `${manualMode ? '手动添加处理' : 'RSS 执行'}已${response.task.state === 'cancelled' ? '停止' : '结束'}`;
     rssRunningTaskId.value = '';
@@ -4250,6 +4277,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-f81ad22a"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-05a5c8bd"]]);
 
 export { AppPage as default };

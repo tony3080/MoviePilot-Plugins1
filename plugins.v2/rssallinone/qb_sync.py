@@ -96,6 +96,7 @@ class RssTaskQbRule:
     task_type: str = "rss"
     query_interval: int = 60
     rename_rules: str = ""
+    add_chinese_title: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -116,6 +117,7 @@ class RssTaskQbRule:
             "task_type": self.task_type,
             "query_interval": self.query_interval,
             "rename_rules": self.rename_rules,
+            "add_chinese_title": self.add_chinese_title,
         }
 
 
@@ -185,6 +187,7 @@ class RssTaskQbScope:
                 task_type=str(config.get("task_type") or "rss").strip().casefold(),
                 query_interval=_safe_positive_int(config.get("query_interval"), 60),
                 rename_rules=str(config.get("rename_rules") or "").strip(),
+                add_chinese_title=_as_bool(config.get("add_chinese_title", False)),
             ))
         return cls(rules, ignored)
 
@@ -943,6 +946,7 @@ class QbSyncService:
         schedule_delete: bool = False,
         completion_confirmed: bool = False,
         allow_completion_transition: bool = True,
+        force_manual_metadata_refresh: bool = False,
     ) -> Dict[str, Any]:
         downloader_name = str(downloader_id or "").strip()
         normalized_hash = str(info_hash or "").strip().lower()
@@ -979,6 +983,7 @@ class QbSyncService:
             schedule_delete=schedule_delete,
             completion_confirmed=completion_confirmed,
             allow_completion_transition=allow_completion_transition,
+            force_manual_metadata_refresh=force_manual_metadata_refresh,
         )
         snapshot = self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
@@ -1620,6 +1625,7 @@ class QbSyncService:
         schedule_delete: bool = False,
         completion_confirmed: bool = False,
         allow_completion_transition: bool = True,
+        force_manual_metadata_refresh: bool = False,
         stop_event: Optional[threading.Event] = None,
     ) -> str:
         if stop_event and stop_event.is_set():
@@ -1741,9 +1747,15 @@ class QbSyncService:
                 from .rss_rename import QbSourceRenameService
                 from .rss_site_labels import SiteLabelService
                 comment_url = _extract_torrent_source_url(raw)
+                existing_source_url = str(
+                    manual_labels.get("request_url_masked")
+                    or rss_history.get("detail_url_masked")
+                    or ""
+                ).strip()
+                detail_hint = comment_url or existing_source_url
                 access = MoviePilotRssGateway.site_access(task_rule.site_id)
                 torrent_id = ""
-                match = re.search(r"[?&]id=(\d+)", comment_url)
+                match = re.search(r"[?&]id=(\d+)", detail_hint)
                 if match:
                     torrent_id = match.group(1)
                 label_service = SiteLabelService(
@@ -1754,16 +1766,43 @@ class QbSyncService:
                     logger=self.logger,
                     min_request_interval_seconds=task_rule.query_interval,
                 )
-                if str(manual_labels.get("source") or "") != "manual":
-                    manual_labels = label_service.detect(
+                needs_site_refresh = (
+                    force_manual_metadata_refresh
+                    or str(manual_labels.get("source") or "") != "manual"
+                    or (
+                        task_rule.add_chinese_title
+                        and not str(manual_labels.get("chinese_title") or "").strip()
+                    )
+                    or not re.search(
+                        r"/details\.php\?[^\s]*\bid=\d+",
+                        str(manual_labels.get("request_url_masked") or ""),
+                        flags=re.IGNORECASE,
+                    )
+                )
+                if needs_site_refresh:
+                    refreshed_labels = label_service.detect(
                         access=access,
                         title=title,
-                        detail_url=comment_url,
+                        detail_url=detail_hint,
                         torrent_id=torrent_id,
                         cn_keywords="国语,国配",
                         recognize_cn=True,
                         recognize_fx=True,
+                        add_chinese_title=task_rule.add_chinese_title,
                         allow_search_without_detail=True,
+                    )
+                    manual_labels = (
+                        {
+                            **manual_labels,
+                            "status": "failed",
+                            "reason": str(refreshed_labels.get("reason") or "")[:500],
+                            "search_title": str(
+                                refreshed_labels.get("search_title") or title
+                            ).strip(),
+                        }
+                        if refreshed_labels.get("status") == "failed"
+                        and manual_labels
+                        else refreshed_labels
                     )
                     manual_labels.update({
                         "source": "manual",
@@ -1777,7 +1816,10 @@ class QbSyncService:
                 if stop_event and stop_event.is_set():
                     raise RuntimeError("手动添加处理已停止")
                 manual_source_url = str(
-                    manual_labels.get("request_url_masked") or comment_url or ""
+                    manual_labels.get("request_url_masked")
+                    or comment_url
+                    or existing_source_url
+                    or ""
                 ).strip()
                 if manual_source_url:
                     raw["source_url_masked"] = mask_url(manual_source_url)
@@ -1785,25 +1827,38 @@ class QbSyncService:
                 source_processing_key = hashlib.sha256(
                     (
                         f"{task_rule.rename_rules}\n"
-                        f"effects={bool(manual_labels.get('effects'))}"
+                        f"effects={bool(manual_labels.get('effects'))}\n"
+                        f"add_chinese_title={task_rule.add_chinese_title}\n"
+                        f"chinese_title={manual_labels.get('chinese_title') or ''}"
                     ).encode("utf-8")
                 ).hexdigest()
                 if (
-                    str(manual_labels.get("source_processing_key") or "")
-                    != source_processing_key
+                    (
+                        force_manual_metadata_refresh
+                        or str(manual_labels.get("source_processing_key") or "")
+                        != source_processing_key
+                    )
                     and (
                         manual_labels.get("effects")
                         or task_rule.rename_rules
+                        or (
+                            task_rule.add_chinese_title
+                            and manual_labels.get("chinese_title")
+                        )
+                        or manual_labels.get("mandarin")
                     )
                 ):
                     server = self.gateway.get_server(downloader.name)
                     rename_result = QbSourceRenameService(self.gateway).apply(
                         server,
                         info_hash,
-                        rss_title=title,
+                        rss_title=(
+                            str(manual_labels.get("chinese_title") or "").strip()
+                            or title
+                        ),
                         rename_enabled=bool(task_rule.rename_rules),
                         rename_rules=task_rule.rename_rules,
-                        add_chinese_title=False,
+                        add_chinese_title=task_rule.add_chinese_title,
                         add_cn=False,
                         add_fx=bool(manual_labels.get("effects")),
                     )
@@ -1830,6 +1885,12 @@ class QbSyncService:
                 history_payload["site_labels"] = manual_labels
                 self.store.upsert_rss_history({
                     **rss_history,
+                    "detail_url_masked": str(
+                        manual_labels.get("request_url_masked")
+                        or comment_url
+                        or rss_history.get("detail_url_masked")
+                        or ""
+                    ),
                     "payload": history_payload,
                     "updated_at": utc_now(),
                 })
@@ -1962,6 +2023,7 @@ class QbSyncService:
                     downloader_id=downloader.name,
                     info_hash=info_hash,
                     category=category,
+                    rename_rules=(task_rule.rename_rules if task_rule else ""),
                     rename_torrent_title=bool(
                         task_rule and task_rule.task_type == "manual"
                     ),
@@ -1978,6 +2040,7 @@ class QbSyncService:
                         schedule_delete=schedule_delete,
                         completion_confirmed=completion_confirmed,
                         allow_completion_transition=allow_completion_transition,
+                        force_manual_metadata_refresh=False,
                         stop_event=stop_event,
                     )
                 rss_history = self.store.latest_rss_history_for_torrent(
@@ -2368,6 +2431,7 @@ class QbSyncService:
         downloader_id: str,
         info_hash: str,
         category: str,
+        rename_rules: object = "",
         rename_torrent_title: bool = False,
     ) -> Optional[Dict[str, Any]]:
         payload = dict(history.get("payload") or {})
@@ -2407,8 +2471,8 @@ class QbSyncService:
                 self.gateway.get_server(downloader_id),
                 info_hash,
                 rss_title="",
-                rename_enabled=False,
-                rename_rules="",
+                rename_enabled=bool(str(rename_rules or "").strip()),
+                rename_rules=rename_rules,
                 add_chinese_title=False,
                 add_cn=True,
                 add_fx=False,

@@ -151,6 +151,11 @@ class ChineseTitleTest(unittest.TestCase):
 
         self.assertEqual(rss_rename.extract_chinese_title(title), "理智与情感")
 
+    def test_extracts_chinese_title_from_plain_detail_subtitle(self):
+        subtitle = "南国野兽/南方野兽乐园(台)/南荒的童话(港) [DIY 简繁双语四字幕]"
+
+        self.assertEqual(rss_rename.extract_chinese_title(subtitle), "南国野兽")
+
 
 class RenamePlanTest(unittest.TestCase):
     def test_files_are_planned_before_deep_to_shallow_directories(self):
@@ -181,6 +186,15 @@ class RenamePlanTest(unittest.TestCase):
             is_file=True,
         )
         self.assertEqual(value, "Movie-国配-特效-REMUX-U版.mkv")
+
+    def test_existing_mandarin_marker_moves_before_remux_rule_anchor(self):
+        value = rss_rename.transform_name(
+            "Movie.V2-REMUX-U版-国配.mkv",
+            is_file=True,
+            rules=rss_rename.parse_rename_rules("V2 => V2"),
+        )
+
+        self.assertEqual(value, "Movie.V2-国配-REMUX-U版.mkv")
 
     def test_remove_cn_marker_preserves_effects_and_extension(self):
         value = rss_rename.transform_name(

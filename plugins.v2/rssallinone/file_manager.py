@@ -110,6 +110,7 @@ class LocalFileManagerService:
         site_id: object = "",
         recognize_cn: bool = False,
         recognize_fx: bool = False,
+        add_chinese_title: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
@@ -126,6 +127,7 @@ class LocalFileManagerService:
             site_id=site_id,
             recognize_cn=recognize_cn,
             recognize_fx=recognize_fx,
+            add_chinese_title=add_chinese_title,
             cn_keywords=cn_keywords,
             query_interval=query_interval,
             rename_rules=rename_rules,
@@ -143,6 +145,7 @@ class LocalFileManagerService:
         site_id: object = "",
         recognize_cn: bool = False,
         recognize_fx: bool = False,
+        add_chinese_title: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
@@ -181,6 +184,7 @@ class LocalFileManagerService:
             site_id=site_id,
             recognize_cn=recognize_cn,
             recognize_fx=recognize_fx,
+            add_chinese_title=add_chinese_title,
             cn_keywords=cn_keywords,
             query_interval=query_interval,
             rename_rules=rename_rules,
@@ -236,6 +240,7 @@ class LocalFileManagerService:
         site_id: object = "",
         recognize_cn: bool = False,
         recognize_fx: bool = False,
+        add_chinese_title: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
@@ -280,6 +285,7 @@ class LocalFileManagerService:
                     site_id=site_id,
                     recognize_cn=recognize_cn,
                     recognize_fx=recognize_fx,
+                    add_chinese_title=add_chinese_title,
                     cn_keywords=cn_keywords,
                     query_interval=query_interval,
                     rename_rules=rename_rules,
@@ -350,6 +356,7 @@ class LocalFileManagerService:
         site_id: object = "",
         recognize_cn: bool = False,
         recognize_fx: bool = False,
+        add_chinese_title: bool = False,
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
@@ -367,12 +374,18 @@ class LocalFileManagerService:
         site_labels: Dict[str, Any] = dict(
             (requested_item.get("details") or {}).get("site_labels") or {}
         )
-        if site_id and (recognize_cn or recognize_fx):
+        requested_details = dict(requested_item.get("details") or {})
+        existing_detail_url = str(
+            (requested_details.get("rss_source") or {}).get("detail_url_masked")
+            or site_labels.get("request_url_masked")
+            or ""
+        ).strip()
+        if site_id and (recognize_cn or recognize_fx or add_chinese_title):
             try:
                 from .rss_execute import MoviePilotRssGateway
                 from .rss_site_labels import SiteLabelService
                 access = MoviePilotRssGateway.site_access(site_id)
-                site_labels = SiteLabelService(
+                refreshed_labels = SiteLabelService(
                     MoviePilotRssGateway(),
                     sleeper=(
                         lambda seconds: _interruptible_wait(stop_event, seconds)
@@ -382,12 +395,27 @@ class LocalFileManagerService:
                 ).detect(
                     access=access,
                     title=str(site_search_title or source.name),
-                    detail_url="",
-                    torrent_id="",
+                    detail_url=existing_detail_url,
+                    torrent_id=str(site_labels.get("torrent_id") or ""),
                     cn_keywords=cn_keywords,
                     recognize_cn=recognize_cn,
                     recognize_fx=recognize_fx,
+                    add_chinese_title=add_chinese_title,
                     allow_search_without_detail=True,
+                )
+                site_labels = (
+                    {
+                        **site_labels,
+                        "status": "failed",
+                        "reason": str(refreshed_labels.get("reason") or "")[:500],
+                        "search_title": str(
+                            refreshed_labels.get("search_title")
+                            or site_search_title
+                            or source.name
+                        ).strip(),
+                    }
+                    if refreshed_labels.get("status") == "failed" and site_labels
+                    else refreshed_labels
                 )
                 if stop_event and stop_event.is_set():
                     raise FileManagerError("手动添加处理已停止")
@@ -395,14 +423,20 @@ class LocalFileManagerService:
                 if stop_event and stop_event.is_set():
                     raise FileManagerError("手动添加处理已停止") from error
                 site_labels = {
+                    **site_labels,
                     "status": "failed",
                     "reason": str(error)[:500],
                 }
         add_fx = bool(site_labels.get("effects"))
-        if str(rename_rules or "").strip() or add_fx:
+        chinese_title = (
+            str(site_labels.get("chinese_title") or "").strip()
+            if add_chinese_title else ""
+        )
+        if str(rename_rules or "").strip() or add_fx or chinese_title:
             files = self._rename_local_files(
                 files,
                 rename_rules,
+                chinese_title=chinese_title,
                 add_cn=False,
                 add_fx=add_fx,
             )
@@ -411,6 +445,7 @@ class LocalFileManagerService:
                 source = self._rename_local_directory(
                     source,
                     rename_rules,
+                    chinese_title=chinese_title,
                     add_cn=False,
                     add_fx=add_fx,
                 )
@@ -709,6 +744,7 @@ class LocalFileManagerService:
         *,
         add_cn: bool = False,
         add_fx: bool = False,
+        chinese_title: str = "",
         remove_cn: bool = False,
     ) -> List[Path]:
         from .rss_rename import parse_rename_rules, transform_name
@@ -720,6 +756,7 @@ class LocalFileManagerService:
                 current.name,
                 is_file=True,
                 rules=rules,
+                chinese_title=chinese_title,
                 add_cn=add_cn,
                 add_fx=add_fx,
                 remove_cn=remove_cn,
@@ -741,6 +778,7 @@ class LocalFileManagerService:
         *,
         add_cn: bool = False,
         add_fx: bool = False,
+        chinese_title: str = "",
         remove_cn: bool = False,
     ) -> Path:
         from .rss_rename import parse_rename_rules, transform_name
@@ -750,6 +788,7 @@ class LocalFileManagerService:
             current.name,
             is_file=False,
             rules=rules,
+            chinese_title=chinese_title,
             add_cn=add_cn,
             add_fx=add_fx,
             remove_cn=remove_cn,

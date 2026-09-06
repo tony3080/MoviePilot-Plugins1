@@ -752,7 +752,13 @@ async function controlRss(enabled) {
 
 async function runRssTask(request) {
   const task = request?.task || request
-  const runMode = request?.runMode === 'single' ? 'single' : 'all'
+  const runMode = ['single', 'repair'].includes(request?.runMode)
+    ? request.runMode
+    : 'all'
+  if (runMode === 'repair' && !window.confirm(
+    `修复手动添加任务“${task?.name || task?.id || ''}”的存量元数据？\n\n` +
+    '会逐张重新读取种子详情页，并修正本地文件、目录和 qB 任务名称。',
+  )) return
   const configuredTaskId = String(task?.id || '')
   rssRunningTaskId.value = configuredTaskId
   manualRunningMode.value = task?.config?.task_type === 'manual' ? runMode : ''
@@ -884,9 +890,10 @@ async function pollRssTask(taskId) {
     const result = response.task.result || {}
     const manualMode = result.mode === 'manual'
     const singleMode = manualMode && result.run_mode === 'single'
+    const repairMode = manualMode && result.run_mode === 'repair'
     successMessage.value = response.task.state === 'succeeded'
       ? (manualMode
-          ? `${singleMode ? '手动添加试跑完成' : '手动添加自动处理完成'}：本次处理 ${result.handled || 0} 项`
+          ? `${repairMode ? '手动添加存量元数据修复完成' : (singleMode ? '手动添加试跑完成' : '手动添加自动处理完成')}：本次处理 ${result.handled || 0} 项，失败 ${result.failed || 0} 项`
           : `RSS 执行完成：加入 ${result.queued || 0}，已存在 ${result.existing || 0}，来源重复 ${result.duplicate_source || 0}，失败 ${result.failed || 0}`)
       : `${manualMode ? '手动添加处理' : 'RSS 执行'}已${response.task.state === 'cancelled' ? '停止' : '结束'}`
     rssRunningTaskId.value = ''
