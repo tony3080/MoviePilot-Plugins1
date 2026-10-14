@@ -141,6 +141,19 @@ class RepositoryContractTest(unittest.TestCase):
         for platform in ("腾讯", "爱奇艺", "芒果", "优酷"):
             self.assertNotIn(platform, config_source)
 
+    def test_managed_recheck_ui_and_authenticated_api_contract(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        page_source = (PLUGIN_DIR / "src" / "components" / "Page.vue").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn('"path": "/managed/recheck"', source)
+        self.assertIn('"endpoint": self.api_recheck_managed', source)
+        self.assertIn("managed/recheck", page_source)
+        self.assertIn('aria-label="重新复核豆瓣总集数"', page_source)
+        self.assertIn(":loading=\"rechecking.has(item.subscribe_id)\"", page_source)
+        self.assertIn("@click=\"recheck(item)\"", page_source)
+        self.assertIn("await loadOverview()", page_source)
+
     def test_history_search_and_durable_dedup_contract(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
         self.assertIn('"path": "/history/search"', source)

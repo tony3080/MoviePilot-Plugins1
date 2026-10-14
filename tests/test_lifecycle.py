@@ -317,6 +317,7 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.plugin._upsert_managed({
             "subscribe_id": subscribe_id,
             "check_after": "2000-01-01T00:00:00+08:00",
+            "confirmation_deadline": "2000-01-01T00:00:00+08:00",
         })
 
     def test_completion_pauses_card_and_increased_douban_total_resumes(self) -> None:
@@ -342,6 +343,102 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(subscribe.state, "R")
         self.assertEqual(FakeSubscribeChain.search_calls[0]["sid"], 1)
         self.assertFalse(FakeSubscribeChain.search_calls[0]["manual"])
+
+    def test_completion_checks_douban_on_pause_day_and_schedules_next_day(self) -> None:
+        subscribe = FakeSubscribe(101)
+        completed_at = datetime.datetime(
+            2026, 8, 1, 8, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+        self._complete(subscribe)
+        managed = self.plugin._managed_record(101)
+        managed["check_after"] = completed_at.isoformat()
+        self.plugin._upsert_managed(managed)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+        )
+
+        with patch.object(self.plugin, "_now_datetime", return_value=completed_at):
+            summary = self.plugin._process_due_confirmations()
+
+        self.assertEqual(summary["confirmations"], 1)
+        self.assertEqual(summary["completed"], 0)
+        managed = self.plugin._managed_record(101)
+        self.assertEqual(managed["status"], "waiting_confirmation")
+        self.assertEqual(managed["last_douban_check_date"], "2026-08-01")
+        self.assertEqual(
+            self.plugin._parse_datetime(managed["check_after"]).date().isoformat(),
+            "2026-08-02",
+        )
+        self.assertEqual(subscribe.state, "S")
+
+    def test_same_day_confirmation_does_not_query_douban_twice(self) -> None:
+        subscribe = FakeSubscribe(102)
+        self._complete(subscribe)
+        managed = self.plugin._managed_record(102)
+        managed["check_after"] = "2026-08-01T08:00:00+08:00"
+        self.plugin._upsert_managed(managed)
+        calls = []
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: (
+                calls.append(True) or {"episodes_count": 40}
+            ),
+        )
+        now = datetime.datetime(
+            2026, 8, 1, 23, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            self.plugin._process_due_confirmations()
+            self.plugin._process_due_confirmations()
+
+        self.assertEqual(len(calls), 1)
+
+    def test_daily_confirmation_resumes_when_douban_total_increases(self) -> None:
+        subscribe = FakeSubscribe(103)
+        self._complete(subscribe)
+        managed = self.plugin._managed_record(103)
+        managed["check_after"] = "2026-08-02T08:00:00+08:00"
+        self.plugin._upsert_managed(managed)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 44},
+        )
+        now = datetime.datetime(
+            2026, 8, 2, 8, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_due_confirmations()
+
+        self.assertEqual(summary["resumed"], 1)
+        self.assertEqual(subscribe.total_episode, 44)
+        self.assertEqual(subscribe.state, "R")
+        self.assertEqual(self.plugin._managed_record(103)["status"], "active")
+
+    def test_confirmation_deadline_completes_and_removes_card(self) -> None:
+        subscribe = FakeSubscribe(104)
+        self._complete(subscribe)
+        managed = self.plugin._managed_record(104)
+        managed["confirmation_deadline"] = "2026-08-07T08:00:00+08:00"
+        managed["check_after"] = "2026-08-07T08:00:00+08:00"
+        self.plugin._upsert_managed(managed)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(
+                type=MediaType.TV,
+                title_year="测试剧 (2026)",
+            ),
+        )
+        now = datetime.datetime(
+            2026, 8, 7, 8, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_due_confirmations()
+
+        self.assertEqual(summary["completed"], 1)
+        self.assertIsNone(FakeSubscribeOper().get(104))
+        self.assertEqual(self.plugin._managed_record(104)["status"], "completed")
 
     def test_started_item_without_total_uses_provisional_100_subscription(self) -> None:
         item = plugin_module.FeedItem(
@@ -1044,6 +1141,248 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(subscribe.state, "S")
         self.assertEqual(self.plugin._managed_record(6)["status"], "verification_error")
         self.assertFalse(FakeSubscribeChain.search_calls)
+
+    def test_manual_recheck_bypasses_schedule_and_same_day_limit(self) -> None:
+        subscribe = FakeSubscribe(201)
+        subscribe.name = "人生赢家"
+        subscribe.doubanid = "35749978"
+        subscribe.total_episode = 24
+        self._complete(subscribe)
+        today = self.plugin._now_datetime().date().isoformat()
+        self.plugin._upsert_managed({
+            "subscribe_id": 201,
+            "check_after": "2099-01-01T00:00:00+08:00",
+            "confirmation_deadline": "2099-01-01T00:00:00+08:00",
+            "last_douban_check_date": today,
+        })
+        calls = []
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **kwargs: (
+                calls.append(kwargs)
+                or {"id": "35749978", "title": "人生赢家", "episodes_count": 24}
+            ),
+        )
+
+        with patch.object(plugin_module.time, "sleep"):
+            for _ in range(2):
+                response = self.plugin.api_recheck_managed({"subscribe_id": 201})
+                self.assertTrue(response["success"])
+                self.assertEqual(response["outcome"], "pending")
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call["doubanid"] == "35749978" for call in calls))
+        self.assertTrue(all(call["raise_exception"] for call in calls))
+        record = response["item"]
+        self.assertEqual(record["douban_rechecked_total"], 24)
+        self.assertEqual(record["douban_check_id"], "35749978")
+        self.assertEqual(record["douban_response_type"], "dict")
+        self.assertIn("episodes_count", record["douban_response_fields"])
+        self.assertEqual(record["status"], "waiting_confirmation")
+        self.assertEqual(subscribe.state, "S")
+        self.assertFalse(self.plugin._sync_lock.locked())
+
+    def test_manual_recheck_increased_total_resumes_paused_subscription(self) -> None:
+        subscribe = FakeSubscribe(202)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 44},
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": "202"})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "resumed")
+        self.assertEqual(response["item"]["douban_rechecked_total"], 44)
+        self.assertEqual(subscribe.total_episode, 44)
+        self.assertEqual(subscribe.lack_episode, 4)
+        self.assertEqual(subscribe.state, "R")
+        self.assertEqual(FakeSubscribeChain.search_calls[0]["sid"], 202)
+
+    def test_manual_recheck_after_deadline_uses_normal_completion(self) -> None:
+        subscribe = FakeSubscribe(203)
+        self._complete(subscribe)
+        self._make_due(203)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(type=MediaType.TV),
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 203})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "completed")
+        self.assertIsNone(FakeSubscribeOper().get(203))
+        self.assertEqual(response["item"]["status"], "completed")
+        self.assertEqual(len(FakeSubscribeChain.finish_calls), 1)
+
+    def test_manual_recheck_active_subscription_only_records_douban_total(self) -> None:
+        subscribe = FakeSubscribe(204)
+        subscribe.lack_episode = 10
+        FakeSubscribeOper.records[204] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 204,
+            "douban_id": subscribe.doubanid,
+            "expected_total": 40,
+            "status": "active",
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 44},
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 204})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "checked")
+        self.assertEqual(response["item"]["douban_rechecked_total"], 44)
+        self.assertEqual(subscribe.total_episode, 40)
+        self.assertEqual(subscribe.lack_episode, 10)
+        self.assertEqual(subscribe.state, "R")
+        self.assertFalse(FakeSubscribeChain.search_calls)
+        self.assertFalse(FakeSubscribeChain.finish_calls)
+
+    def test_manual_recheck_resolves_provisional_total(self) -> None:
+        subscribe = FakeSubscribe(205)
+        subscribe.total_episode = 100
+        subscribe.lack_episode = 95
+        FakeSubscribeOper.records[205] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 205,
+            "douban_id": subscribe.doubanid,
+            "expected_total": 100,
+            "status": "awaiting_douban_total",
+            "total_pending": True,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 24},
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 205})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "resolved")
+        self.assertEqual(response["item"]["douban_rechecked_total"], 24)
+        self.assertEqual(subscribe.total_episode, 24)
+        self.assertEqual(subscribe.lack_episode, 19)
+
+    def test_manual_recheck_missing_total_reports_safe_diagnostics(self) -> None:
+        subscribe = FakeSubscribe(206)
+        self._complete(subscribe)
+        self.plugin._upsert_managed({
+            "subscribe_id": 206, "douban_rechecked_total": 40,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {
+                "title": "测试剧", "last_episode_number": 40, "token": "private-value",
+            },
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 206})
+
+        self.assertFalse(response["success"])
+        self.assertIn("豆瓣 456", response["message"])
+        self.assertIn("未返回明确总集数", response["message"])
+        self.assertIn("last_episode_number", response["message"])
+        self.assertNotIn("private-value", json.dumps(response))
+        self.assertEqual(response["item"]["douban_rechecked_total"], 0)
+        self.assertEqual(response["item"]["status"], "verification_error")
+        self.assertTrue(response["item"]["check_after"])
+        self.assertEqual(subscribe.state, "S")
+        self.assertIsNotNone(FakeSubscribeOper().get(206))
+        self.assertFalse(self.plugin._sync_lock.locked())
+
+    def test_manual_recheck_empty_response_and_missing_id_are_distinct(self) -> None:
+        subscribe = FakeSubscribe(207)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: None,
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 207})
+        self.assertFalse(response["success"])
+        self.assertIn("详情为空", response["message"])
+        self.assertEqual(response["item"]["douban_response_type"], "NoneType")
+
+        subscribe.doubanid = ""
+        self.plugin._upsert_managed({"subscribe_id": 207, "douban_id": ""})
+        with patch.object(self.plugin, "_call_douban") as call:
+            response = self.plugin.api_recheck_managed({"subscribe_id": 207})
+        self.assertFalse(response["success"])
+        self.assertIn("缺少豆瓣 ID", response["message"])
+        call.assert_not_called()
+
+    def test_manual_recheck_rejects_unexpected_response_type(self) -> None:
+        subscribe = FakeSubscribe(208)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: types.SimpleNamespace(episodes_count=40),
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 208})
+
+        self.assertFalse(response["success"])
+        self.assertIn("返回类型异常", response["message"])
+        self.assertEqual(response["item"]["douban_response_type"], "SimpleNamespace")
+        self.assertEqual(subscribe.state, "S")
+
+    def test_manual_recheck_limit_failure_keeps_paused_subscription_retryable(self) -> None:
+        subscribe = FakeSubscribe(209)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: (_ for _ in ()).throw(LimitException("限流")),
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 209})
+
+        self.assertFalse(response["success"])
+        self.assertIn("限流", response["message"])
+        self.assertEqual(response["item"]["status"], "verification_error")
+        self.assertTrue(response["item"]["check_after"])
+        self.assertEqual(subscribe.state, "S")
+        self.assertFalse(self.plugin._sync_lock.locked())
+
+    def test_manual_recheck_does_not_take_over_changed_subscription(self) -> None:
+        subscribe = FakeSubscribe(210)
+        self._complete(subscribe)
+        subscribe.total_episode = 50
+
+        with patch.object(self.plugin, "_call_douban") as call:
+            response = self.plugin.api_recheck_managed({"subscribe_id": 210})
+
+        self.assertFalse(response["success"])
+        self.assertEqual(response["outcome"], "manual_review")
+        call.assert_not_called()
+        self.assertEqual(subscribe.total_episode, 50)
+        self.assertEqual(subscribe.state, "S")
+
+    def test_manual_recheck_rejects_invalid_unknown_terminal_and_foreign_records(self) -> None:
+        with patch.object(self.plugin, "_call_douban") as call:
+            for payload in (None, {}, {"subscribe_id": "bad"}, {"subscribe_id": -1}):
+                self.assertFalse(self.plugin.api_recheck_managed(payload)["success"])
+            self.assertFalse(self.plugin.api_recheck_managed({"subscribe_id": 999})["success"])
+            subscribe = FakeSubscribe(211)
+            FakeSubscribeOper.records[211] = subscribe
+            for status in ("completed", "missing_subscription", "manual_review", "confirming"):
+                self.plugin._upsert_managed({"subscribe_id": 211, "status": status})
+                self.assertFalse(self.plugin.api_recheck_managed({"subscribe_id": 211})["success"])
+            self.plugin._upsert_managed({"subscribe_id": 211, "status": "active"})
+            subscribe.username = "admin"
+            self.assertFalse(self.plugin.api_recheck_managed({"subscribe_id": 211})["success"])
+            FakeSubscribeOper.records.clear()
+            self.assertFalse(self.plugin.api_recheck_managed({"subscribe_id": 211})["success"])
+        call.assert_not_called()
+        self.assertFalse(self.plugin._sync_lock.locked())
+
+    def test_manual_recheck_does_not_run_concurrently_with_sync(self) -> None:
+        self.plugin._sync_lock.acquire()
+        try:
+            with patch.object(self.plugin, "_call_douban") as call:
+                response = self.plugin.api_recheck_managed({"subscribe_id": 1})
+            self.assertFalse(response["success"])
+            self.assertIn("正在运行", response["message"])
+            call.assert_not_called()
+            self.assertTrue(self.plugin._sync_lock.locked())
+        finally:
+            self.plugin._sync_lock.release()
 
     def test_user_owned_subscription_is_not_intercepted(self) -> None:
         subscribe = FakeSubscribe(3, username="admin")

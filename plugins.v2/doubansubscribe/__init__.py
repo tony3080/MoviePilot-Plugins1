@@ -103,7 +103,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.9"
+    plugin_version = "0.5.11"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -258,7 +258,151 @@ class DoubanSubscribe(_PluginBase):
                 "auth": "bear",
                 "summary": "重试单条失败记录",
             },
+            {
+                "path": "/managed/recheck",
+                "endpoint": self.api_recheck_managed,
+                "methods": ["POST"],
+                "auth": "bear",
+                "summary": "立即复核单条受管订阅的豆瓣总集数",
+            },
         ]
+
+    def api_recheck_managed(
+        self,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Recheck one subscription without waiting for its scheduled check."""
+        subscribe_id = self._safe_int((payload or {}).get("subscribe_id"))
+        if not subscribe_id or subscribe_id < 1:
+            return {"success": False, "message": "缺少有效的订阅 ID"}
+        if not self._sync_lock.acquire(blocking=False):
+            return {"success": False, "message": "内容源处理或订阅复核正在运行，请稍后重试"}
+        record = {}
+        try:
+            record = self._managed_record(subscribe_id)
+            if not record:
+                return {"success": False, "message": "未找到该受管订阅"}
+            status = record.get("status")
+            if status not in {
+                "active", "awaiting_douban_total",
+                "waiting_confirmation", "verification_error",
+            }:
+                return {"success": False, "message": "该订阅当前不处于可复核状态"}
+            subscribe = SubscribeOper().get(subscribe_id)
+            if not subscribe:
+                return {"success": False, "message": "MoviePilot 中已找不到该订阅卡片"}
+            if str(getattr(subscribe, "username", "") or "") != PLUGIN_USERNAME:
+                return {"success": False, "message": "订阅归属已改变，不能复核该订阅"}
+
+            if status in {"waiting_confirmation", "verification_error"}:
+                outcome = self._confirm_managed_subscription(record)
+            elif status == "awaiting_douban_total" or record.get("total_pending"):
+                outcome = "resolved" if self._resolve_pending_total(record) else "pending"
+            else:
+                self._fetch_managed_douban_total(record, subscribe)
+                outcome = "checked"
+                self._upsert_managed({
+                    **record,
+                    "last_checked": self._now(),
+                    "reason": (
+                        f"手动复核豆瓣总集数为 {record['douban_rechecked_total']} 集；"
+                        "活动订阅保持不变"
+                    ),
+                })
+            latest = self._managed_record(subscribe_id)
+            return {
+                "success": outcome != "manual_review" and bool(
+                    latest.get("douban_rechecked_total")
+                ),
+                "message": latest.get("reason") or "复核完成",
+                "outcome": outcome,
+                "item": latest,
+            }
+        except Exception as error:
+            latest = self._managed_record(subscribe_id) or record
+            if latest.get("status") in {
+                "waiting_confirmation", "verification_error", "confirming", "finalizing",
+            }:
+                self._mark_confirmation_error(latest, error)
+            else:
+                self._upsert_managed({
+                    **latest,
+                    "last_checked": self._now(),
+                    "reason": f"手动复核豆瓣总集数失败：{error}；订阅保持不变",
+                })
+                logger.error(
+                    f"豆瓣订阅助手：手动复核订阅 #{subscribe_id} 失败：{error}",
+                    exc_info=True,
+                )
+            return {
+                "success": False,
+                "message": str(error),
+                "item": self._managed_record(subscribe_id),
+            }
+        finally:
+            self._sync_lock.release()
+
+    def _fetch_managed_douban_total(
+        self,
+        record: Dict[str, Any],
+        subscribe: Any,
+        require_total: bool = True,
+    ) -> int:
+        """Keep a safe response summary for automatic and manual rechecks."""
+        douban_id = str(
+            record.get("douban_id") or getattr(subscribe, "doubanid", "") or ""
+        ).strip()
+        now = self._now_datetime()
+        record.update({
+            "douban_check_id": douban_id,
+            "douban_rechecked_total": 0,
+            "douban_response_type": "",
+            "douban_response_fields": [],
+            "douban_check_error": "",
+            "last_douban_check_at": self._format_datetime(now),
+            "last_douban_check_date": now.date().isoformat(),
+        })
+        self._upsert_managed(record)
+        if not douban_id:
+            raise RuntimeError("订阅缺少豆瓣 ID，无法复核总集数")
+        info = self._call_douban(
+            self.chain.douban_info,
+            doubanid=douban_id,
+            mtype=MediaType.TV,
+        )
+        response_type = type(info).__name__
+        fields = sorted(str(key) for key in info)[:24] if isinstance(info, dict) else []
+        record.update({
+            "douban_response_type": response_type,
+            "douban_response_fields": fields,
+        })
+        self._upsert_managed(record)
+        if not info:
+            error = f"豆瓣 {douban_id} 详情为空（返回类型 {response_type}）"
+        elif not isinstance(info, dict):
+            raise RuntimeError(
+                f"豆瓣 {douban_id} 详情返回类型异常：{response_type}"
+            )
+        else:
+            error = ""
+        total = extract_total_episode(info) if isinstance(info, dict) else None
+        if not total:
+            error = error or (
+                f"豆瓣 {douban_id} 详情未返回明确总集数；"
+                f"返回字段：{', '.join(fields) or '无'}"
+            )
+            record["douban_check_error"] = error
+            self._upsert_managed(record)
+            if require_total:
+                raise RuntimeError(error)
+            return 0
+        record["douban_rechecked_total"] = total
+        self._upsert_managed(record)
+        logger.info(
+            f"豆瓣订阅助手：订阅 #{record.get('subscribe_id')} "
+            f"复核豆瓣 {douban_id} 总集数为 {total}"
+        )
+        return total
 
     def api_run(self) -> Dict[str, Any]:
         if self._sync_lock.locked():
@@ -2520,8 +2664,12 @@ class DoubanSubscribe(_PluginBase):
                 "lack_episode": 0,
                 "manual_total_episode": 1,
             })
+            completed_at = self._now_datetime()
+            confirmation_deadline = completed_at + datetime.timedelta(
+                days=self._confirmation_days
+            )
             check_after = self._format_datetime(
-                self._now_datetime() + datetime.timedelta(days=self._confirmation_days)
+                completed_at
             )
             self._upsert_managed({
                 "subscribe_id": subscribe_id,
@@ -2539,13 +2687,21 @@ class DoubanSubscribe(_PluginBase):
                 ),
                 "category": managed.get("category", "other") if managed else "other",
                 "status": "waiting_confirmation",
-                "completed_at": self._now(),
+                "completed_at": self._format_datetime(completed_at),
+                "confirmation_deadline": self._format_datetime(
+                    confirmation_deadline
+                ),
                 "check_after": check_after,
-                "reason": f"已完成并暂停，将在 {self._confirmation_days} 天后复核豆瓣总集数",
+                "last_douban_check_at": "",
+                "last_douban_check_date": "",
+                "reason": (
+                    f"已完成并暂停，将每日复核豆瓣总集数；"
+                    f"最晚 {self._format_datetime(confirmation_deadline)} 自动完成"
+                ),
             })
             logger.info(
                 f"豆瓣订阅助手：订阅 #{subscribe_id} 已完成，已暂停并保留卡片，"
-                f"将在 {check_after} 后复核豆瓣总集数"
+                f"从当天开始每日复核，最晚 {self._format_datetime(confirmation_deadline)} 自动完成"
             )
         except Exception as error:
             logger.error(
@@ -2655,15 +2811,9 @@ class DoubanSubscribe(_PluginBase):
             })
             return False
 
-        douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
-        if not douban_id:
-            raise RuntimeError("订阅缺少豆瓣 ID")
-        douban_info = self._call_douban(
-            self.chain.douban_info,
-            doubanid=douban_id,
-            mtype=MediaType.TV,
+        douban_total = self._fetch_managed_douban_total(
+            record, subscribe, require_total=False,
         )
-        douban_total = extract_total_episode(douban_info or {})
         if not douban_total:
             self._upsert_managed({
                 **record,
@@ -2672,7 +2822,7 @@ class DoubanSubscribe(_PluginBase):
                 "last_checked": self._now(),
                 "reason": (
                     f"豆瓣仍未提供明确总集数，继续暂按 {provisional_total} 集订阅，"
-                    "下个执行周期再次复核"
+                    f"下个执行周期再次复核；{record.get('douban_check_error') or ''}"
                 ),
             })
             return False
@@ -2999,8 +3149,30 @@ class DoubanSubscribe(_PluginBase):
         for record in self._managed_records():
             if record.get("status") not in {"waiting_confirmation", "verification_error"}:
                 continue
+            if record.get("status") == "waiting_confirmation" and not record.get(
+                "confirmation_deadline"
+            ):
+                completed_at = self._parse_datetime(record.get("completed_at"))
+                if completed_at:
+                    confirmation_deadline = completed_at + datetime.timedelta(
+                        days=self._confirmation_days
+                    )
+                    record = {
+                        **record,
+                        "confirmation_deadline": self._format_datetime(
+                            confirmation_deadline
+                        ),
+                        "check_after": self._format_datetime(now),
+                    }
+                    self._upsert_managed(record)
             check_after = self._parse_datetime(record.get("check_after"))
             if check_after and check_after > now:
+                continue
+            last_check_date = str(record.get("last_douban_check_date") or "")
+            if (
+                last_check_date == now.date().isoformat()
+                and record.get("status") == "waiting_confirmation"
+            ):
                 continue
             summary["confirmations"] += 1
             try:
@@ -3019,6 +3191,7 @@ class DoubanSubscribe(_PluginBase):
 
     def _confirm_managed_subscription(self, record: Dict[str, Any]) -> str:
         subscribe_id = int(record.get("subscribe_id"))
+        now = self._now_datetime()
         subscribe_oper = SubscribeOper()
         subscribe = subscribe_oper.get(subscribe_id)
         if not subscribe:
@@ -3056,26 +3229,43 @@ class DoubanSubscribe(_PluginBase):
             })
             return "manual_review"
 
-        self._upsert_managed({
-            **record,
+        record.update({
             "status": "confirming",
             "check_after": "",
             "last_checked": self._now(),
+            "last_douban_check_at": self._format_datetime(now),
+            "last_douban_check_date": now.date().isoformat(),
             "reason": "正在复核豆瓣总集数",
         })
-        douban_id = str(record.get("douban_id") or getattr(subscribe, "doubanid", "") or "")
-        douban_info = (
-            self._call_douban(
-                self.chain.douban_info,
-                doubanid=douban_id,
-                mtype=MediaType.TV,
-            )
-            if douban_id else None
-        )
-        douban_total = extract_total_episode(douban_info or {})
-        if not douban_total:
-            raise RuntimeError("豆瓣详情未返回明确总集数")
+        self._upsert_managed(record)
+        douban_total = self._fetch_managed_douban_total(record, subscribe)
         if douban_total <= expected_total:
+            confirmation_deadline = self._parse_datetime(
+                record.get("confirmation_deadline")
+            )
+            if not confirmation_deadline:
+                completed_at = self._parse_datetime(record.get("completed_at")) or now
+                confirmation_deadline = completed_at + datetime.timedelta(
+                    days=self._confirmation_days
+                )
+            if now < confirmation_deadline:
+                next_check = now + datetime.timedelta(days=1)
+                self._upsert_managed({
+                    **record,
+                    "status": "waiting_confirmation",
+                    "check_after": self._format_datetime(next_check),
+                    "last_checked": self._now(),
+                    "last_douban_check_at": self._format_datetime(now),
+                    "last_douban_check_date": now.date().isoformat(),
+                    "confirmation_deadline": self._format_datetime(
+                        confirmation_deadline
+                    ),
+                    "reason": (
+                        f"豆瓣总集数 {douban_total} 未增加，继续暂停等待每日复核；"
+                        f"最晚 {self._format_datetime(confirmation_deadline)} 自动完成"
+                    ),
+                })
+                return "pending"
             return self._finish_after_unchanged_confirmation(
                 record=record,
                 subscribe=subscribe,

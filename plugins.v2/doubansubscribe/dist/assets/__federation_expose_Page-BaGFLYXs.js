@@ -15,8 +15,13 @@ const _hoisted_7 = {
   class: "text-caption text-medium-emphasis"
 };
 const _hoisted_8 = { class: "row-actions" };
-const _hoisted_9 = { class: "text-subtitle-1 ms-4 diagnostics-title" };
-const _hoisted_10 = { class: "error-cell" };
+const _hoisted_9 = { class: "title-cell" };
+const _hoisted_10 = {
+  key: 0,
+  class: "text-caption text-medium-emphasis"
+};
+const _hoisted_11 = { class: "text-subtitle-1 ms-4 diagnostics-title" };
+const _hoisted_12 = { class: "error-cell" };
 
 const {computed,onMounted,ref,watch} = await importShared('vue');
 
@@ -49,6 +54,7 @@ const keyword = ref('');
 const group = ref('all');
 const category = ref('');
 const retrying = ref(new Set());
+const rechecking = ref(new Set());
 const managed = ref([]);
 const supplement = ref({});
 const lastRun = ref({});
@@ -91,6 +97,7 @@ const managedHeaders = [
   { title: '状态', key: 'status', width: 180 },
   { title: '下次检查', key: 'check_after', minWidth: 190 },
   { title: '说明', key: 'reason', minWidth: 260 },
+  { title: '', key: 'actions', sortable: false, width: 64, align: 'end' },
 ];
 
 const supplementHeaders = [
@@ -146,6 +153,9 @@ const supplementStatusLabels = {
 };
 const managedItems = computed(() => managed.value.map(item => ({
   ...item,
+  recheckable: [
+    'active', 'awaiting_douban_total', 'waiting_confirmation', 'verification_error',
+  ].includes(item.status),
   check_after: item.check_after || item.stale_check_after || '-',
   observed_progress: (
     item.observed_completed !== null
@@ -290,6 +300,24 @@ async function retry(record) {
     const done = new Set(retrying.value);
     done.delete(record.key);
     retrying.value = done;
+  }
+}
+
+async function recheck(record) {
+  if (rechecking.value.size || running.value) return
+  rechecking.value = new Set([record.subscribe_id]);
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/DoubanSubscribe/managed/recheck', {
+        subscribe_id: record.subscribe_id,
+      }),
+    );
+    notify(response?.message || '复核完成', response?.success === false ? 'error' : 'success');
+    await loadOverview();
+  } catch (error) {
+    notify(error?.message || '复核失败', 'error');
+  } finally {
+    rechecking.value = new Set();
   }
 }
 
@@ -576,8 +604,38 @@ return (_ctx, _cache) => {
               headers: managedHeaders,
               items: managedItems.value,
               "items-per-page": 25,
+              "item-value": "subscribe_id",
               "fixed-header": ""
-            }, null, 8, ["items"])
+            }, {
+              "item.title": _withCtx(({ item }) => [
+                _createElementVNode("div", _hoisted_9, [
+                  _createElementVNode("div", null, _toDisplayString(item.title), 1),
+                  (item.douban_check_id || item.douban_id)
+                    ? (_openBlock(), _createElementBlock("div", _hoisted_10, " 豆瓣 " + _toDisplayString(item.douban_check_id || item.douban_id), 1))
+                    : _createCommentVNode("", true)
+                ])
+              ]),
+              "item.actions": _withCtx(({ item }) => [
+                _createVNode(_component_VTooltip, { text: "重新复核豆瓣总集数" }, {
+                  activator: _withCtx(({ props: tooltipProps }) => [
+                    _createElementVNode("span", null, [
+                      _createVNode(_component_VBtn, _mergeProps(tooltipProps, {
+                        icon: "mdi-refresh",
+                        size: "small",
+                        variant: "text",
+                        color: "primary",
+                        "aria-label": "重新复核豆瓣总集数",
+                        loading: rechecking.value.has(item.subscribe_id),
+                        disabled: !item.recheckable || rechecking.value.size > 0 || running.value,
+                        onClick: $event => (recheck(item))
+                      }), null, 16, ["loading", "disabled", "onClick"])
+                    ])
+                  ]),
+                  _: 2
+                }, 1024)
+              ]),
+              _: 1
+            }, 8, ["items"])
           ]),
           _: 1
         }),
@@ -622,7 +680,7 @@ return (_ctx, _cache) => {
               color: "transparent"
             }, {
               default: _withCtx(() => [
-                _createElementVNode("div", _hoisted_9, _toDisplayString(diagnostics.value.title), 1),
+                _createElementVNode("div", _hoisted_11, _toDisplayString(diagnostics.value.title), 1),
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   icon: "mdi-close",
@@ -656,7 +714,7 @@ return (_ctx, _cache) => {
                       _createElementVNode("td", null, _toDisplayString(attempt.result_count), 1),
                       _createElementVNode("td", null, _toDisplayString(attempt.hydrated_count), 1),
                       _createElementVNode("td", null, _toDisplayString(attempt.request_count), 1),
-                      _createElementVNode("td", _hoisted_10, _toDisplayString(attempt.error || '-'), 1)
+                      _createElementVNode("td", _hoisted_12, _toDisplayString(attempt.error || '-'), 1)
                     ]))
                   }), 128))
                 ])
@@ -701,6 +759,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-62a0c542"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9e369a94"]]);
 
 export { Page as default };

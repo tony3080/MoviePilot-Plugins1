@@ -22,6 +22,7 @@ const keyword = ref('')
 const group = ref('all')
 const category = ref('')
 const retrying = ref(new Set())
+const rechecking = ref(new Set())
 const managed = ref([])
 const supplement = ref({})
 const lastRun = ref({})
@@ -64,6 +65,7 @@ const managedHeaders = [
   { title: '状态', key: 'status', width: 180 },
   { title: '下次检查', key: 'check_after', minWidth: 190 },
   { title: '说明', key: 'reason', minWidth: 260 },
+  { title: '', key: 'actions', sortable: false, width: 64, align: 'end' },
 ]
 
 const supplementHeaders = [
@@ -119,6 +121,9 @@ const supplementStatusLabels = {
 }
 const managedItems = computed(() => managed.value.map(item => ({
   ...item,
+  recheckable: [
+    'active', 'awaiting_douban_total', 'waiting_confirmation', 'verification_error',
+  ].includes(item.status),
   check_after: item.check_after || item.stale_check_after || '-',
   observed_progress: (
     item.observed_completed !== null
@@ -263,6 +268,24 @@ async function retry(record) {
     const done = new Set(retrying.value)
     done.delete(record.key)
     retrying.value = done
+  }
+}
+
+async function recheck(record) {
+  if (rechecking.value.size || running.value) return
+  rechecking.value = new Set([record.subscribe_id])
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/DoubanSubscribe/managed/recheck', {
+        subscribe_id: record.subscribe_id,
+      }),
+    )
+    notify(response?.message || '复核完成', response?.success === false ? 'error' : 'success')
+    await loadOverview()
+  } catch (error) {
+    notify(error?.message || '复核失败', 'error')
+  } finally {
+    rechecking.value = new Set()
   }
 }
 
@@ -465,8 +488,37 @@ onMounted(() => {
           :headers="managedHeaders"
           :items="managedItems"
           :items-per-page="25"
+          item-value="subscribe_id"
           fixed-header
-        />
+        >
+          <template #item.title="{ item }">
+            <div class="title-cell">
+              <div>{{ item.title }}</div>
+              <div v-if="item.douban_check_id || item.douban_id" class="text-caption text-medium-emphasis">
+                豆瓣 {{ item.douban_check_id || item.douban_id }}
+              </div>
+            </div>
+          </template>
+          <template #item.actions="{ item }">
+            <VTooltip text="重新复核豆瓣总集数">
+              <template #activator="{ props: tooltipProps }">
+                <span>
+                  <VBtn
+                    v-bind="tooltipProps"
+                    icon="mdi-refresh"
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    aria-label="重新复核豆瓣总集数"
+                    :loading="rechecking.has(item.subscribe_id)"
+                    :disabled="!item.recheckable || rechecking.size > 0 || running"
+                    @click="recheck(item)"
+                  />
+                </span>
+              </template>
+            </VTooltip>
+          </template>
+        </VDataTable>
       </VWindowItem>
 
       <VWindowItem value="supplement">
