@@ -57,14 +57,14 @@ const historyHeaders = [
 
 const managedHeaders = [
   { title: '订阅', key: 'title', width: 240, minWidth: 240, fixed: true },
-  { title: '季度', key: 'season', width: 88, minWidth: 88 },
-  { title: '目标总集数', key: 'expected_total', width: 136, minWidth: 136 },
-  { title: '当前进度', key: 'observed_progress', width: 120, minWidth: 120 },
-  { title: 'TMDB季总集数', key: 'tmdb_check', width: 180, minWidth: 180 },
-  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 120, minWidth: 120 },
-  { title: '状态', key: 'status', width: 180, minWidth: 180 },
-  { title: '下次检查', key: 'check_after', width: 190, minWidth: 190 },
-  { title: '说明', key: 'reason', width: 300, minWidth: 300 },
+  { title: '季度', key: 'season', width: 64, minWidth: 64 },
+  { title: '目标总集数', key: 'expected_total', width: 104, minWidth: 104 },
+  { title: '当前进度', key: 'observed_progress', width: 96, minWidth: 96 },
+  { title: 'TMDB季总集数', key: 'tmdb_check', width: 128, minWidth: 128 },
+  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 100, minWidth: 100 },
+  { title: '状态', key: 'status', width: 160, minWidth: 160 },
+  { title: '下次检查', key: 'check_after', width: 176, minWidth: 176 },
+  { title: '说明', key: 'reason', width: 260, minWidth: 260 },
 ]
 
 const supplementHeaders = [
@@ -663,7 +663,7 @@ onMounted(() => {
 }
 
 .managed-table :deep(table) {
-  min-width: 1554px;
+  min-width: 1328px;
   table-layout: fixed;
 }
 

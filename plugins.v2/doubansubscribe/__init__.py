@@ -103,7 +103,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.13"
+    plugin_version = "0.5.14"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -178,6 +178,7 @@ class DoubanSubscribe(_PluginBase):
             value for value in (categories or [])
             if value in MEDIA_CATEGORY_LABELS
         ]
+        self._migrate_managed_douban_ids()
 
         if self._onlyonce:
             self._onlyonce = False
@@ -295,7 +296,10 @@ class DoubanSubscribe(_PluginBase):
                 return {"success": False, "message": "订阅归属已改变，不能复核该订阅"}
 
             if status in {"waiting_confirmation", "verification_error"}:
-                outcome = self._confirm_managed_subscription(record)
+                outcome = self._confirm_managed_subscription(
+                    record,
+                    force_finish_unchanged=True,
+                )
             elif status == "awaiting_douban_total" or record.get("total_pending"):
                 outcome = "resolved" if self._resolve_pending_total(record) else "pending"
             else:
@@ -349,9 +353,7 @@ class DoubanSubscribe(_PluginBase):
         require_total: bool = True,
     ) -> int:
         """Keep a safe response summary for automatic and manual rechecks."""
-        douban_id = str(
-            record.get("douban_id") or getattr(subscribe, "doubanid", "") or ""
-        ).strip()
+        douban_id = str(record.get("douban_id") or "").strip()
         now = self._now_datetime()
         record.update({
             "douban_check_id": douban_id,
@@ -2678,7 +2680,11 @@ class DoubanSubscribe(_PluginBase):
                     or (managed.get("title", "") if managed else "")
                 ),
                 "tmdb_id": getattr(subscribe, "tmdbid", None),
-                "douban_id": str(getattr(subscribe, "doubanid", "") or ""),
+                "douban_id": (
+                    str((managed or {}).get("douban_id") or "").strip()
+                    if managed
+                    else str(getattr(subscribe, "doubanid", "") or "").strip()
+                ),
                 "season": getattr(subscribe, "season", 1) or 1,
                 "expected_total": (
                     managed.get("expected_total")
@@ -3009,9 +3015,7 @@ class DoubanSubscribe(_PluginBase):
                 f"{tmdb_total} 集，正在复核豆瓣总集数"
             ),
         })
-        douban_id = str(
-            record.get("douban_id") or getattr(subscribe, "doubanid", "") or ""
-        )
+        douban_id = str(record.get("douban_id") or "").strip()
         if not douban_id:
             raise RuntimeError("订阅缺少豆瓣 ID，无法复核总集数")
         douban_info = self._call_douban(
@@ -3189,7 +3193,11 @@ class DoubanSubscribe(_PluginBase):
                 self._mark_confirmation_error(record, error)
         return summary
 
-    def _confirm_managed_subscription(self, record: Dict[str, Any]) -> str:
+    def _confirm_managed_subscription(
+        self,
+        record: Dict[str, Any],
+        force_finish_unchanged: bool = False,
+    ) -> str:
         subscribe_id = int(record.get("subscribe_id"))
         now = self._now_datetime()
         subscribe_oper = SubscribeOper()
@@ -3219,6 +3227,7 @@ class DoubanSubscribe(_PluginBase):
         if (
             str(getattr(subscribe, "state", "") or "") != "S"
             or int(subscribe.total_episode or 0) != expected_total
+            or int(getattr(subscribe, "lack_episode", 0) or 0) > 0
         ):
             self._upsert_managed({
                 **record,
@@ -3248,7 +3257,7 @@ class DoubanSubscribe(_PluginBase):
                 confirmation_deadline = completed_at + datetime.timedelta(
                     days=self._confirmation_days
                 )
-            if now < confirmation_deadline:
+            if now < confirmation_deadline and not force_finish_unchanged:
                 next_check = now + datetime.timedelta(days=1)
                 self._upsert_managed({
                     **record,
@@ -3335,12 +3344,16 @@ class DoubanSubscribe(_PluginBase):
         meta = MetaInfo(str(getattr(subscribe, "name", "") or record.get("title") or ""))
         meta.type = MediaType.TV
         meta.begin_season = int(getattr(subscribe, "season", 1) or 1)
-        mediainfo = self.chain.recognize_media(
-            meta=meta,
-            mtype=MediaType.TV,
-            tmdbid=getattr(subscribe, "tmdbid", None) or record.get("tmdb_id"),
-            cache=False,
-        )
+        try:
+            mediainfo = self.chain.recognize_media(
+                meta=meta,
+                mtype=MediaType.TV,
+                tmdbid=getattr(subscribe, "tmdbid", None) or record.get("tmdb_id"),
+                cache=False,
+            )
+        except Exception:
+            subscribe_oper.update(subscribe_id, {"state": "S"})
+            raise
         if not mediainfo:
             subscribe_oper.update(subscribe_id, {"state": "S"})
             raise RuntimeError("豆瓣总集数未增加，但 MoviePilot 无法识别媒体以完成订阅")
@@ -3437,7 +3450,9 @@ class DoubanSubscribe(_PluginBase):
             "subscribe_id": subscribe_id,
             "title": title,
             "tmdb_id": tmdb_id,
-            "douban_id": str(douban_id or ""),
+            "douban_id": str(
+                douban_id or (existing or {}).get("douban_id") or ""
+            ).strip(),
             "season": season,
             "expected_total": expected_total,
             "category": category,
@@ -3500,12 +3515,102 @@ class DoubanSubscribe(_PluginBase):
             elif not isinstance(raw, dict):
                 raw = {}
             current = dict(raw.get(key) or {})
-            current.update({
-                field: value for field, value in record.items()
-                if value is not None
-            })
+            for field, value in record.items():
+                if value is None:
+                    continue
+                if (
+                    field == "douban_id"
+                    and not str(value).strip()
+                    and str(current.get(field) or "").strip()
+                ):
+                    continue
+                current[field] = value
             raw[key] = current
             self.save_data("managed_subscriptions", raw)
+
+    def _migrate_managed_douban_ids(self) -> int:
+        """Recover missing IDs from durable processing records without title guessing."""
+        managed_records = [
+            record for record in self._managed_records()
+            if not str(record.get("douban_id") or "").strip()
+        ]
+        if not managed_records:
+            return 0
+        history = [
+            record for record in (self.get_data("history") or [])
+            if isinstance(record, dict)
+        ]
+        processed = self._processed_index(history)
+        by_subscribe: Dict[str, set[str]] = {}
+        by_source: Dict[str, set[str]] = {}
+        by_tmdb_season: Dict[Tuple[str, str], set[str]] = {}
+
+        def add_candidate(
+            record: Dict[str, Any],
+            target: Dict[Any, set[str]],
+            key: Any,
+        ) -> None:
+            douban_id = str(record.get("douban_id") or "").strip()
+            if not douban_id or key is None or key == "":
+                return
+            target.setdefault(key, set()).add(douban_id)
+
+        sources = history + [
+            {**record, "key": record.get("key") or key}
+            for key, record in processed.items()
+        ]
+        for source in sources:
+            subscribe_key = str(source.get("subscribe_id") or "").strip()
+            if subscribe_key:
+                add_candidate(source, by_subscribe, subscribe_key)
+            source_key = str(source.get("source_key") or source.get("key") or "").strip()
+            if source_key:
+                add_candidate(source, by_source, source_key)
+            tmdb_id = str(source.get("tmdb_id") or "").strip()
+            season = str(source.get("season") or "").strip()
+            if tmdb_id and season and source.get("status") in SUCCESS_STATUSES:
+                add_candidate(source, by_tmdb_season, (tmdb_id, season))
+
+        recovered = 0
+        for record in managed_records:
+            if str(record.get("douban_id") or "").strip():
+                continue
+            subscribe_key = str(record.get("subscribe_id") or "").strip()
+            source_key = str(record.get("source_key") or "").strip()
+            tmdb_id = str(record.get("tmdb_id") or "").strip()
+            season = str(record.get("season") or "").strip()
+            check_id = str(record.get("douban_check_id") or "").strip()
+            source_match = re.fullmatch(r"douban:(\d+)", source_key)
+            candidates = {check_id} if check_id else set()
+            if not candidates and source_match:
+                candidates = {source_match.group(1)}
+            if not candidates and subscribe_key:
+                candidates = by_subscribe.get(subscribe_key, set())
+            if not candidates and source_key:
+                candidates = by_source.get(source_key, set())
+            if not candidates and tmdb_id and season:
+                candidates = by_tmdb_season.get((tmdb_id, season), set())
+            if len(candidates) != 1:
+                continue
+            douban_id = next(iter(candidates))
+            with self._data_lock:
+                current = self._managed_record(record.get("subscribe_id"))
+                if str(current.get("douban_id") or "").strip():
+                    continue
+                self._upsert_managed({
+                    "subscribe_id": record.get("subscribe_id"),
+                    "douban_id": douban_id,
+                    "reason": (
+                        f"{current.get('reason') or '受管订阅'}；"
+                        f"已从历史记录恢复豆瓣 ID {douban_id}"
+                    ),
+                })
+                recovered += 1
+        if recovered:
+            logger.info(
+                f"豆瓣订阅助手：已为 {recovered} 条受管订阅恢复历史豆瓣 ID"
+            )
+        return recovered
 
     def _processed_index(
         self,
@@ -3770,6 +3875,7 @@ class DoubanSubscribe(_PluginBase):
             "subscribe_id": record.get("subscribe_id"),
             "douban_id": record.get("douban_id") or "",
             "tmdb_id": record.get("tmdb_id"),
+            "season": record.get("season"),
             "time": record.get("time") or "",
         }
 

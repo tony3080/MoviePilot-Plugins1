@@ -1161,15 +1161,15 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
                 calls.append(kwargs)
                 or {"id": "35749978", "title": "人生赢家", "episodes_count": 24}
             ),
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(type=MediaType.TV),
         )
 
         with patch.object(plugin_module.time, "sleep"):
-            for _ in range(2):
-                response = self.plugin.api_recheck_managed({"subscribe_id": 201})
-                self.assertTrue(response["success"])
-                self.assertEqual(response["outcome"], "pending")
+            response = self.plugin.api_recheck_managed({"subscribe_id": 201})
+            self.assertTrue(response["success"])
+            self.assertEqual(response["outcome"], "completed")
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertTrue(all(call["doubanid"] == "35749978" for call in calls))
         self.assertTrue(all(call["raise_exception"] for call in calls))
         record = response["item"]
@@ -1177,8 +1177,9 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(record["douban_check_id"], "35749978")
         self.assertEqual(record["douban_response_type"], "dict")
         self.assertIn("episodes_count", record["douban_response_fields"])
-        self.assertEqual(record["status"], "waiting_confirmation")
-        self.assertEqual(subscribe.state, "S")
+        self.assertEqual(record["status"], "completed")
+        self.assertIsNone(FakeSubscribeOper().get(201))
+        self.assertEqual(len(FakeSubscribeChain.finish_calls), 1)
         self.assertFalse(self.plugin._sync_lock.locked())
 
     def test_manual_recheck_increased_total_resumes_paused_subscription(self) -> None:
@@ -1303,11 +1304,292 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(response["item"]["douban_response_type"], "NoneType")
 
         subscribe.doubanid = ""
-        self.plugin._upsert_managed({"subscribe_id": 207, "douban_id": ""})
+        record = self.plugin._managed_record(207)
+        record["douban_id"] = ""
+        record["douban_check_id"] = ""
+        self.plugin.save_data("managed_subscriptions", {"207": record})
         with patch.object(self.plugin, "_call_douban") as call:
             response = self.plugin.api_recheck_managed({"subscribe_id": 207})
         self.assertFalse(response["success"])
         self.assertIn("缺少豆瓣 ID", response["message"])
+        call.assert_not_called()
+
+    def test_completion_does_not_overwrite_plugin_douban_id_with_mp_value(self) -> None:
+        for mp_id in (None, "", " ", "999999"):
+            with self.subTest(mp_id=mp_id):
+                subscribe = FakeSubscribe(212)
+                self.plugin._upsert_managed({
+                    "subscribe_id": 212,
+                    "douban_id": "35749978",
+                    "status": "active",
+                    "expected_total": 40,
+                })
+                subscribe.doubanid = mp_id
+
+                self._complete(subscribe)
+
+                record = self.plugin._managed_record(212)
+                self.assertEqual(record["douban_id"], "35749978")
+                self.assertEqual(record["status"], "waiting_confirmation")
+
+    def test_managed_upsert_does_not_erase_douban_id_with_empty_value(self) -> None:
+        self.plugin._upsert_managed({
+            "subscribe_id": 213, "douban_id": "35749978",
+        })
+        for empty in (None, "", " "):
+            with self.subTest(empty=empty):
+                self.plugin._upsert_managed({
+                    "subscribe_id": 213, "douban_id": empty, "reason": "更新状态",
+                })
+                self.assertEqual(
+                    self.plugin._managed_record(213)["douban_id"], "35749978",
+                )
+                self.assertEqual(
+                    self.plugin._managed_record(213)["reason"], "更新状态",
+                )
+
+    def test_registration_keeps_previous_douban_id_if_incoming_id_is_empty(self) -> None:
+        self.plugin._upsert_managed({
+            "subscribe_id": 214, "douban_id": "35749978", "status": "active",
+        })
+        self.plugin._register_managed_subscription(
+            subscribe_id=214, title="人生赢家", tmdb_id=123, douban_id="",
+            season=1, expected_total=24, category="domestic",
+            status="active", reason="订阅中",
+        )
+        self.assertEqual(self.plugin._managed_record(214)["douban_id"], "35749978")
+
+    def test_initialization_recovers_legacy_ids_from_history_and_processed_index(self) -> None:
+        self.plugin.save_data("managed_subscriptions", {
+            "215": {
+                "subscribe_id": 215, "douban_id": "", "status": "verification_error",
+                "expected_total": 24, "source_key": "maoyan:215",
+            },
+            "216": {
+                "subscribe_id": 216, "douban_id": "", "status": "waiting_confirmation",
+                "expected_total": 30,
+            },
+        })
+        self.plugin.save_data("history", [{
+            "key": "maoyan:215", "subscribe_id": 215,
+            "douban_id": "35749978", "status": "subscribed",
+        }])
+        self.plugin.save_data("processed_items", {
+            "legacy": {
+                "subscribe_id": "216", "douban_id": "37462725",
+                "status": "subscribed",
+            },
+        })
+
+        with patch.object(self.plugin, "_call_douban") as call:
+            self.plugin.init_plugin({"enabled": True})
+            self.assertEqual(self.plugin._migrate_managed_douban_ids(), 0)
+
+        self.assertEqual(self.plugin._managed_record(215)["douban_id"], "35749978")
+        self.assertEqual(self.plugin._managed_record(216)["douban_id"], "37462725")
+        self.assertEqual(self.plugin._managed_record(215)["status"], "verification_error")
+        self.assertEqual(self.plugin._managed_record(216)["expected_total"], 30)
+        call.assert_not_called()
+
+    def test_id_migration_recovers_source_alias_and_prior_check_id(self) -> None:
+        self.plugin.save_data("managed_subscriptions", [
+            {"subscribe_id": 217, "source_key": "douban:35749978", "douban_id": ""},
+            {"subscribe_id": 218, "douban_check_id": "37462725", "douban_id": ""},
+            {"subscribe_id": 219, "source_key": "maoyan:tv:99", "douban_id": ""},
+        ])
+        self.plugin.save_data("processed_items", {
+            "maoyan:tv:99": {
+                "douban_id": "37042229",
+                "status": "subscribed",
+            },
+        })
+
+        self.assertEqual(self.plugin._migrate_managed_douban_ids(), 3)
+        self.assertEqual(self.plugin._managed_record(217)["douban_id"], "35749978")
+        self.assertEqual(self.plugin._managed_record(218)["douban_id"], "37462725")
+        self.assertEqual(self.plugin._managed_record(219)["douban_id"], "37042229")
+
+    def test_id_migration_only_accepts_unique_successful_tmdb_season_pair(self) -> None:
+        self.plugin.save_data("managed_subscriptions", {
+            "220": {
+                "subscribe_id": 220, "tmdb_id": 123, "season": 2, "douban_id": "",
+            },
+            "221": {
+                "subscribe_id": 221, "tmdb_id": 123, "season": 3, "douban_id": "",
+            },
+        })
+        self.plugin.save_data("history", [
+            {
+                "tmdb_id": "123", "season": "2", "douban_id": "35749978",
+                "status": "subscribed",
+            },
+            {
+                "tmdb_id": 123, "season": 1, "douban_id": "999",
+                "status": "subscribed",
+            },
+            {
+                "tmdb_id": 123, "season": 2, "douban_id": "998",
+                "status": "low_score",
+            },
+            {
+                "tmdb_id": 123, "season": 3, "douban_id": "997",
+                "status": "existing",
+            },
+            {
+                "tmdb_id": 123, "season": 3, "douban_id": "996",
+                "status": "subscribed",
+            },
+        ])
+
+        self.assertEqual(self.plugin._migrate_managed_douban_ids(), 1)
+        self.assertEqual(self.plugin._managed_record(220)["douban_id"], "35749978")
+        self.assertEqual(self.plugin._managed_record(221)["douban_id"], "")
+
+    def test_id_migration_never_guesses_by_title_or_overwrites_existing_id(self) -> None:
+        self.plugin.save_data("managed_subscriptions", {
+            "222": {"subscribe_id": 222, "title": "同名剧", "douban_id": ""},
+            "223": {
+                "subscribe_id": 223, "title": "同名剧", "douban_id": "12345",
+            },
+        })
+        self.plugin.save_data("history", [
+            {"title": "同名剧", "douban_id": "35749978", "status": "subscribed"},
+            {"subscribe_id": 223, "douban_id": "999", "status": "subscribed"},
+        ])
+        self.assertEqual(self.plugin._migrate_managed_douban_ids(), 0)
+        self.assertEqual(self.plugin._managed_record(222)["douban_id"], "")
+        self.assertEqual(self.plugin._managed_record(223)["douban_id"], "12345")
+
+    def test_id_migration_does_not_fall_back_from_conflicting_subscription_ids(self) -> None:
+        self.plugin._upsert_managed({
+            "subscribe_id": 224, "source_key": "unique-source", "douban_id": "",
+        })
+        self.plugin.save_data("history", [
+            {"subscribe_id": 224, "douban_id": "100", "status": "subscribed"},
+            {"subscribe_id": 224, "douban_id": "200", "status": "subscribed"},
+            {"key": "unique-source", "douban_id": "300", "status": "subscribed"},
+        ])
+        self.assertEqual(self.plugin._migrate_managed_douban_ids(), 0)
+        self.assertEqual(self.plugin._managed_record(224)["douban_id"], "")
+
+    def test_manual_recheck_uses_saved_id_even_when_mp_id_differs(self) -> None:
+        subscribe = FakeSubscribe(225)
+        subscribe.doubanid = ""
+        self.plugin._upsert_managed({
+            "subscribe_id": 225, "douban_id": "35749978",
+            "expected_total": 40, "status": "active",
+        })
+        self._complete(subscribe)
+        subscribe.doubanid = "999999"
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(type=MediaType.TV),
+        )
+        with patch.object(self.plugin, "_call_douban", return_value={"episodes_count": 40}) as call:
+            response = self.plugin.api_recheck_managed({"subscribe_id": 225})
+        self.assertTrue(response["success"])
+        self.assertEqual(call.call_args.kwargs["doubanid"], "35749978")
+        self.assertEqual(response["outcome"], "completed")
+
+    def test_manual_unchanged_completion_failure_keeps_card_paused(self) -> None:
+        subscribe = FakeSubscribe(226)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(type=MediaType.TV),
+        )
+        FakeSubscribeChain.finish_error = RuntimeError("模拟完成失败")
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 226})
+
+        self.assertFalse(response["success"])
+        self.assertEqual(subscribe.state, "S")
+        self.assertIsNotNone(FakeSubscribeOper().get(226))
+        self.assertEqual(response["item"]["status"], "verification_error")
+        self.assertTrue(response["item"]["check_after"])
+
+    def test_manual_unchanged_active_subscription_with_missing_episodes_does_not_finish(self) -> None:
+        subscribe = FakeSubscribe(227)
+        subscribe.lack_episode = 5
+        FakeSubscribeOper.records[227] = subscribe
+        self.plugin._upsert_managed({
+            "subscribe_id": 227, "douban_id": "35749978",
+            "status": "active", "expected_total": 40,
+        })
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 227})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "checked")
+        self.assertEqual(subscribe.lack_episode, 5)
+        self.assertEqual(subscribe.state, "R")
+        self.assertFalse(FakeSubscribeChain.finish_calls)
+
+    def test_recovered_legacy_subscription_can_be_manually_completed_without_mp_id(self) -> None:
+        subscribe = FakeSubscribe(228)
+        subscribe.state = "S"
+        subscribe.total_episode = 24
+        subscribe.doubanid = None
+        FakeSubscribeOper.records[228] = subscribe
+        self.plugin.save_data("managed_subscriptions", {
+            "228": {
+                "subscribe_id": 228, "douban_id": "",
+                "expected_total": 24, "status": "verification_error",
+                "confirmation_deadline": "2099-01-01T00:00:00+08:00",
+            },
+        })
+        self.plugin.save_data("history", [{
+            "subscribe_id": 228, "douban_id": "35749978", "status": "subscribed",
+        }])
+        calls = []
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **kwargs: (
+                calls.append(kwargs) or {"episodes_count": 24}
+            ),
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(type=MediaType.TV),
+        )
+        self.plugin.init_plugin({"enabled": True})
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 228})
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["outcome"], "completed")
+        self.assertEqual(calls[0]["doubanid"], "35749978")
+        self.assertIsNone(FakeSubscribeOper().get(228))
+
+    def test_manual_finish_recognition_failure_returns_subscription_to_paused(self) -> None:
+        subscribe = FakeSubscribe(229)
+        self._complete(subscribe)
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 40},
+            recognize_media=lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("识别媒体失败"),
+            ),
+        )
+
+        response = self.plugin.api_recheck_managed({"subscribe_id": 229})
+
+        self.assertFalse(response["success"])
+        self.assertEqual(subscribe.state, "S")
+        self.assertEqual(response["item"]["status"], "verification_error")
+        self.assertIsNotNone(FakeSubscribeOper().get(229))
+        self.assertFalse(FakeSubscribeChain.finish_calls)
+
+    def test_manual_recheck_does_not_force_complete_paused_card_with_missing_episodes(self) -> None:
+        subscribe = FakeSubscribe(230)
+        self._complete(subscribe)
+        subscribe.lack_episode = 2
+        with patch.object(self.plugin, "_call_douban") as call:
+            response = self.plugin.api_recheck_managed({"subscribe_id": 230})
+
+        self.assertFalse(response["success"])
+        self.assertEqual(response["outcome"], "manual_review")
+        self.assertEqual(subscribe.lack_episode, 2)
+        self.assertIsNotNone(FakeSubscribeOper().get(230))
+        self.assertFalse(FakeSubscribeChain.finish_calls)
         call.assert_not_called()
 
     def test_manual_recheck_rejects_unexpected_response_type(self) -> None:

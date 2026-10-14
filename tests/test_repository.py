@@ -186,6 +186,24 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("def _process_pending_totals", source)
         self.assertIn('"total_pending": False', source)
 
+    def test_managed_numeric_columns_use_compact_widths(self) -> None:
+        page_source = (PLUGIN_DIR / "src" / "components" / "Page.vue").read_text(
+            encoding="utf-8",
+        )
+        expected_widths = {
+            "season": 64,
+            "expected_total": 104,
+            "observed_progress": 96,
+            "tmdb_check": 128,
+            "douban_rechecked_total": 100,
+        }
+        for key, width in expected_widths.items():
+            self.assertIn(
+                f"key: '{key}', width: {width}, minWidth: {width}",
+                page_source,
+            )
+        self.assertIn("min-width: 1328px", page_source)
+
     def test_daily_supplement_contract(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
         self.assertIn('DAILY_SUPPLEMENT_SNAPSHOT_CRON = "0 8 * * *"', source)
