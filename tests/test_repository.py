@@ -163,6 +163,22 @@ class RepositoryContractTest(unittest.TestCase):
         self.assertIn("exist_history(", source)
         self.assertNotIn("history[-500:]", source)
 
+    def test_managed_recheck_icon_is_in_fixed_title_column(self) -> None:
+        page_source = (PLUGIN_DIR / "src" / "components" / "Page.vue").read_text(
+            encoding="utf-8",
+        )
+        headers = page_source.split("const managedHeaders = [", 1)[1].split("]", 1)[0]
+        self.assertIn("key: 'title', width: 240, minWidth: 240, fixed: true", headers)
+        self.assertNotIn("key: 'actions'", headers)
+        managed_view = page_source.split('<VWindowItem value="managed">', 1)[1].split(
+            "</VWindowItem>", 1,
+        )[0]
+        self.assertIn('class="managed-title-row"', managed_view)
+        self.assertIn('class="managed-recheck"', managed_view)
+        self.assertIn('icon="mdi-refresh"', managed_view)
+        self.assertNotIn("#item.actions", managed_view)
+        self.assertIn(':mobile="false"', managed_view)
+
     def test_unknown_total_periodic_resolution_contract(self) -> None:
         source = INIT_PATH.read_text(encoding="utf-8")
         self.assertIn("UNKNOWN_TOTAL_EPISODE = 100", source)

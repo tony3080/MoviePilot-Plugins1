@@ -56,16 +56,15 @@ const historyHeaders = [
 ]
 
 const managedHeaders = [
-  { title: '订阅', key: 'title', minWidth: 200 },
-  { title: '季度', key: 'season', width: 80 },
-  { title: '目标总集数', key: 'expected_total', width: 112 },
-  { title: '当前进度', key: 'observed_progress', width: 110 },
-  { title: 'TMDB季总集数', key: 'tmdb_check', minWidth: 150 },
-  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 100 },
-  { title: '状态', key: 'status', width: 180 },
-  { title: '下次检查', key: 'check_after', minWidth: 190 },
-  { title: '说明', key: 'reason', minWidth: 260 },
-  { title: '', key: 'actions', sortable: false, width: 64, align: 'end' },
+  { title: '订阅', key: 'title', width: 240, minWidth: 240, fixed: true },
+  { title: '季度', key: 'season', width: 88, minWidth: 88 },
+  { title: '目标总集数', key: 'expected_total', width: 136, minWidth: 136 },
+  { title: '当前进度', key: 'observed_progress', width: 120, minWidth: 120 },
+  { title: 'TMDB季总集数', key: 'tmdb_check', width: 180, minWidth: 180 },
+  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 120, minWidth: 120 },
+  { title: '状态', key: 'status', width: 180, minWidth: 180 },
+  { title: '下次检查', key: 'check_after', width: 190, minWidth: 190 },
+  { title: '说明', key: 'reason', width: 300, minWidth: 300 },
 ]
 
 const supplementHeaders = [
@@ -488,35 +487,36 @@ onMounted(() => {
           :headers="managedHeaders"
           :items="managedItems"
           :items-per-page="25"
+          :mobile="false"
           item-value="subscribe_id"
           fixed-header
+          class="managed-table"
         >
           <template #item.title="{ item }">
-            <div class="title-cell">
-              <div>{{ item.title }}</div>
-              <div v-if="item.douban_check_id || item.douban_id" class="text-caption text-medium-emphasis">
-                豆瓣 {{ item.douban_check_id || item.douban_id }}
+            <div class="managed-title-row">
+              <div class="title-cell managed-title-copy">
+                <div>{{ item.title }}</div>
+                <div v-if="item.douban_check_id || item.douban_id" class="text-caption text-medium-emphasis">
+                  豆瓣 {{ item.douban_check_id || item.douban_id }}
+                </div>
               </div>
+              <VTooltip text="重新复核豆瓣总集数" location="top">
+                <template #activator="{ props: tooltipProps }">
+                  <span v-bind="tooltipProps" class="managed-recheck">
+                    <VBtn
+                      icon="mdi-refresh"
+                      size="32"
+                      variant="text"
+                      color="primary"
+                      aria-label="重新复核豆瓣总集数"
+                      :loading="rechecking.has(item.subscribe_id)"
+                      :disabled="!item.recheckable || rechecking.size > 0 || running"
+                      @click="recheck(item)"
+                    />
+                  </span>
+                </template>
+              </VTooltip>
             </div>
-          </template>
-          <template #item.actions="{ item }">
-            <VTooltip text="重新复核豆瓣总集数">
-              <template #activator="{ props: tooltipProps }">
-                <span>
-                  <VBtn
-                    v-bind="tooltipProps"
-                    icon="mdi-refresh"
-                    size="small"
-                    variant="text"
-                    color="primary"
-                    aria-label="重新复核豆瓣总集数"
-                    :loading="rechecking.has(item.subscribe_id)"
-                    :disabled="!item.recheckable || rechecking.size > 0 || running"
-                    @click="recheck(item)"
-                  />
-                </span>
-              </template>
-            </VTooltip>
           </template>
         </VDataTable>
       </VWindowItem>
@@ -660,6 +660,37 @@ onMounted(() => {
 .title-cell {
   min-width: 0;
   padding-block: 6px;
+}
+
+.managed-table :deep(table) {
+  min-width: 1554px;
+  table-layout: fixed;
+}
+
+.managed-table :deep(th) {
+  white-space: nowrap;
+}
+
+.managed-table :deep(td) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.managed-title-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.managed-title-copy {
+  overflow: hidden;
+}
+
+.managed-recheck {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
 }
 
 .row-actions {

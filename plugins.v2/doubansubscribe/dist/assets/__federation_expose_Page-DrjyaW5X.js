@@ -15,13 +15,14 @@ const _hoisted_7 = {
   class: "text-caption text-medium-emphasis"
 };
 const _hoisted_8 = { class: "row-actions" };
-const _hoisted_9 = { class: "title-cell" };
-const _hoisted_10 = {
+const _hoisted_9 = { class: "managed-title-row" };
+const _hoisted_10 = { class: "title-cell managed-title-copy" };
+const _hoisted_11 = {
   key: 0,
   class: "text-caption text-medium-emphasis"
 };
-const _hoisted_11 = { class: "text-subtitle-1 ms-4 diagnostics-title" };
-const _hoisted_12 = { class: "error-cell" };
+const _hoisted_12 = { class: "text-subtitle-1 ms-4 diagnostics-title" };
+const _hoisted_13 = { class: "error-cell" };
 
 const {computed,onMounted,ref,watch} = await importShared('vue');
 
@@ -88,16 +89,15 @@ const historyHeaders = [
 ];
 
 const managedHeaders = [
-  { title: '订阅', key: 'title', minWidth: 200 },
-  { title: '季度', key: 'season', width: 80 },
-  { title: '目标总集数', key: 'expected_total', width: 112 },
-  { title: '当前进度', key: 'observed_progress', width: 110 },
-  { title: 'TMDB季总集数', key: 'tmdb_check', minWidth: 150 },
-  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 100 },
-  { title: '状态', key: 'status', width: 180 },
-  { title: '下次检查', key: 'check_after', minWidth: 190 },
-  { title: '说明', key: 'reason', minWidth: 260 },
-  { title: '', key: 'actions', sortable: false, width: 64, align: 'end' },
+  { title: '订阅', key: 'title', width: 240, minWidth: 240, fixed: true },
+  { title: '季度', key: 'season', width: 88, minWidth: 88 },
+  { title: '目标总集数', key: 'expected_total', width: 136, minWidth: 136 },
+  { title: '当前进度', key: 'observed_progress', width: 120, minWidth: 120 },
+  { title: 'TMDB季总集数', key: 'tmdb_check', width: 180, minWidth: 180 },
+  { title: '豆瓣复核', key: 'douban_rechecked_total', width: 120, minWidth: 120 },
+  { title: '状态', key: 'status', width: 180, minWidth: 180 },
+  { title: '下次检查', key: 'check_after', width: 190, minWidth: 190 },
+  { title: '说明', key: 'reason', width: 300, minWidth: 300 },
 ];
 
 const supplementHeaders = [
@@ -604,35 +604,40 @@ return (_ctx, _cache) => {
               headers: managedHeaders,
               items: managedItems.value,
               "items-per-page": 25,
+              mobile: false,
               "item-value": "subscribe_id",
-              "fixed-header": ""
+              "fixed-header": "",
+              class: "managed-table"
             }, {
               "item.title": _withCtx(({ item }) => [
                 _createElementVNode("div", _hoisted_9, [
-                  _createElementVNode("div", null, _toDisplayString(item.title), 1),
-                  (item.douban_check_id || item.douban_id)
-                    ? (_openBlock(), _createElementBlock("div", _hoisted_10, " 豆瓣 " + _toDisplayString(item.douban_check_id || item.douban_id), 1))
-                    : _createCommentVNode("", true)
-                ])
-              ]),
-              "item.actions": _withCtx(({ item }) => [
-                _createVNode(_component_VTooltip, { text: "重新复核豆瓣总集数" }, {
-                  activator: _withCtx(({ props: tooltipProps }) => [
-                    _createElementVNode("span", null, [
-                      _createVNode(_component_VBtn, _mergeProps(tooltipProps, {
-                        icon: "mdi-refresh",
-                        size: "small",
-                        variant: "text",
-                        color: "primary",
-                        "aria-label": "重新复核豆瓣总集数",
-                        loading: rechecking.value.has(item.subscribe_id),
-                        disabled: !item.recheckable || rechecking.value.size > 0 || running.value,
-                        onClick: $event => (recheck(item))
-                      }), null, 16, ["loading", "disabled", "onClick"])
-                    ])
+                  _createElementVNode("div", _hoisted_10, [
+                    _createElementVNode("div", null, _toDisplayString(item.title), 1),
+                    (item.douban_check_id || item.douban_id)
+                      ? (_openBlock(), _createElementBlock("div", _hoisted_11, " 豆瓣 " + _toDisplayString(item.douban_check_id || item.douban_id), 1))
+                      : _createCommentVNode("", true)
                   ]),
-                  _: 2
-                }, 1024)
+                  _createVNode(_component_VTooltip, {
+                    text: "重新复核豆瓣总集数",
+                    location: "top"
+                  }, {
+                    activator: _withCtx(({ props: tooltipProps }) => [
+                      _createElementVNode("span", _mergeProps(tooltipProps, { class: "managed-recheck" }), [
+                        _createVNode(_component_VBtn, {
+                          icon: "mdi-refresh",
+                          size: "32",
+                          variant: "text",
+                          color: "primary",
+                          "aria-label": "重新复核豆瓣总集数",
+                          loading: rechecking.value.has(item.subscribe_id),
+                          disabled: !item.recheckable || rechecking.value.size > 0 || running.value,
+                          onClick: $event => (recheck(item))
+                        }, null, 8, ["loading", "disabled", "onClick"])
+                      ], 16)
+                    ]),
+                    _: 2
+                  }, 1024)
+                ])
               ]),
               _: 1
             }, 8, ["items"])
@@ -680,7 +685,7 @@ return (_ctx, _cache) => {
               color: "transparent"
             }, {
               default: _withCtx(() => [
-                _createElementVNode("div", _hoisted_11, _toDisplayString(diagnostics.value.title), 1),
+                _createElementVNode("div", _hoisted_12, _toDisplayString(diagnostics.value.title), 1),
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   icon: "mdi-close",
@@ -714,7 +719,7 @@ return (_ctx, _cache) => {
                       _createElementVNode("td", null, _toDisplayString(attempt.result_count), 1),
                       _createElementVNode("td", null, _toDisplayString(attempt.hydrated_count), 1),
                       _createElementVNode("td", null, _toDisplayString(attempt.request_count), 1),
-                      _createElementVNode("td", _hoisted_12, _toDisplayString(attempt.error || '-'), 1)
+                      _createElementVNode("td", _hoisted_13, _toDisplayString(attempt.error || '-'), 1)
                     ]))
                   }), 128))
                 ])
@@ -759,6 +764,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9e369a94"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-e928fea0"]]);
 
 export { Page as default };
