@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
@@ -17,6 +17,18 @@ _SQLITE_WRITE_LOCK = threading.RLock()
 
 
 SCHEMA_VERSION = 8
+
+_BACKGROUND_TASK_FAILURE_SQL = """(
+    state IN ('failed', 'partial')
+    OR (
+        state NOT IN ('queued', 'running')
+        AND (
+            failed > 0 OR error_message != ''
+            OR COALESCE(json_extract(result_json, '$.failed'), 0) > 0
+            OR COALESCE(json_array_length(result_json, '$.errors'), 0) > 0
+        )
+    )
+)"""
 
 
 def utc_now() -> str:
@@ -204,6 +216,8 @@ class SQLiteStore:
                         updated_at TEXT NOT NULL,
                         finished_at TEXT
                     );
+                    CREATE INDEX IF NOT EXISTS idx_background_tasks_retention
+                        ON background_tasks(state, COALESCE(finished_at, updated_at));
 
                     CREATE TABLE IF NOT EXISTS qb_delete_jobs (
                         id TEXT PRIMARY KEY,
@@ -697,6 +711,87 @@ class SQLiteStore:
                 (str(media_id or "").strip(),),
             ).fetchone()
         return self._decode_row(row) if row else None
+
+    def mark_unidentified(
+        self,
+        *,
+        media_id: object = "",
+        downloader_id: object = "",
+        info_hash: object = "",
+    ) -> Dict[str, Any]:
+        """Move editable cards without discarding recognition or source data."""
+        identity = str(media_id or "").strip()
+        media_requested = bool(identity)
+        downloader = str(downloader_id or "").strip()
+        normalized_hash = str(info_hash or "").strip().lower()
+        now = utc_now()
+        with self.write_connection() as connection:
+            media = None
+            if identity:
+                media = connection.execute(
+                    "SELECT * FROM media_items WHERE id = ?", (identity,)
+                ).fetchone()
+                if not media:
+                    raise ValueError("媒体记录不存在")
+                downloader = str(media["downloader_id"] or "")
+                normalized_hash = str(media["info_hash"] or "")
+            snapshot = connection.execute(
+                """SELECT * FROM torrent_snapshots
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                (downloader, normalized_hash),
+            ).fetchone()
+            if not identity and snapshot:
+                identity = str(snapshot["media_id"] or f"qb:{downloader}:{normalized_hash}")
+                media = connection.execute(
+                    "SELECT * FROM media_items WHERE id = ?", (identity,)
+                ).fetchone()
+            if not media and not snapshot:
+                raise ValueError("卡片不存在")
+            if media and media["state"] not in {
+                "identified", "existing", "rolled_back", "unidentified",
+            }:
+                raise ValueError("只有已识别、已存在或已回退的卡片可以移入未识别")
+            if identity and connection.execute(
+                """SELECT 1 FROM import_watches WHERE media_id = ?
+                   AND state IN ('waiting_task', 'watching', 'waiting_library', 'rolling_back')
+                   LIMIT 1""",
+                (identity,),
+            ).fetchone():
+                raise ValueError("卡片仍有 CD2 监控任务，不能移入未识别")
+            if snapshot and snapshot["recognition_state"] not in {
+                "identified", "error", "unidentified",
+            }:
+                raise ValueError("卡片尚未完成识别，不能移入未识别")
+            for row, table, state_column in (
+                (media, "media_items", "state"),
+                (snapshot, "torrent_snapshots", "recognition_state"),
+            ):
+                if not row:
+                    continue
+                details = self._decode_row(row).get("details") or {}
+                details["manual_unidentified"] = True
+                if table == "media_items":
+                    where, params = "id = ?", (media["id"],)
+                else:
+                    where, params = "downloader_id = ? AND info_hash = ?", (
+                        downloader, normalized_hash,
+                    )
+                connection.execute(
+                    f"""UPDATE {table} SET {state_column} = 'unidentified',
+                        details_json = ?, updated_at = ? WHERE {where}""",
+                    (self._json_dump(details), now, *params),
+                )
+            if media_requested or not snapshot:
+                row = connection.execute(
+                    "SELECT * FROM media_items WHERE id = ?", (identity,)
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """SELECT * FROM torrent_snapshots
+                       WHERE downloader_id = ? AND info_hash = ?""",
+                    (downloader, normalized_hash),
+                ).fetchone()
+        return self._decode_row(row)
 
     def list_media_for_task(self, task_id: object) -> List[Dict[str, Any]]:
         normalized = str(task_id or "").strip()
@@ -2279,20 +2374,54 @@ class SQLiteStore:
                 )
         return len(rows)
 
-    def list_background_tasks(self, offset: object = 0, limit: object = 50) -> Dict[str, Any]:
-        return self._list_table("background_tasks", "updated_at", offset, limit)
+    def list_background_tasks(
+        self, offset: object = 0, limit: object = 50, *, failures_only: bool = False
+    ) -> Dict[str, Any]:
+        safe_offset, safe_limit = self._page(offset, limit)
+        where = f"WHERE {_BACKGROUND_TASK_FAILURE_SQL}" if failures_only else ""
+        with self.connection() as connection:
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM background_tasks {where}"
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"""SELECT * FROM background_tasks {where}
+                    ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?""",
+                (safe_limit, safe_offset),
+            ).fetchall()
+        return self._result(rows, total, safe_offset, safe_limit)
 
-    def clear_background_tasks(self) -> Dict[str, int]:
+    def clear_background_tasks(self, *, failures_only: bool = False) -> Dict[str, int]:
         with self.write_connection() as connection:
             running = int(connection.execute(
                 """SELECT COUNT(*) FROM background_tasks
                    WHERE state IN ('queued', 'running')"""
             ).fetchone()[0])
+            where = (
+                _BACKGROUND_TASK_FAILURE_SQL if failures_only
+                else "state NOT IN ('queued', 'running')"
+            )
             deleted = int(connection.execute(
-                """DELETE FROM background_tasks
-                   WHERE state NOT IN ('queued', 'running')"""
+                f"DELETE FROM background_tasks WHERE {where}"
             ).rowcount or 0)
         return {"deleted": deleted, "running": running}
+
+    def prune_background_tasks(self, *, retention_days: int = 3, batch_size: int = 200) -> int:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=max(1, int(retention_days)))
+        ).isoformat(timespec="seconds")
+        with self.write_connection() as connection:
+            cursor = connection.execute(
+                f"""DELETE FROM background_tasks WHERE id IN (
+                    SELECT id FROM background_tasks
+                    WHERE state IN ('succeeded', 'cancelled')
+                      AND NOT {_BACKGROUND_TASK_FAILURE_SQL}
+                      AND COALESCE(finished_at, updated_at) < ?
+                    ORDER BY COALESCE(finished_at, updated_at), id
+                    LIMIT ?
+                )""",
+                (cutoff, max(1, min(500, int(batch_size)))),
+            )
+        return int(cursor.rowcount or 0)
 
     def record_emby_callback_event(
         self,

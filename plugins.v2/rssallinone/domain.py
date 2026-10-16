@@ -54,6 +54,7 @@ MEDIA_TRANSITIONS: Dict[MediaState, FrozenSet[MediaState]] = {
     }),
     MediaState.EXISTING: frozenset({
         MediaState.IDENTIFIED,
+        MediaState.UNIDENTIFIED,
         MediaState.PENDING,
     }),
     MediaState.PENDING: frozenset({
@@ -68,6 +69,7 @@ MEDIA_TRANSITIONS: Dict[MediaState, FrozenSet[MediaState]] = {
     MediaState.IMPORTED: frozenset({MediaState.ROLLED_BACK}),
     MediaState.ROLLED_BACK: frozenset({
         MediaState.IDENTIFIED,
+        MediaState.UNIDENTIFIED,
         MediaState.PENDING,
         MediaState.IMPORTING,
     }),

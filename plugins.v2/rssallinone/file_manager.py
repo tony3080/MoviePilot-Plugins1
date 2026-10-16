@@ -577,12 +577,21 @@ class LocalFileManagerService:
                 "torrent_completed": True,
             },
         }
+        for key in ("rss_source", "comment_url", "source_url"):
+            if requested_details.get(key):
+                details[key] = requested_details[key]
         if site_labels:
             details["site_labels"] = site_labels
+            previous_rss_source = dict(requested_details.get("rss_source") or {})
             details["rss_source"] = {
-                "task_id": str(task_id or "").strip(),
-                "task_name": str(task_name or "").strip(),
-                "detail_url_masked": str(site_labels.get("request_url_masked") or ""),
+                **previous_rss_source,
+                "task_id": str(task_id or previous_rss_source.get("task_id") or "").strip(),
+                "task_name": str(previous_rss_source.get("task_name") or task_name or "").strip(),
+                "detail_url_masked": str(
+                    site_labels.get("request_url_masked")
+                    or previous_rss_source.get("detail_url_masked")
+                    or ""
+                ),
             }
 
         media_type = ""

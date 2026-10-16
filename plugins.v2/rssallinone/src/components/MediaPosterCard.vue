@@ -8,7 +8,7 @@ const props = defineProps({
   busy: Boolean,
 })
 
-const emit = defineEmits(['toggle', 'refresh', 'edit', 'delete'])
+const emit = defineEmits(['toggle', 'refresh', 'edit', 'delete', 'mark-unidentified'])
 
 const details = computed(() => props.item.details || {})
 const inventory = computed(() => details.value.inventory || {})
@@ -65,7 +65,11 @@ const inventoryIncomplete = computed(() => {
 })
 const showDelete = computed(() => props.mode === 'pending')
 const showEdit = computed(() => !isImported.value)
-const isRolledBack = computed(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back')
+const showMarkUnidentified = computed(() => props.mode === 'qb'
+  ? ['identified', 'error'].includes(props.item.recognition_state)
+  : ['identified', 'existing', 'rolled_back'].includes(props.item.state))
+const isRolledBack = computed(() => props.item.state !== 'unidentified'
+  && (Boolean(props.item.rolled_back) || props.item.state === 'rolled_back'))
 const hasFailureMarker = computed(() => !isRolledBack.value && Boolean(
   props.item.failure_message || props.item.recognition_error,
 ))
@@ -192,6 +196,11 @@ function usableSourceUrl(value) {
             <VBtn v-bind="tooltipProps" icon="mdi-pencil" size="x-small" class="poster-action" :disabled="busy" @click="emit('edit', item)" />
           </template>
         </VTooltip>
+        <VTooltip v-if="showMarkUnidentified" text="移入未识别">
+          <template #activator="{ props: tooltipProps }">
+            <VBtn v-bind="tooltipProps" icon="mdi-help-circle-outline" size="x-small" class="poster-action" aria-label="移入未识别" :disabled="busy" @click="emit('mark-unidentified', item)" />
+          </template>
+        </VTooltip>
       </div>
 
       <VChip v-if="Number(details.version_count || 0) > 1" class="version-chip" size="x-small" color="info">
@@ -285,7 +294,7 @@ function usableSourceUrl(value) {
 .poster-placeholder { display: grid; place-items: center; color: rgba(255,255,255,.45); }
 .poster-left-actions, .poster-right-actions { position: absolute; top: 10px; z-index: 2; display: flex; gap: 7px; }
 .poster-left-actions { left: 10px; }
-.poster-right-actions { right: 10px; }
+.poster-right-actions { right: 10px; flex-direction: column; }
 .corner-badge { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 5px; color: #fff; font-weight: 800; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.32); }
 button.corner-badge { cursor: pointer; }
 .rollback { background: #8456e8; }

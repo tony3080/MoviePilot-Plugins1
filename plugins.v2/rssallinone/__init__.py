@@ -85,7 +85,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "0.13.100"
+    plugin_version = "1.0.0"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -220,6 +220,7 @@ class RssAllInOne(_PluginBase):
             cleaned_jobs = self._store.cleanup_completed_qb_delete_jobs()
             if cleaned_jobs:
                 logger.info(f"RSS一条龙：已清理 {cleaned_jobs} 个历史 qB 删除计划")
+            self._scheduled_background_task_cleanup()
             self._dispatch_rss_queue()
         except Exception as error:
             self._store = None
@@ -332,6 +333,13 @@ class RssAllInOne(_PluginBase):
                 "func": self._scheduled_qb_deletes,
                 "func_kwargs": {},
             })
+            services.append({
+                "id": "RssAllInOne.BackgroundTaskCleanup",
+                "name": "RSS一条龙 后台任务历史清理",
+                "trigger": CronTrigger.from_crontab("20 4 * * *"),
+                "func": self._scheduled_background_task_cleanup,
+                "func_kwargs": {},
+            })
         except ImportError:
             logger.error("RSS一条龙：缺少 APScheduler，无法执行 qB 到期删除任务")
         try:
@@ -369,6 +377,7 @@ class RssAllInOne(_PluginBase):
             self._api("/qb/delete", self.api_qb_delete, "POST", "删除 QB 任务并保留下载文件"),
             self._api("/qb/completed", self.api_qb_completed, "POST", "接收 qB 下载完成回调"),
             self._api("/media/delete", self.api_media_delete, "POST", "删除插件媒体记录"),
+            self._api("/media/mark-unidentified", self.api_mark_unidentified, "POST", "将卡片移入未识别"),
             self._api("/media/action", self.api_media_action, "POST", "批量执行入库管理操作"),
             self._api("/import/run", self.api_pending_import_run, "POST", "立即处理待入库队列"),
             self._api("/import/status", self.api_pending_import_status, "GET", "读取待入库队列状态"),
@@ -440,7 +449,7 @@ class RssAllInOne(_PluginBase):
             self._api("/rss/history", self.api_rss_history, "GET", "RSS 历史列表"),
             self._api("/sites", self.api_sites, "GET", "MoviePilot 站点身份"),
             self._api("/tasks", self.api_background_tasks, "GET", "后台任务列表"),
-            self._api("/tasks/clear", self.api_clear_background_tasks, "POST", "清除已结束后台任务"),
+            self._api("/tasks/clear", self.api_clear_background_tasks, "POST", "清除失败后台任务"),
             self._api("/tasks/{task_id}", self.api_background_task, "GET", "后台任务详情"),
         ]
 
@@ -564,7 +573,8 @@ class RssAllInOne(_PluginBase):
         data = payload or {}
         try:
             item = self._qb_sync_service().refresh_item(
-                data.get("downloader_id"), data.get("info_hash")
+                data.get("downloader_id"), data.get("info_hash"),
+                release_unidentified=True,
             )
             return {"success": True, "message": "任务已刷新", "item": item}
         except Exception as error:
@@ -1062,6 +1072,20 @@ class RssAllInOne(_PluginBase):
             }
         finally:
             self._manual_mandarin_repair_lock.release()
+
+    def api_mark_unidentified(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        data = payload or {}
+        try:
+            item = self._require_store().mark_unidentified(
+                media_id=data.get("media_id"),
+                downloader_id=data.get("downloader_id"),
+                info_hash=data.get("info_hash"),
+            )
+            return {"success": True, "message": "卡片已移入未识别，原有信息已保留", "item": item}
+        except ValueError as error:
+            return {"success": False, "message": str(error)}
 
     def api_media_delete(
         self, payload: Optional[Dict[str, Any]] = None
@@ -2096,21 +2120,39 @@ class RssAllInOne(_PluginBase):
     def api_background_tasks(self, offset: int = 0, limit: int = 50) -> Dict[str, Any]:
         return {
             "success": True,
-            **self._require_store().list_background_tasks(offset=offset, limit=limit),
+            **self._require_store().list_background_tasks(
+                offset=offset, limit=limit, failures_only=True,
+            ),
         }
 
     def api_clear_background_tasks(self) -> Dict[str, Any]:
-        result = self._require_store().clear_background_tasks()
+        result = self._require_store().clear_background_tasks(failures_only=True)
         deleted = int(result.get("deleted") or 0)
         running = int(result.get("running") or 0)
         return {
             "success": True,
             **result,
             "message": (
-                f"已清除 {deleted} 条已结束后台任务"
+                f"已清除 {deleted} 条失败后台任务"
                 + (f"，保留 {running} 条运行中任务" if running else "")
             ),
         }
+
+    def _scheduled_background_task_cleanup(self) -> None:
+        store = self._store
+        if not store:
+            return
+        try:
+            deleted = 0
+            while not self._stop_event.is_set():
+                count = store.prune_background_tasks()
+                deleted += count
+                if count < 200:
+                    break
+            if deleted:
+                logger.info(f"RSS一条龙：已清理 {deleted} 条超过 3 天的无错误后台任务记录")
+        except Exception as error:
+            logger.error(f"RSS一条龙：后台任务历史清理失败：{error}")
 
     def api_background_task(self, task_id: str) -> Dict[str, Any]:
         task = self._require_store().get_background_task(str(task_id or "").strip())

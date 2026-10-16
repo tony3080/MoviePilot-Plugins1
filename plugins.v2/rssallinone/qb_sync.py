@@ -947,6 +947,7 @@ class QbSyncService:
         completion_confirmed: bool = False,
         allow_completion_transition: bool = True,
         force_manual_metadata_refresh: bool = False,
+        release_unidentified: bool = False,
     ) -> Dict[str, Any]:
         downloader_name = str(downloader_id or "").strip()
         normalized_hash = str(info_hash or "").strip().lower()
@@ -984,6 +985,7 @@ class QbSyncService:
             completion_confirmed=completion_confirmed,
             allow_completion_transition=allow_completion_transition,
             force_manual_metadata_refresh=force_manual_metadata_refresh,
+            release_unidentified=release_unidentified,
         )
         snapshot = self.store.get_torrent_snapshot(
             downloader_name, normalized_hash
@@ -1049,6 +1051,7 @@ class QbSyncService:
             item["details"] = details_for_source
 
         details = copy.deepcopy(item.get("details") or {})
+        details.pop("manual_unidentified", None)
         stored_override = details.get("manual_override") or {}
         override = _normalize_manual_override(
             stored_override if manual_override is None else manual_override
@@ -1626,6 +1629,7 @@ class QbSyncService:
         completion_confirmed: bool = False,
         allow_completion_transition: bool = True,
         force_manual_metadata_refresh: bool = False,
+        release_unidentified: bool = False,
         stop_event: Optional[threading.Event] = None,
     ) -> str:
         if stop_event and stop_event.is_set():
@@ -1642,6 +1646,10 @@ class QbSyncService:
         media_id = f"qb:{downloader.name}:{info_hash}"
         persisted_media = self.store.get_media_item(media_id) or {}
         persisted_media_state = str(persisted_media.get("state") or "")
+        held_unidentified = bool(
+            existing_details.get("manual_unidentified")
+            or (persisted_media.get("details") or {}).get("manual_unidentified")
+        ) and not (release_unidentified or manual_override is not None)
         completion_already_processed = bool(
             (rss_history.get("payload") or {}).get("completion_processed")
         )
@@ -1961,7 +1969,10 @@ class QbSyncService:
             force_recognition
             or not existing
             or existing_details.get("recognition_signature") != signature
-            or existing.get("recognition_state") != "identified"
+            or (
+                existing.get("recognition_state") != "identified"
+                and not held_unidentified
+            )
             or not media_payload
         )
 
@@ -2017,7 +2028,7 @@ class QbSyncService:
             category = str(override.get("category") or automatic_category).strip()
             poster = self.gateway.poster(media)
             pending_labels = _pending_mandarin_labels(rss_history)
-            if _valid_tmdb_id(tmdb_id) and pending_labels:
+            if _valid_tmdb_id(tmdb_id) and pending_labels and not held_unidentified:
                 rename_result = self._apply_pending_mandarin_label(
                     history=rss_history,
                     downloader_id=downloader.name,
@@ -2041,6 +2052,7 @@ class QbSyncService:
                         completion_confirmed=completion_confirmed,
                         allow_completion_transition=allow_completion_transition,
                         force_manual_metadata_refresh=False,
+                        release_unidentified=release_unidentified,
                         stop_event=stop_event,
                     )
                 rss_history = self.store.latest_rss_history_for_torrent(
@@ -2209,6 +2221,11 @@ class QbSyncService:
         if not target_name:
             target_name = str(inventory_plan.get("inventory_target_name") or "")
         existing_media = self.store.get_media_item(media_id) or {}
+        if held_unidentified:
+            media_state = "unidentified"
+            recognition_state = "unidentified"
+            outcome = "unrecognized"
+            details["manual_unidentified"] = True
         imported_record = str(existing_media.get("state") or "") in {
             "importing", "imported"
         }
@@ -2408,7 +2425,11 @@ class QbSyncService:
             "media_id": existing.get("media_id"),
             "source_url_masked": existing.get("source_url_masked") or "",
             "present": 1,
-            "recognition_state": "error",
+            "recognition_state": (
+                "unidentified"
+                if (existing.get("details") or {}).get("manual_unidentified")
+                else "error"
+            ),
             "inventory_state": existing.get("inventory_state") or "unknown",
             "media_title": existing.get("media_title") or "",
             "media_type": existing.get("media_type") or "",

@@ -939,7 +939,7 @@ const _sfc_main$3 = {
   selected: Boolean,
   busy: Boolean,
 },
-  emits: ['toggle', 'refresh', 'edit', 'delete'],
+  emits: ['toggle', 'refresh', 'edit', 'delete', 'mark-unidentified'],
   setup(__props, { emit: __emit }) {
 
 const props = __props;
@@ -1001,7 +1001,11 @@ const inventoryIncomplete = computed$3(() => {
 });
 const showDelete = computed$3(() => props.mode === 'pending');
 const showEdit = computed$3(() => !isImported.value);
-const isRolledBack = computed$3(() => Boolean(props.item.rolled_back) || props.item.state === 'rolled_back');
+const showMarkUnidentified = computed$3(() => props.mode === 'qb'
+  ? ['identified', 'error'].includes(props.item.recognition_state)
+  : ['identified', 'existing', 'rolled_back'].includes(props.item.state));
+const isRolledBack = computed$3(() => props.item.state !== 'unidentified'
+  && (Boolean(props.item.rolled_back) || props.item.state === 'rolled_back'));
 const hasFailureMarker = computed$3(() => !isRolledBack.value && Boolean(
   props.item.failure_message || props.item.recognition_error,
 ));
@@ -1083,7 +1087,7 @@ return (_ctx, _cache) => {
   return (_openBlock$3(), _createBlock$3(_component_VCard, {
     class: _normalizeClass$1(["media-poster-card", { selected: __props.selected, 'inventory-incomplete': inventoryIncomplete.value }]),
     elevation: "0",
-    onClick: _cache[7] || (_cache[7] = $event => (emit('toggle', __props.item)))
+    onClick: _cache[8] || (_cache[8] = $event => (emit('toggle', __props.item)))
   }, {
     default: _withCtx$3(() => [
       _createElementVNode$3("div", _hoisted_1$3, [
@@ -1169,7 +1173,7 @@ return (_ctx, _cache) => {
         ]),
         _createElementVNode$3("div", {
           class: "poster-right-actions",
-          onClick: _cache[6] || (_cache[6] = _withModifiers(() => {}, ["stop"]))
+          onClick: _cache[7] || (_cache[7] = _withModifiers(() => {}, ["stop"]))
         }, [
           (showDelete.value)
             ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
@@ -1212,6 +1216,24 @@ return (_ctx, _cache) => {
                     class: "poster-action",
                     disabled: __props.busy,
                     onClick: _cache[5] || (_cache[5] = $event => (emit('edit', __props.item)))
+                  }), null, 16, ["disabled"])
+                ]),
+                _: 1
+              }))
+            : _createCommentVNode$3("", true),
+          (showMarkUnidentified.value)
+            ? (_openBlock$3(), _createBlock$3(_component_VTooltip, {
+                key: 2,
+                text: "移入未识别"
+              }, {
+                activator: _withCtx$3(({ props: tooltipProps }) => [
+                  _createVNode$3(_component_VBtn, _mergeProps$1(tooltipProps, {
+                    icon: "mdi-help-circle-outline",
+                    size: "x-small",
+                    class: "poster-action",
+                    "aria-label": "移入未识别",
+                    disabled: __props.busy,
+                    onClick: _cache[6] || (_cache[6] = $event => (emit('mark-unidentified', __props.item)))
                   }), null, 16, ["disabled"])
                 ]),
                 _: 1
@@ -1320,7 +1342,7 @@ return (_ctx, _cache) => {
                     variant: "flat",
                     class: "info-chip inventory-incomplete-chip"
                   }, {
-                    default: _withCtx$3(() => [...(_cache[8] || (_cache[8] = [
+                    default: _withCtx$3(() => [...(_cache[9] || (_cache[9] = [
                       _createTextVNode$3(" 库存不完整 ", -1)
                     ]))]),
                     _: 1
@@ -1375,7 +1397,7 @@ return (_ctx, _cache) => {
 }
 
 };
-const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-2e2caec9"]]);
+const MediaPosterCard = /*#__PURE__*/_export_sfc(_sfc_main$3, [['__scopeId',"data-v-d02fd2fd"]]);
 
 const {resolveComponent:_resolveComponent$2,createVNode:_createVNode$2,createElementVNode:_createElementVNode$2,withCtx:_withCtx$2,toDisplayString:_toDisplayString$2,createTextVNode:_createTextVNode$2,openBlock:_openBlock$2,createBlock:_createBlock$2,createCommentVNode:_createCommentVNode$2} = await importShared('vue');
 
@@ -2189,16 +2211,19 @@ function unwrap(response) {
 function normalizeTaskRows(items) {
   return (items || []).map(item => {
     const firstResultError = (item.result?.errors || []).find(error => error?.message)?.message || '';
+    const hasFailures = Number(item.failed || item.result?.failed || 0) > 0
+      || Boolean(item.error_message || item.result?.errors?.length);
     return {
       ...item,
       task_type_text: taskTypeLabels[item.task_type] || item.task_type || '未知任务',
       task_name_text: item.task_name || item.result?.task_name || '-',
-      state_text: taskStateLabels[item.state] || item.state || '未知状态',
+      state_text: item.state === 'succeeded' && hasFailures
+        ? '部分失败' : taskStateLabels[item.state] || item.state || '未知状态',
       current_item: item.current_item || '-',
       progress_text: `${item.processed || 0}/${item.total || 0}`,
       result_text: item.error_message
         || firstResultError
-        || (item.state === 'succeeded' ? '执行完成' : '-'),
+        || (hasFailures ? '存在失败项目' : '-'),
     }
   })
 }
@@ -3023,6 +3048,28 @@ async function deleteMediaRecord(item) {
   }
 }
 
+async function markUnidentified(item) {
+  itemBusyKey.value = itemKey(item);
+  errorMessage.value = '';
+  successMessage.value = '';
+  try {
+    const payload = activeTab.value === 'qb'
+      ? { downloader_id: item.downloader_id, info_hash: item.info_hash }
+      : { media_id: item.id };
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/mark-unidentified', payload),
+    );
+    if (!response?.success) throw new Error(response?.message || '移入未识别失败')
+    successMessage.value = response.message || '卡片已移入未识别';
+    selectedKeys.value = selectedKeys.value.filter(value => value !== itemKey(item));
+    await loadActive();
+  } catch (error) {
+    errorMessage.value = error?.message || '移入未识别失败';
+  } finally {
+    itemBusyKey.value = '';
+  }
+}
+
 const mediaActionLabels = {
   queue_import: '转待入库',
   import: '入库',
@@ -3720,7 +3767,8 @@ return (_ctx, _cache) => {
                         onToggle: toggleSelected,
                         onRefresh: refreshItem,
                         onEdit: openIdentify,
-                        onDelete: deleteMediaRecord
+                        onDelete: deleteMediaRecord,
+                        onMarkUnidentified: markUnidentified
                       }, null, 8, ["item", "mode", "selected", "busy"]))
                     }), 128))
                   ]))
@@ -3933,7 +3981,8 @@ return (_ctx, _cache) => {
                           busy: itemBusyKey.value === itemKey(item),
                           onToggle: toggleSelected,
                           onRefresh: refreshItem,
-                          onEdit: openIdentify
+                          onEdit: openIdentify,
+                          onMarkUnidentified: markUnidentified
                         }, null, 8, ["item", "selected", "busy"]))
                       }), 128))
                     ]))
@@ -4069,7 +4118,7 @@ return (_ctx, _cache) => {
                 : (activeTab.value === 'tasks')
                   ? (_openBlock(), _createElementBlock("section", _hoisted_31, [
                       _createElementVNode("div", _hoisted_32, [
-                        _createElementVNode("div", _hoisted_33, _toDisplayString(total.value) + " 个后台任务", 1),
+                        _createElementVNode("div", _hoisted_33, _toDisplayString(total.value) + " 个失败任务", 1),
                         _createVNode(_component_VBtn, {
                           size: "small",
                           variant: "tonal",
@@ -4080,7 +4129,7 @@ return (_ctx, _cache) => {
                           onClick: clearBackgroundTasks
                         }, {
                           default: _withCtx(() => [...(_cache[50] || (_cache[50] = [
-                            _createTextVNode(" 清除已结束任务 ", -1)
+                            _createTextVNode(" 清除失败任务 ", -1)
                           ]))]),
                           _: 1
                         }, 8, ["loading", "disabled"])
@@ -4094,11 +4143,11 @@ return (_ctx, _cache) => {
                         "items-per-page": -1,
                         "hide-default-footer": "",
                         class: "data-table",
-                        "no-data-text": "暂无后台任务"
+                        "no-data-text": "暂无失败任务"
                       }, {
                         "item.state_text": _withCtx(({ item }) => [
                           _createVNode(_component_VChip, {
-                            color: taskStateColor(item.state),
+                            color: taskStateColor(item.state_text === '部分失败' ? 'partial' : item.state),
                             size: "small",
                             variant: "tonal"
                           }, {
@@ -4277,6 +4326,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-05a5c8bd"]]);
+const AppPage = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-892ff924"]]);
 
 export { AppPage as default };

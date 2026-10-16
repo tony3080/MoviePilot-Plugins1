@@ -268,16 +268,19 @@ function unwrap(response) {
 function normalizeTaskRows(items) {
   return (items || []).map(item => {
     const firstResultError = (item.result?.errors || []).find(error => error?.message)?.message || ''
+    const hasFailures = Number(item.failed || item.result?.failed || 0) > 0
+      || Boolean(item.error_message || item.result?.errors?.length)
     return {
       ...item,
       task_type_text: taskTypeLabels[item.task_type] || item.task_type || '未知任务',
       task_name_text: item.task_name || item.result?.task_name || '-',
-      state_text: taskStateLabels[item.state] || item.state || '未知状态',
+      state_text: item.state === 'succeeded' && hasFailures
+        ? '部分失败' : taskStateLabels[item.state] || item.state || '未知状态',
       current_item: item.current_item || '-',
       progress_text: `${item.processed || 0}/${item.total || 0}`,
       result_text: item.error_message
         || firstResultError
-        || (item.state === 'succeeded' ? '执行完成' : '-'),
+        || (hasFailures ? '存在失败项目' : '-'),
     }
   })
 }
@@ -1102,6 +1105,28 @@ async function deleteMediaRecord(item) {
   }
 }
 
+async function markUnidentified(item) {
+  itemBusyKey.value = itemKey(item)
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const payload = activeTab.value === 'qb'
+      ? { downloader_id: item.downloader_id, info_hash: item.info_hash }
+      : { media_id: item.id }
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/media/mark-unidentified', payload),
+    )
+    if (!response?.success) throw new Error(response?.message || '移入未识别失败')
+    successMessage.value = response.message || '卡片已移入未识别'
+    selectedKeys.value = selectedKeys.value.filter(value => value !== itemKey(item))
+    await loadActive()
+  } catch (error) {
+    errorMessage.value = error?.message || '移入未识别失败'
+  } finally {
+    itemBusyKey.value = ''
+  }
+}
+
 const mediaActionLabels = {
   queue_import: '转待入库',
   import: '入库',
@@ -1627,6 +1652,7 @@ onBeforeUnmount(() => {
             @refresh="refreshItem"
             @edit="openIdentify"
             @delete="deleteMediaRecord"
+            @mark-unidentified="markUnidentified"
           />
         </div>
         <VEmptyState v-else-if="!loading" icon="mdi-movie-open-outline" title="暂无媒体记录" />
@@ -1779,6 +1805,7 @@ onBeforeUnmount(() => {
             @toggle="toggleSelected"
             @refresh="refreshItem"
             @edit="openIdentify"
+            @mark-unidentified="markUnidentified"
           />
         </div>
         <VEmptyState v-else-if="!loading" icon="mdi-download-box-outline" title="暂无 qB 任务" />
@@ -1859,7 +1886,7 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'tasks'">
         <div class="section-toolbar">
-          <div class="section-count">{{ total }} 个后台任务</div>
+          <div class="section-count">{{ total }} 个失败任务</div>
           <VBtn
             size="small"
             variant="tonal"
@@ -1869,7 +1896,7 @@ onBeforeUnmount(() => {
             :disabled="loading || total === 0"
             @click="clearBackgroundTasks"
           >
-            清除已结束任务
+            清除失败任务
           </VBtn>
         </div>
         <VDataTable
@@ -1881,10 +1908,10 @@ onBeforeUnmount(() => {
           :items-per-page="-1"
           hide-default-footer
           class="data-table"
-          no-data-text="暂无后台任务"
+          no-data-text="暂无失败任务"
         >
           <template #item.state_text="{ item }">
-            <VChip :color="taskStateColor(item.state)" size="small" variant="tonal">
+            <VChip :color="taskStateColor(item.state_text === '部分失败' ? 'partial' : item.state)" size="small" variant="tonal">
               {{ item.state_text }}
             </VChip>
           </template>
