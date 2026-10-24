@@ -2371,8 +2371,7 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
             guid="maoyan:tv:12345",
             source_url="https://piaofang.maoyan.com/test",
         )
-        self.plugin._maoyan_cookies = lambda: {}
-        self.plugin._fetch_maoyan_list = lambda *_args, **_kwargs: [item]
+        self.plugin._fetch_maoyan_lists = lambda _types: {"tv": {"items": [item]}}
         self.plugin._process_item = lambda value: {
             **value.to_dict(),
             "status": "subscribed",
@@ -2385,6 +2384,216 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertTrue(summary["success"])
         self.assertEqual(summary["maoyan_lists"], 1)
         self.assertEqual(summary["subscribed"], 1)
+        self.assertIn(item.key, self.plugin.get_data("processed_items"))
+
+    def _maoyan_browser_module(self, action):
+        module = types.ModuleType("app.helper.browser")
+        module.PlaywrightHelper = lambda: types.SimpleNamespace(action=action)
+        return {"app.helper.browser": module}
+
+    def test_maoyan_uses_new_endpoint_and_shanghai_date_at_utc_day_boundary(self) -> None:
+        now = datetime.datetime(2026, 10, 23, 17, tzinfo=datetime.timezone.utc)
+        payload = {"dataList": {"list": [{"seriesInfo": {"name": "测试剧"}}]}}
+        page = types.SimpleNamespace(evaluate=lambda *_args: payload)
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            with patch.object(
+                self.plugin, "_request_maoyan_browser_json", return_value=payload,
+            ) as request:
+                items = self.plugin._fetch_maoyan_list("web", page=page)
+        url = request.call_args.args[1]
+        self.assertEqual(
+            url,
+            "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData"
+            "?seriesType=1&showDate=20261024",
+        )
+        self.assertNotIn("platformType", url)
+        self.assertEqual(items[0].source_url, url)
+
+    def test_maoyan_both_ranks_share_one_browser_and_proxy(self) -> None:
+        calls = []
+        page = object()
+        def action(**kwargs):
+            calls.append(kwargs)
+            kwargs["callback"](page)
+        self.plugin._proxy = True
+        with patch.dict(sys.modules, self._maoyan_browser_module(action)):
+            with patch.object(plugin_module.settings, "PROXY", {"https": "test-proxy"}):
+                with patch.object(self.plugin, "_fetch_maoyan_list", return_value=[]) as fetch:
+                    results = self.plugin._fetch_maoyan_lists(["tv", "web", "tv"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["url"], plugin_module.MAOYAN_PAGE_URL)
+        self.assertEqual(calls[0]["proxies"], {"https": "test-proxy"})
+        self.assertTrue(calls[0]["headless"])
+        self.assertEqual(calls[0]["timeout"], 30)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual([call.args[0] for call in fetch.call_args_list], ["tv", "web"])
+        self.assertTrue(all(call.args[1] is page for call in fetch.call_args_list))
+        self.assertEqual(fetch.call_args_list[0].args[2], fetch.call_args_list[1].args[2])
+        self.assertEqual(results, {"tv": {"items": []}, "web": {"items": []}})
+
+    def test_maoyan_browser_request_carries_page_headers_and_cleans_timer(self) -> None:
+        with patch.object(types.SimpleNamespace(), "evaluate", create=True) as evaluate:
+            evaluate.return_value = {"dataList": {"list": []}}
+            page = types.SimpleNamespace(evaluate=evaluate)
+            result = self.plugin._request_maoyan_browser_json(page, "https://test.invalid")
+        script, url = evaluate.call_args.args
+        self.assertEqual(url, "https://test.invalid")
+        self.assertEqual(result, {"dataList": {"list": []}})
+        for snippet in (
+            "['csrf', 'uid']", "['deviceId', 'uuid']", "['channelId', 'channelId']",
+            "credentials: 'same-origin'", "AbortController", "15000",
+            "finally", "clearTimeout(timer)", "response.status",
+        ):
+            self.assertIn(snippet, script)
+
+    def test_maoyan_one_browser_rank_failure_does_not_discard_other_rank(self) -> None:
+        page = object()
+        def action(**kwargs):
+            kwargs["callback"](page)
+        def fetch(list_type, *_args, **_kwargs):
+            if list_type == "tv":
+                raise RuntimeError("猫眼 HTTP 状态码 403")
+            return ["web-result"]
+        with patch.dict(sys.modules, self._maoyan_browser_module(action)):
+            with patch.object(self.plugin, "_fetch_maoyan_list", side_effect=fetch) as request:
+                results = self.plugin._fetch_maoyan_lists(["tv", "web"])
+        self.assertIn("403", results["tv"]["error"])
+        self.assertEqual(results["web"]["items"], ["web-result"])
+        self.assertEqual(request.call_count, 2)
+
+    def test_maoyan_browser_unavailable_falls_back_once_and_preserves_errors(self) -> None:
+        def action(**_kwargs):
+            raise RuntimeError("浏览器服务不可用")
+        with patch.dict(sys.modules, self._maoyan_browser_module(action)):
+            with patch.object(
+                self.plugin, "_fetch_maoyan_list",
+                side_effect=RuntimeError("猫眼 HTTP 状态码 403"),
+            ) as fetch:
+                results = self.plugin._fetch_maoyan_lists(["tv", "web"])
+        self.assertEqual(fetch.call_count, 2)
+        for result in results.values():
+            self.assertIn("浏览器服务不可用", result["error"])
+            self.assertIn("403", result["error"])
+        self.assertTrue(all(len(call.args) == 1 for call in fetch.call_args_list))
+
+    def test_maoyan_browser_silently_skipping_callback_is_detected(self) -> None:
+        with patch.dict(
+            sys.modules, self._maoyan_browser_module(lambda **_kwargs: None),
+        ):
+            with patch.object(
+                self.plugin, "_fetch_maoyan_list", side_effect=RuntimeError("HTTP 403"),
+            ) as fetch:
+                results = self.plugin._fetch_maoyan_lists(["tv"])
+        fetch.assert_called_once()
+        self.assertIn("未执行榜单回调", results["tv"]["error"])
+        self.assertIn("403", results["tv"]["error"])
+
+    def test_maoyan_http_fallback_can_succeed_without_browser(self) -> None:
+        response = types.SimpleNamespace(
+            status_code=200,
+            json=lambda: {"dataList": {"list": [
+                {"seriesInfo": {"name": "直接请求成功", "seriesId": 42}},
+            ]}},
+        )
+        request = types.SimpleNamespace(get_res=lambda *_args, **_kwargs: response)
+        with patch.dict(
+            sys.modules, self._maoyan_browser_module(lambda **_kwargs: None),
+        ):
+            with patch.object(plugin_module, "RequestUtils", return_value=request) as factory:
+                results = self.plugin._fetch_maoyan_lists(["tv"])
+        factory.assert_called_once_with(timeout=20)
+        self.assertEqual(results["tv"]["items"][0].title, "直接请求成功")
+        self.assertNotIn("error", results["tv"])
+
+    def test_maoyan_missing_browser_page_does_not_issue_untracked_http_request(self) -> None:
+        def action(**kwargs):
+            kwargs["callback"](None)
+        with patch.dict(sys.modules, self._maoyan_browser_module(action)):
+            with patch.object(self.plugin, "_request_maoyan_http_json") as request:
+                results = self.plugin._fetch_maoyan_lists(["tv"])
+        self.assertIn("未提供有效", results["tv"]["error"])
+        request.assert_not_called()
+
+    def test_maoyan_browser_cleanup_error_does_not_repeat_completed_requests(self) -> None:
+        def action(**kwargs):
+            kwargs["callback"](object())
+            raise RuntimeError("关闭浏览器失败")
+        with patch.dict(sys.modules, self._maoyan_browser_module(action)):
+            with patch.object(self.plugin, "_fetch_maoyan_list", return_value=[]) as fetch:
+                results = self.plugin._fetch_maoyan_lists(["tv", "web"])
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(results, {"tv": {"items": []}, "web": {"items": []}})
+
+    def test_maoyan_http_falsey_error_response_keeps_status_code(self) -> None:
+        class ForbiddenResponse:
+            status_code = 403
+            def __bool__(self):
+                return False
+        request = types.SimpleNamespace(get_res=lambda *_args, **_kwargs: ForbiddenResponse())
+        with patch.object(plugin_module, "RequestUtils", return_value=request):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 状态码 403"):
+                self.plugin._request_maoyan_http_json("https://test.invalid")
+
+    def test_maoyan_http_distinguishes_no_response_and_non_json(self) -> None:
+        request = types.SimpleNamespace(get_res=lambda *_args, **_kwargs: None)
+        with patch.object(plugin_module, "RequestUtils", return_value=request):
+            with self.assertRaisesRegex(RuntimeError, "无响应"):
+                self.plugin._request_maoyan_http_json("https://test.invalid")
+        response = types.SimpleNamespace(
+            status_code=200,
+            json=lambda: (_ for _ in ()).throw(ValueError("invalid JSON")),
+        )
+        request.get_res = lambda *_args, **_kwargs: response
+        with patch.object(plugin_module, "RequestUtils", return_value=request):
+            with self.assertRaisesRegex(RuntimeError, "不是有效 JSON"):
+                self.plugin._request_maoyan_http_json("https://test.invalid")
+
+    def test_maoyan_invalid_payload_is_not_silently_an_empty_success(self) -> None:
+        for payload in (
+            None, [], "verification page", {}, {"status": False},
+            {"dataList": []}, {"dataList": {"list": {}}},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(RuntimeError):
+                    self.plugin._parse_maoyan_items(payload, "tv", "test", 10)
+        self.assertEqual(
+            self.plugin._parse_maoyan_items({"dataList": {"list": []}}, "tv", "test", 10),
+            [],
+        )
+
+    def test_maoyan_malformed_rows_do_not_discard_valid_items(self) -> None:
+        payload = {"dataList": {"list": [
+            None, "bad", {}, {"seriesInfo": []}, {"seriesInfo": {"name": 123}},
+            {"seriesInfo": {"name": "有效条目", "seriesId": 789}},
+        ]}}
+        items = self.plugin._parse_maoyan_items(payload, "tv", "test", 10)
+        self.assertEqual([item.title for item in items], ["有效条目"])
+        self.assertEqual(items[0].guid, "maoyan:tv:789")
+
+    def test_maoyan_sync_records_rank_error_and_processes_other_rank(self) -> None:
+        self.plugin._rss_urls = ""
+        self.plugin._maoyan_enabled = True
+        self.plugin._maoyan_types = ["tv", "web"]
+        item = plugin_module.FeedItem(title="测试剧", guid="maoyan:web:7")
+        self.plugin._fetch_maoyan_lists = lambda _types: {
+            "tv": {"error": "猫眼浏览器请求失败：HTTP 403"},
+            "web": {"items": [item]},
+        }
+        self.plugin._process_item = lambda value: {
+            **value.to_dict(), "status": "subscribed", "subscribe_id": 77,
+        }
+
+        summary = self.plugin.sync()
+
+        self.assertEqual(summary["maoyan_lists"], 1)
+        self.assertEqual(summary["subscribed"], 1)
+        self.assertEqual(summary["failed"], 1)
+        failure = next(
+            row for row in self.plugin.get_data("history")
+            if row["status"] == "maoyan_error"
+        )
+        self.assertIn("403", failure["reason"])
+        self.assertEqual(failure["key"], "maoyan:tv:fetch")
         self.assertIn(item.key, self.plugin.get_data("processed_items"))
 
     def test_douban_rate_limit_has_distinct_status(self) -> None:

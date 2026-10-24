@@ -135,7 +135,9 @@ class RepositoryContractTest(unittest.TestCase):
             PLUGIN_DIR / "src" / "components" / "Config.vue"
         ).read_text(encoding="utf-8")
         self.assertIn("MAOYAN_HEAT_URL", source)
-        self.assertIn("&platformType=&showDate=2", source)
+        self.assertIn("/i/api/encrypt/dashboard/webHeatData", source)
+        self.assertNotIn("&platformType=&showDate=2", source)
+        self.assertIn("credentials: 'same-origin'", source)
         self.assertIn("电视剧热度榜", config_source)
         self.assertIn("网剧热度榜", config_source)
         for platform in ("腾讯", "爱奇艺", "芒果", "优酷"):

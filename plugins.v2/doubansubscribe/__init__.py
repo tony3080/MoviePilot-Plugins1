@@ -45,7 +45,8 @@ from .core import (
 
 DEFAULT_RSS_URL = "http://192.168.110.31:9150/rsshub/hot_tv"
 DEFAULT_CRON = "0 */6 * * *"
-MAOYAN_HEAT_URL = "https://piaofang.maoyan.com/dashboard/webHeatData"
+MAOYAN_HEAT_URL = "https://piaofang.maoyan.com/i/api/encrypt/dashboard/webHeatData"
+MAOYAN_PAGE_URL = "https://piaofang.maoyan.com/dashboard/web-heat"
 MAOYAN_LIST_TYPES = {
     "tv": {"label": "电视剧热度榜", "series_type": 0},
     "web": {"label": "网剧热度榜", "series_type": 1},
@@ -103,7 +104,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.14"
+    plugin_version = "0.5.15"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1303,19 +1304,65 @@ class DoubanSubscribe(_PluginBase):
     def _fetch_maoyan_list(
         self,
         list_type: str,
-        cookies: Optional[Dict[str, str]] = None,
+        page: Any = None,
+        show_date: str = "",
     ) -> List[FeedItem]:
         config = MAOYAN_LIST_TYPES.get(list_type)
         if not config:
             return []
+        if not show_date:
+            show_date = self._now_datetime().astimezone(
+                datetime.timezone(datetime.timedelta(hours=8))
+            ).strftime("%Y%m%d")
         url = (
             f"{MAOYAN_HEAT_URL}?seriesType={config['series_type']}"
-            "&platformType=&showDate=2"
+            f"&showDate={show_date}"
         )
+        if page is not None:
+            payload = self._request_maoyan_browser_json(page, url)
+        else:
+            payload = self._request_maoyan_http_json(url)
+        return self._parse_maoyan_items(
+            payload=payload,
+            list_type=list_type,
+            source_url=url,
+            limit=self._maoyan_num,
+        )
+
+    @staticmethod
+    def _request_maoyan_browser_json(page: Any, url: str) -> Any:
+        """Let the official page maintain its session and request checks."""
+        return page.evaluate("""async url => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 15000);
+            try {
+                const headers = {Accept: 'application/json, text/plain, */*'};
+                for (const [name, key] of [
+                    ['csrf', 'uid'], ['deviceId', 'uuid'], ['channelId', 'channelId']
+                ]) {
+                    const value = document.querySelector(`meta[name="${name}"]`)?.content;
+                    if (value) headers[key] = value;
+                }
+                const response = await fetch(url, {
+                    headers, credentials: 'same-origin', signal: controller.signal,
+                });
+                if (!response.ok) throw new Error(`猫眼 HTTP 状态码 ${response.status}`);
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.toLowerCase().includes('json')) {
+                    throw new Error('猫眼返回非 JSON 内容，可能需要网页验证');
+                }
+                return await response.json();
+            } finally {
+                clearTimeout(timer);
+            }
+        }""", url)
+
+    def _request_maoyan_http_json(self, url: str) -> Any:
+        """Try once without a browser if the host cannot open a session."""
         request = (
-            RequestUtils(proxies=settings.PROXY)
+            RequestUtils(proxies=settings.PROXY, timeout=20)
             if self._proxy
-            else RequestUtils()
+            else RequestUtils(timeout=20)
         )
         response = request.get_res(
             url,
@@ -1325,26 +1372,74 @@ class DoubanSubscribe(_PluginBase):
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/121.0.0.0 Safari/537.36"
                 ),
-                "Referer": "https://piaofang.maoyan.com/",
+                "Referer": MAOYAN_PAGE_URL,
             },
-            cookies=cookies or None,
         )
-        if not response:
+        if response is None:
             raise RuntimeError("猫眼请求无响应")
         if response.status_code != 200:
             raise RuntimeError(f"猫眼 HTTP 状态码 {response.status_code}")
         try:
-            payload = response.json()
+            return response.json()
         except Exception as error:
             raise RuntimeError(f"猫眼返回内容不是有效 JSON：{error}") from error
-        if payload.get("status") is False:
-            raise RuntimeError("猫眼接口返回失败状态")
-        return self._parse_maoyan_items(
-            payload=payload,
-            list_type=list_type,
-            source_url=url,
-            limit=self._maoyan_num,
-        )
+
+    def _fetch_maoyan_lists(self, list_types: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch both ranks in one host-managed browser; isolate each rank's failure."""
+        results: Dict[str, Dict[str, Any]] = {}
+        list_types = list(dict.fromkeys(
+            value for value in list_types if value in MAOYAN_LIST_TYPES
+        ))
+        if not list_types:
+            return results
+        show_date = self._now_datetime().astimezone(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).strftime("%Y%m%d")
+
+        def collect(page: Any) -> None:
+            for list_type in list_types:
+                if list_type in results:
+                    continue
+                try:
+                    if page is None:
+                        raise RuntimeError("MoviePilot 未提供有效的猫眼浏览器页面")
+                    results[list_type] = {
+                        "items": self._fetch_maoyan_list(list_type, page, show_date),
+                    }
+                except Exception as error:
+                    results[list_type] = {"error": f"猫眼浏览器请求失败：{error}"}
+
+        browser_error = "浏览器未执行榜单回调，请检查 MoviePilot 浏览器服务日志"
+        try:
+            from app.helper.browser import PlaywrightHelper
+
+            PlaywrightHelper().action(
+                url=MAOYAN_PAGE_URL,
+                callback=collect,
+                headless=True,
+                timeout=30,
+                proxies=settings.PROXY if self._proxy else None,
+            )
+        except Exception as error:
+            browser_error = str(error)
+        for list_type in list_types:
+            if list_type in results:
+                continue
+            logger.warning(
+                f"豆瓣订阅助手：猫眼浏览器不可用：{browser_error}；"
+                f"尝试直接获取{MAOYAN_LIST_TYPES[list_type]['label']}"
+            )
+            try:
+                results[list_type] = {
+                    "items": self._fetch_maoyan_list(list_type, show_date=show_date),
+                }
+            except Exception as error:
+                results[list_type] = {
+                    "error": (
+                        f"猫眼浏览器不可用：{browser_error}；直接请求失败：{error}"
+                    ),
+                }
+        return results
 
     @classmethod
     def _parse_maoyan_items(
@@ -1355,12 +1450,23 @@ class DoubanSubscribe(_PluginBase):
         limit: int,
         now: Optional[datetime.datetime] = None,
     ) -> List[FeedItem]:
-        rows = ((payload or {}).get("dataList") or {}).get("list") or []
+        if not isinstance(payload, dict):
+            raise RuntimeError("猫眼返回内容不是有效的 JSON 对象")
+        if payload.get("status") is False:
+            raise RuntimeError("猫眼接口返回失败状态，可能需要网页验证或当日数据尚未提供")
+        container = payload.get("dataList")
+        rows = container.get("list") if isinstance(container, dict) else None
+        if not isinstance(rows, list):
+            raise RuntimeError("猫眼响应缺少有效的 dataList.list 榜单列表")
         result: List[FeedItem] = []
         seen = set()
         for row in rows:
-            info = (row or {}).get("seriesInfo") or {}
-            title = str(info.get("name") or "").strip()
+            if not isinstance(row, dict):
+                continue
+            info = row.get("seriesInfo")
+            if not isinstance(info, dict) or not isinstance(info.get("name"), str):
+                continue
+            title = info["name"].strip()
             normalized = re.sub(r"\s+", "", title).casefold()
             if not title or normalized in seen:
                 continue
@@ -1418,27 +1524,6 @@ class DoubanSubscribe(_PluginBase):
             return None
         current = now or datetime.datetime.now()
         return str((current - datetime.timedelta(days=int(days.group(1)))).year)
-
-    @staticmethod
-    def _maoyan_cookies() -> Dict[str, str]:
-        try:
-            from app.helper.browser import PlaywrightHelper
-
-            def page_handler(page) -> Dict[str, str]:
-                return {
-                    str(cookie.get("name")): str(cookie.get("value"))
-                    for cookie in page.context.cookies()
-                    if cookie.get("name")
-                }
-
-            return PlaywrightHelper().action(
-                url="https://piaofang.maoyan.com",
-                callback=page_handler,
-                headless=True,
-            ) or {}
-        except Exception as error:
-            logger.warning(f"豆瓣订阅助手：获取猫眼 Cookie 失败，将尝试直接请求：{error}")
-            return {}
 
     def sync(self) -> Dict[str, Any]:
         """Fetch enabled sources and process unseen entries serially."""
@@ -1545,21 +1630,18 @@ class DoubanSubscribe(_PluginBase):
                     break
 
             if maoyan_types and not douban_rate_limited:
-                cookies: Optional[Dict[str, str]] = None
+                rank_results = self._fetch_maoyan_lists(maoyan_types)
                 for list_type in maoyan_types:
                     config = MAOYAN_LIST_TYPES.get(list_type) or {}
                     try:
-                        try:
-                            items = self._fetch_maoyan_list(list_type)
-                        except Exception:
-                            if cookies is None:
-                                cookies = self._maoyan_cookies()
-                            if not cookies:
-                                raise
-                            items = self._fetch_maoyan_list(
-                                list_type,
-                                cookies=cookies,
-                            )
+                        result = rank_results.get(list_type) or {}
+                        if result.get("error"):
+                            raise RuntimeError(result["error"])
+                        items = result.get("items") or []
+                        logger.info(
+                            f"豆瓣订阅助手：猫眼{config.get('label') or list_type}"
+                            f"获取到 {len(items)} 条有效记录"
+                        )
                         summary["maoyan_lists"] += 1
                         douban_rate_limited = self._process_source_items(
                             items=items,
