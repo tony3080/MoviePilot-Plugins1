@@ -62,8 +62,14 @@ ACTIVE_SUBSCRIBE_STATES = {"N", "R", "P"}
 SUPPLEMENT_DATA_KEY = "daily_supplement_snapshot"
 CATEGORY_SKIP_DATA_KEY = "category_skip_items"
 YEAR_SKIP_DATA_KEY = "year_skip_items"
+CREATED_SUBSCRIPTION_HISTORY_DATA_KEY = "created_subscription_history"
 PLUGIN_USERNAME = "豆瓣订阅助手"
-SUCCESS_STATUSES = {"subscribed", "existing", "history_existing"}
+SUCCESS_STATUSES = {
+    "subscribed",
+    "existing",
+    "history_existing",
+    "plugin_history_existing",
+}
 SKIPPED_STATUSES = {"category_skipped", "year_skipped"}
 FAILURE_STATUSES = {
     "ambiguous",
@@ -104,7 +110,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.15"
+    plugin_version = "0.5.16"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -180,6 +186,7 @@ class DoubanSubscribe(_PluginBase):
             if value in MEDIA_CATEGORY_LABELS
         ]
         self._migrate_managed_douban_ids()
+        self._migrate_created_subscription_history()
 
         if self._onlyonce:
             self._onlyonce = False
@@ -1715,7 +1722,9 @@ class DoubanSubscribe(_PluginBase):
                 summary["subscribed"] += 1
                 completed_keys.add(item.key)
                 self._mark_processed(processed_items, item.key, record)
-            elif status in {"existing", "history_existing"}:
+            elif status in {
+                "existing", "history_existing", "plugin_history_existing",
+            }:
                 summary["existing"] += 1
                 completed_keys.add(item.key)
                 self._mark_processed(processed_items, item.key, record)
@@ -2554,6 +2563,13 @@ class DoubanSubscribe(_PluginBase):
             managed = str(getattr(existing, "username", "") or "") == PLUGIN_USERNAME
             if managed:
                 managed_record = self._managed_record(existing.id)
+                self._record_created_subscription_history(
+                    subscribe_id=existing.id,
+                    title=existing.name or mediainfo.title,
+                    tmdb_id=mediainfo.tmdb_id,
+                    douban_id=douban_id,
+                    season=season,
+                )
                 can_update = (
                     managed_record.get("status") != "manual_review"
                     and (
@@ -2624,6 +2640,23 @@ class DoubanSubscribe(_PluginBase):
                 "managed": False,
             }
 
+        created_history = self._created_subscription_history_match(
+            tmdb_id=mediainfo.tmdb_id,
+            douban_id=douban_id,
+            season=season,
+        )
+        if created_history:
+            return {
+                "status": "plugin_history_existing",
+                "reason": (
+                    "豆瓣订阅助手此前已创建过相同 TMDB、豆瓣 ID 与季度的订阅，"
+                    "即使原订阅已被删除也不重复创建"
+                ),
+                "locked": False,
+                "managed": True,
+                "previous_subscribe_id": created_history.get("subscribe_id"),
+            }
+
         subscribe_id, message = SubscribeChain().add(
             title=mediainfo.title,
             year=mediainfo.year or "",
@@ -2661,6 +2694,13 @@ class DoubanSubscribe(_PluginBase):
                 "reason": "订阅已创建，但总集数锁定校验失败",
                 "locked": False,
             }
+        self._record_created_subscription_history(
+            subscribe_id=subscribe_id,
+            title=saved.name or mediainfo.title,
+            tmdb_id=mediainfo.tmdb_id,
+            douban_id=douban_id,
+            season=season,
+        )
         self._register_managed_subscription(
             subscribe_id=subscribe_id,
             title=saved.name or mediainfo.title,
@@ -3581,6 +3621,132 @@ class DoubanSubscribe(_PluginBase):
             key=lambda item: str(item.get("created_at") or ""),
             reverse=True,
         )
+
+    @staticmethod
+    def _subscription_identity_keys(
+        tmdb_id: Any,
+        douban_id: Any,
+        season: Any,
+    ) -> List[str]:
+        """Return stable identities for a plugin-created TV season."""
+        try:
+            season_number = int(season)
+        except (TypeError, ValueError):
+            return []
+        if season_number < 0:
+            return []
+        keys = []
+        normalized_douban_id = str(douban_id or "").strip()
+        if normalized_douban_id:
+            keys.append(f"douban:{normalized_douban_id}:season:{season_number}")
+        try:
+            tmdb_number = int(tmdb_id)
+        except (TypeError, ValueError):
+            tmdb_number = 0
+        if tmdb_number > 0:
+            keys.append(f"tmdb:{tmdb_number}:season:{season_number}")
+        return keys
+
+    def _created_subscription_history(self) -> Dict[str, Dict[str, Any]]:
+        with self._data_lock:
+            raw = self.get_data(CREATED_SUBSCRIPTION_HISTORY_DATA_KEY) or {}
+            if isinstance(raw, list):
+                return {
+                    str(item.get("key")): dict(item)
+                    for item in raw
+                    if isinstance(item, dict) and item.get("key")
+                }
+            if isinstance(raw, dict):
+                return {
+                    str(key): dict(value)
+                    for key, value in raw.items()
+                    if key and isinstance(value, dict)
+                }
+        return {}
+
+    def _created_subscription_history_match(
+        self,
+        tmdb_id: Any,
+        douban_id: Any,
+        season: Any,
+    ) -> Dict[str, Any]:
+        history = self._created_subscription_history()
+        for key in self._subscription_identity_keys(tmdb_id, douban_id, season):
+            record = history.get(key)
+            if isinstance(record, dict):
+                return dict(record)
+        return {}
+
+    def _record_created_subscription_history(
+        self,
+        subscribe_id: Any,
+        title: str,
+        tmdb_id: Any,
+        douban_id: Any,
+        season: Any,
+    ) -> None:
+        keys = self._subscription_identity_keys(tmdb_id, douban_id, season)
+        if not keys:
+            return
+        with self._data_lock:
+            history = self._created_subscription_history()
+            timestamp = self._now()
+            for key in keys:
+                current = dict(history.get(key) or {})
+                current.update({
+                    "key": key,
+                    "title": title or current.get("title") or "",
+                    "subscribe_id": subscribe_id or current.get("subscribe_id"),
+                    "tmdb_id": tmdb_id or current.get("tmdb_id"),
+                    "douban_id": (
+                        str(douban_id or "").strip()
+                        or current.get("douban_id")
+                        or ""
+                    ),
+                    "season": int(season),
+                    "created_at": current.get("created_at") or timestamp,
+                    "last_seen_at": timestamp,
+                })
+                history[key] = current
+            self.save_data(CREATED_SUBSCRIPTION_HISTORY_DATA_KEY, history)
+
+    def _migrate_created_subscription_history(self) -> int:
+        """Backfill durable identities from existing plugin-created subscriptions."""
+        migrated = 0
+        records = self._managed_records()
+        history = [
+            record for record in (self.get_data("history") or [])
+            if isinstance(record, dict)
+            and record.get("status") == "subscribed"
+        ]
+        processed = [
+            record for record in self._processed_index(history).values()
+            if isinstance(record, dict)
+            and record.get("status") == "subscribed"
+        ]
+        for record in records + history + processed:
+            keys = self._subscription_identity_keys(
+                tmdb_id=record.get("tmdb_id"),
+                douban_id=record.get("douban_id"),
+                season=record.get("season"),
+            )
+            if not keys:
+                continue
+            before = self._created_subscription_history()
+            self._record_created_subscription_history(
+                subscribe_id=record.get("subscribe_id"),
+                title=record.get("title") or "",
+                tmdb_id=record.get("tmdb_id"),
+                douban_id=record.get("douban_id"),
+                season=record.get("season"),
+            )
+            after = self._created_subscription_history()
+            migrated += sum(1 for key in keys if key not in before and key in after)
+        if migrated:
+            logger.info(
+                f"豆瓣订阅助手：已将 {migrated} 个历史插件订阅身份加入永久去重记录"
+            )
+        return migrated
 
     def _upsert_managed(self, record: Dict[str, Any]) -> None:
         subscribe_id = record.get("subscribe_id")

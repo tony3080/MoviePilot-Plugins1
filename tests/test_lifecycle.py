@@ -1912,6 +1912,34 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(result["status"], "history_existing")
         self.assertEqual(FakeSubscribeChain.add_calls, [])
 
+    def test_plugin_created_history_blocks_recreation_after_card_deleted(self) -> None:
+        self.plugin._upsert_managed({
+            "subscribe_id": 456,
+            "title": "已删除的插件订阅",
+            "tmdb_id": 123,
+            "douban_id": "456789",
+            "season": 2,
+            "status": "active",
+        })
+        self.plugin._migrate_created_subscription_history()
+
+        result = self.plugin._create_subscription(
+            mediainfo=types.SimpleNamespace(
+                tmdb_id=123,
+                title="已删除的插件订阅",
+                year="2026",
+            ),
+            douban_id="456789",
+            season=2,
+            total_episode=12,
+            category="domestic",
+            source_key="rss:changed-source-key",
+        )
+
+        self.assertEqual(result["status"], "plugin_history_existing")
+        self.assertEqual(result["previous_subscribe_id"], 456)
+        self.assertEqual(FakeSubscribeChain.add_calls, [])
+
     def test_arc_title_uses_tmdb_season_name_to_select_real_season(self) -> None:
         media = types.SimpleNamespace(
             tmdb_id=85937,
