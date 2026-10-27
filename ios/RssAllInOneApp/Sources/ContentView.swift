@@ -27,6 +27,8 @@ struct ConnectionView: View {
     @State private var password = ""
     @State private var otp = ""
     @State private var useToken = false
+    @FocusState private var focus: Field?
+    private enum Field { case address, username, password, otp, token }
 
     var body: some View {
         NavigationStack {
@@ -37,19 +39,25 @@ struct ConnectionView: View {
                     TextField("实例名称", text: $draft.instanceName)
                     TextField("MoviePilot 地址", text: $draft.baseURL)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($focus, equals: .address).submitLabel(.next)
+                        .onSubmit { focus = useToken ? .token : .username }
                         .accessibilityIdentifier("serverAddress")
                 }
                 Section {
                     Toggle("使用访问令牌", isOn: $useToken)
                     if useToken {
                         SecureField("Bearer 访问令牌", text: $draft.token).textContentType(.password)
+                            .focused($focus, equals: .token)
                             .accessibilityIdentifier("bearerToken")
                     } else {
                         TextField("MP 用户名", text: $username).textContentType(.username)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .focused($focus, equals: .username).submitLabel(.next).onSubmit { focus = .password }
                         SecureField("MP 密码", text: $password).textContentType(.password)
+                            .focused($focus, equals: .password)
                         TextField("动态验证码（如已启用）", text: $otp)
                             .keyboardType(.numberPad).textContentType(.oneTimeCode)
+                            .focused($focus, equals: .otp)
                     }
                 }
                 Section {
@@ -63,6 +71,13 @@ struct ConnectionView: View {
             }
             .navigationTitle("连接服务器")
             .accessibilityIdentifier("connectionForm")
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { focus = nil }.accessibilityIdentifier("dismissKeyboard")
+                }
+            }
             .onAppear { draft = store.config; useToken = !draft.token.isEmpty }
         }
     }

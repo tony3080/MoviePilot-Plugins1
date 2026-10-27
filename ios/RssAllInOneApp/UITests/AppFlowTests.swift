@@ -12,10 +12,13 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(address.waitForExistence(timeout: 10))
         address.tap()
         address.typeText("http://127.0.0.1:8767")
-        app.switches["使用访问令牌"].tap()
+        app.buttons["dismissKeyboard"].tap()
+        app.switches["使用访问令牌"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         let token = app.secureTextFields["bearerToken"]
+        XCTAssertTrue(token.waitForExistence(timeout: 5))
         token.tap()
         token.typeText("fixture-token")
+        app.buttons["dismissKeyboard"].tap()
         app.buttons["连接 MoviePilot"].tap()
         XCTAssertTrue(app.tabBars.buttons["入库"].waitForExistence(timeout: 15))
     }
