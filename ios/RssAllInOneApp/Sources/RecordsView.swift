@@ -75,7 +75,7 @@ struct RecordsView: View {
                         }
                         Button("刷新列表", systemImage: "arrow.clockwise") { Task { await load() } }
                     } label: { Image(systemName: "ellipsis.circle") }
-                    .accessibilityIdentifier("recordActions")
+                    .accessibilityIdentifier(qb ? "qbActions" : "mediaActions")
                 }
             }
             .safeAreaInset(edge: .bottom) {

@@ -103,6 +103,7 @@ struct MoreView: View {
                     NavigationLink { ServerDocumentView(title: "目录规划", path: "layout") } label: { Label("目录规划", systemImage: "externaldrive") }
                     NavigationLink { ServerDocumentView(title: "依赖状态", path: "health") } label: { Label("依赖状态", systemImage: "stethoscope") }
                     NavigationLink { ServerDocumentView(title: "扫库回调记录", path: "emby/scheduledtasks/callbacks") } label: { Label("扫库回调记录", systemImage: "arrow.triangle.2.circlepath") }
+                    NavigationLink { ServerDocumentView(title: "最近扫库回调", path: "emby/scheduledtasks/last") } label: { Label("最近扫库回调", systemImage: "waveform.path") }
                     NavigationLink { MaintenanceView() } label: { Label("数据维护", systemImage: "wrench.and.screwdriver") }
                 }
                 Section {

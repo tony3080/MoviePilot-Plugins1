@@ -114,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "qb/item/identify":
             if payload.get("media_id") != "media-1" or payload.get("tmdb_id") != 42:
                 return self.reply({"success": False, "message": "识别参数错误"}, 400)
+            if not payload.get("manual_labels", {}).get("effects"):
+                return self.reply({"success": False, "message": "特效开关未传递"}, 400)
             MEDIA["details"]["site_labels"] = payload["manual_labels"]
             return self.reply({"success": True, "message": "识别已更新", "item": MEDIA})
         if path == "qb/check-presence":

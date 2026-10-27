@@ -29,8 +29,8 @@ struct APIClient: Sendable {
         return url
     }
 
-    func get(_ path: String, query: [URLQueryItem] = [], plugin: Bool = true) async throws -> JSONValue {
-        try await request(path, method: "GET", query: query, plugin: plugin)
+    func get(_ path: String, query: [URLQueryItem] = [], plugin: Bool = true, diagnostic: Bool = false) async throws -> JSONValue {
+        try await request(path, method: "GET", query: query, plugin: plugin, diagnostic: diagnostic)
     }
 
     func send(_ path: String, body: JSONValue = .object([:]), method: String = "POST", plugin: Bool = true) async throws -> JSONValue {
@@ -63,7 +63,7 @@ struct APIClient: Sendable {
 
     private func request(
         _ path: String, method: String, query: [URLQueryItem] = [], body: Data? = nil,
-        plugin: Bool, contentType: String = "application/json", authenticate: Bool = true
+        plugin: Bool, contentType: String = "application/json", authenticate: Bool = true, diagnostic: Bool = false
     ) async throws -> JSONValue {
         let path = plugin ? "plugin/RssAllInOne/" + path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) : path
         var request = URLRequest(url: try url(path, query: query), timeoutInterval: 180)
@@ -84,7 +84,7 @@ struct APIClient: Sendable {
             throw APIError.server(reply?["detail"].text.nonempty ?? reply?["message"].text.nonempty ?? "HTTP \(http.statusCode)")
         }
         guard let reply else { throw APIError.server("服务器返回的数据无法解析，请检查 MP 地址及反向代理") }
-        if case .bool(false) = reply["success"] {
+        if !diagnostic, case .bool(false) = reply["success"] {
             let failures = reply["results"].array.filter { !$0["success"].flag }.prefix(3).map { $0["message"].text }
             throw APIError.server(([reply["message"].text.nonempty ?? "操作失败"] + failures).joined(separator: "\n"))
         }

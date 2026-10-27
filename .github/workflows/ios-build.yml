@@ -42,7 +42,14 @@ jobs:
             -derivedDataPath build -resultBundlePath build/TestResults.xcresult \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO test
-          xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/screenshots
+
+      - name: Export screenshots
+        if: always()
+        working-directory: ios/RssAllInOneApp
+        run: |
+          if [ -d build/TestResults.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/screenshots
+          fi
 
       - name: Build unsigned iPhone app
         working-directory: ios/RssAllInOneApp

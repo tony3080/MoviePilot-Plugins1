@@ -99,6 +99,13 @@ struct ClientTests {
         catch APIError.unauthorized {} catch { Issue.record("Unexpected error: \(error)") }
     }
 
+    @Test func healthViewCanReadFailureDiagnostics() async throws {
+        MockProtocol.handler = { _ in (200, #"{"success":false,"startup_error":"SQLite unavailable"}"#) }
+        let client = APIClient(config: ServerConfig(baseURL: "http://nas"), session: testSession())
+        let reply = try await client.get("health", diagnostic: true)
+        #expect(reply["startup_error"].text == "SQLite unavailable")
+    }
+
     @Test func loginEncodesLiteralPlusAndIncludesOTP() async throws {
         MockProtocol.handler = { request in
             #expect(request.url?.path == "/api/v1/login/access-token")

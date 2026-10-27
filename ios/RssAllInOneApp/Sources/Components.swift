@@ -115,7 +115,7 @@ struct ServerDocumentView: View {
             .task { await load() }.refreshable { await load() }
     }
     private func load() async {
-        do { document = try await store.client.get(path) } catch { store.report(error) }
+        do { document = try await store.client.get(path, diagnostic: path == "health") } catch { store.report(error) }
     }
 }
 

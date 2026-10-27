@@ -52,7 +52,12 @@ struct RSSView: View {
                                 }
                             }
                             Button("删除任务配置", systemImage: "trash", role: .destructive) { deleteID = task.id }
-                        } label: { Label("执行操作", systemImage: "ellipsis.circle") }
+                        } label: {
+                            Label("执行操作", systemImage: "ellipsis.circle")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
                         .accessibilityIdentifier("rss-actions-\(task.id)")
                     }
                 }
