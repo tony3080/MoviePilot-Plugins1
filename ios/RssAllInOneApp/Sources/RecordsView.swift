@@ -243,7 +243,8 @@ struct RecordActions: View {
                 if mediaCanDeleteSource { actionButton("删源", systemImage: "trash", action: "delete_source", destructive: true) }
             }
         }
-        .frame(width: 86, alignment: .trailing)
+        .frame(width: 44)
+        .frame(minHeight: 96, alignment: .center)
         .accessibilityElement(children: .contain)
     }
 

@@ -40,6 +40,41 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["识别已更新"].waitForExistence(timeout: 5))
     }
 
+    func testMediaAndQBLabelsWrapAcrossRows() {
+        XCTAssertTrue(app.staticTexts["测试电影"].waitForExistence(timeout: 10))
+        assertWrappedLabels()
+        XCTAssertTrue(app.staticTexts["目录已存在（0/12）"].exists)
+        let source = app.buttons["源文件名"].firstMatch
+        XCTAssertTrue(source.exists)
+        XCTAssertLessThan(source.frame.maxY - app.staticTexts["测试电影"].frame.minY, 190)
+        capture("08-media-wrapped-labels")
+        source.tap()
+        XCTAssertTrue(app.staticTexts["Test.Movie.2026.1080p.mkv"].waitForExistence(timeout: 5))
+        app.buttons["隐藏源文件名"].tap()
+        XCTAssertFalse(app.staticTexts["Test.Movie.2026.1080p.mkv"].exists)
+
+        app.tabBars.buttons["qB"].tap()
+        XCTAssertTrue(app.staticTexts["测试下载任务"].waitForExistence(timeout: 10))
+        assertWrappedLabels()
+        XCTAssertTrue(app.buttons["删任务"].exists)
+        capture("09-qb-wrapped-labels")
+    }
+
+    private func assertWrappedLabels() {
+        let status = app.staticTexts["已识别"].firstMatch
+        let resolution = app.staticTexts["1080p"].firstMatch
+        let customization = app.staticTexts["REMUX@U版"].firstMatch
+        let mandarin = app.staticTexts["国配"].firstMatch
+        XCTAssertTrue(status.exists)
+        XCTAssertTrue(resolution.exists)
+        XCTAssertTrue(customization.exists)
+        XCTAssertTrue(mandarin.exists)
+        XCTAssertEqual(status.frame.minY, resolution.frame.minY, accuracy: 2)
+        XCTAssertGreaterThan(resolution.frame.minX, status.frame.minX)
+        XCTAssertGreaterThan(mandarin.frame.minY, status.frame.minY)
+        XCTAssertLessThan(customization.frame.maxX, app.frame.maxX)
+    }
+
     func testQBAndPresenceCheck() {
         app.tabBars.buttons["qB"].tap()
         XCTAssertTrue(app.staticTexts["测试下载任务"].waitForExistence(timeout: 10))

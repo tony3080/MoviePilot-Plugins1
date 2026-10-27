@@ -15,12 +15,16 @@ TASK = {
 }
 MEDIA = {
     "id": "media-1", "title": "测试电影", "media_type": "movie", "tmdb_id": 42,
-    "state": "identified", "category": "外语电影",
+    "state": "identified", "category": "外语电影", "size": 1073741824,
     "source_name": "Test.Movie.2026.1080p.mkv",
     "source_path": "/media/Test.Movie.2026.1080p.mkv",
     "comment_url": "https://pt.example/details.php?id=123",
     "details": {
         "site_labels": {"mandarin": True, "effects": False},
+        "inventory_plan": {"expected_files": [
+            {"recognition": {"resource_tokens": ["1080p"], "customization": "REMUX@U版"}}
+        ]},
+        "inventory": {"folder_status": "exists", "total_files": 12, "exists_count": 0},
         "file_mappings": [{"source_path": "/media/Test.Movie.2026.1080p.mkv",
                            "sha1": "a" * 40, "file_size": 1073741824}],
     },
@@ -29,7 +33,12 @@ TORRENT = {
     "downloader_id": "测试 qB", "info_hash": "b" * 40, "name": "测试下载任务",
     "recognition_state": "identified", "inventory_state": "missing", "progress": 0.52,
     "media_type": "movie", "tmdb_id": 42, "category": "REMUX",
-    "details": {"site_labels": {"mandarin": True, "effects": True}},
+    "details": {
+        "site_labels": {"mandarin": True, "effects": True},
+        "inventory_plan": {"expected_files": [
+            {"recognition": {"resource_tokens": ["1080p"], "customization": "REMUX@U版"}}
+        ]},
+    },
 }
 CONFIG = {
     "enabled": True, "rss_enabled": True, "inventory_root": "/media/library",

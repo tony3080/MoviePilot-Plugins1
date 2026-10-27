@@ -11,6 +11,7 @@ struct StatusBadge: View {
     }
     var body: some View {
         Text(statusText(state)).font(.caption.weight(.medium)).foregroundStyle(color)
+            .lineLimit(1)
             .padding(.horizontal, 7).padding(.vertical, 4).background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
     }
 }
@@ -27,6 +28,47 @@ struct InfoBadge: View {
             .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
             .overlay { RoundedRectangle(cornerRadius: 5).stroke(color.opacity(0.18), lineWidth: 0.6) }
             .lineLimit(1)
+    }
+}
+
+struct BadgeFlowLayout: Layout {
+    var spacing: CGFloat = 5
+    var rowSpacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = arrangement(width: bounds.width, subviews: subviews).frames
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func arrangement(width proposedWidth: CGFloat?, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        guard !subviews.isEmpty else { return (.zero, []) }
+        let idealSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let naturalWidth = idealSizes.reduce(0) { $0 + $1.width } + CGFloat(subviews.count - 1) * spacing
+        let width = proposedWidth.flatMap { $0.isFinite ? max(0, $0) : nil } ?? naturalWidth
+        var frames: [CGRect] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for (subview, idealSize) in zip(subviews, idealSizes) {
+            let size = subview.sizeThatFits(ProposedViewSize(width: min(idealSize.width, width), height: nil))
+            if x > 0 && x + size.width > width {
+                x = 0
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: width, height: y + rowHeight), frames)
     }
 }
 
@@ -77,7 +119,7 @@ struct RecordRow: View {
                     }
                 }
             }
-            .frame(minHeight: 96, alignment: .top)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -85,10 +127,7 @@ struct RecordRow: View {
     @ViewBuilder private var summary: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.title).font(.headline).lineLimit(2)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 5) { rowLabels }
-                VStack(alignment: .leading, spacing: 4) { rowLabels }
-            }
+            BadgeFlowLayout { rowLabels }
             if !item.inventorySummary.isEmpty {
                 Text(item.inventorySummary)
                     .font(.caption2.weight(.medium))
@@ -109,6 +148,7 @@ struct RecordRow: View {
                     .font(.caption).foregroundStyle(.orange)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var rowLabels: some View {
