@@ -29,9 +29,6 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: true
-    scheme:
-      gatherCoverageData: false
-      shared: true
   RssAllInOneTests:
     type: bundle.unit-test
     platform: iOS
