@@ -1,0 +1,69 @@
+name: Build RSS一条龙 iOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/RssAllInOneApp/**"
+      - ".github/workflows/ios-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios/RssAllInOneApp
+        run: xcodegen generate
+
+      - name: Test on Simulator
+        working-directory: ios/RssAllInOneApp
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["name"].startswith("iPhone")))')
+          xcodebuild -project RssAllInOneApp.xcodeproj \
+            -scheme RssAllInOneApp -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath build -resultBundlePath build/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO test
+
+      - name: Build unsigned iPhone app
+        working-directory: ios/RssAllInOneApp
+        run: |
+          xcodebuild -project RssAllInOneApp.xcodeproj \
+            -scheme RssAllInOneApp -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath device-build CODE_SIGNING_ALLOWED=NO build
+          mkdir -p package/Payload
+          cp -R device-build/Build/Products/Release-iphoneos/RssAllInOneApp.app package/Payload/
+          cd package
+          ditto -c -k --keepParent Payload ../RSS-All-In-One-unsigned.ipa
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: rssallinone-ios-simulator
+          path: ios/RssAllInOneApp/build/Build/Products/Debug-iphonesimulator/RssAllInOneApp.app
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: rssallinone-ios-unsigned
+          path: ios/RssAllInOneApp/RSS-All-In-One-unsigned.ipa
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: ios/RssAllInOneApp/build/TestResults.xcresult
