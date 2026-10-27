@@ -15,6 +15,7 @@ struct RecordsView: View {
     @State private var action = ""
     @State private var confirming = false
     @State private var showFilters = false
+    @State private var expandedSourceIDs: Set<String> = []
 
     private var filterKey: String { "\(state)|\(mediaType)|\(downloader)|\(taskIDs.sorted())|\(qb ? search : "")|\(store.generation)" }
     private var selectedRows: [Record] { page.rows.filter { selected.contains($0.id) } }
@@ -43,15 +44,29 @@ struct RecordsView: View {
                 }
                 Section {
                     ForEach(visible) { item in
-                        HStack {
+                        HStack(alignment: .top, spacing: 8) {
                             if editing {
                                 Button {
                                     if !selected.insert(item.id).inserted { selected.remove(item.id) }
                                 } label: { Image(systemName: selected.contains(item.id) ? "checkmark.circle.fill" : "circle").font(.title2) }
                                 .buttonStyle(.plain).accessibilityLabel(selected.contains(item.id) ? "取消选择" : "选择")
                             }
-                            NavigationLink { RecordDetailView(item: item, qb: qb) } label: { RecordRow(item: item, qb: qb) }
+                            RecordRow(item: item, qb: qb, interactive: true,
+                                      sourceExpanded: expandedSourceIDs.contains(item.id)) {
+                                if !expandedSourceIDs.insert(item.id).inserted {
+                                    expandedSourceIDs.remove(item.id)
+                                }
+                            }
+                            if !editing {
+                                RecordActions(item: item, qb: qb) { action in
+                                    selected = [item.id]
+                                    self.action = action
+                                    confirming = true
+                                }
+                            }
                         }
+                        .padding(.vertical, 2)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 12))
                     }
                     PageFooter(page: page) { await load(more: true) }
                 }
@@ -59,6 +74,8 @@ struct RecordsView: View {
             }
             .navigationTitle(qb ? "qB 管理" : "入库管理")
             .searchable(text: $search, prompt: qb ? "搜索任务" : "搜索已加载的媒体")
+            .listSectionSpacing(.compact)
+            .listRowSpacing(0)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showFilters = true } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("筛选")
@@ -204,6 +221,53 @@ struct RecordsView: View {
         }
         selected.removeAll()
         await load()
+    }
+}
+
+struct RecordActions: View {
+    let item: Record
+    let qb: Bool
+    let onAction: (String) -> Void
+
+    private var mediaCanQueue: Bool { ["identified", "rolled_back"].contains(item.state) }
+    private var mediaCanImport: Bool { ["identified", "pending", "rolled_back"].contains(item.state) }
+    private var mediaCanDeleteSource: Bool { !["imported", "importing"].contains(item.state) }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            if qb {
+                actionButton("删任务", systemImage: "trash", action: "delete_qb", destructive: true)
+            } else {
+                if mediaCanQueue { actionButton("转待入库", systemImage: "tray.and.arrow.down", action: "queue_import") }
+                if mediaCanImport { actionButton("入库", systemImage: "archivebox", action: "import") }
+                if mediaCanDeleteSource { actionButton("删源", systemImage: "trash", action: "delete_source", destructive: true) }
+            }
+        }
+        .frame(width: 86, alignment: .trailing)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private func actionButton(_ title: String, systemImage: String, action: String, destructive: Bool = false) -> some View {
+        if destructive {
+            Button(role: .destructive) { onAction(action) } label: {
+                Image(systemName: systemImage)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .accessibilityLabel(title)
+            .help(title)
+        } else {
+            Button { onAction(action) } label: {
+                Image(systemName: systemImage)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .accessibilityLabel(title)
+            .help(title)
+        }
     }
 }
 

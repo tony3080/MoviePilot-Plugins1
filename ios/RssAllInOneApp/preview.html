@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>RSS一条龙 iOS 预览</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+      --bg: #f3f5f9;
+      --surface: rgba(255, 255, 255, .84);
+      --text: #172033;
+      --muted: #788197;
+      --blue: #3978f6;
+      --line: rgba(30, 43, 71, .10);
+      --shadow: 0 16px 38px rgba(30, 43, 71, .10);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11131a;
+        --surface: rgba(31, 35, 46, .88);
+        --text: #f4f6fb;
+        --muted: #9ca4b7;
+        --line: rgba(255, 255, 255, .10);
+        --shadow: 0 16px 38px rgba(0, 0, 0, .26);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #dce7ff, var(--bg) 55%);
+      color: var(--text);
+    }
+    .phone {
+      width: min(100vw, 430px);
+      min-height: 100vh;
+      overflow: hidden;
+      background: var(--bg);
+      position: relative;
+      box-shadow: var(--shadow);
+    }
+    @media (min-width: 520px) {
+      .phone {
+        min-height: 860px;
+        height: min(92vh, 900px);
+        border: 8px solid #161a25;
+        border-radius: 42px;
+      }
+    }
+    header {
+      padding: 24px 20px 12px;
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+    }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 30px; letter-spacing: -.6px; }
+    .sub { color: var(--muted); margin-top: 4px; font-size: 14px; }
+    .dot {
+      width: 12px;
+      height: 12px;
+      margin-top: 10px;
+      border-radius: 50%;
+      background: #f4a340;
+      box-shadow: 0 0 0 4px rgba(244, 163, 64, .13);
+    }
+    main { padding: 6px 16px 94px; overflow: auto; height: calc(100% - 138px); }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: 0 8px 22px rgba(30, 43, 71, .05);
+      backdrop-filter: blur(20px);
+    }
+    .metric { padding: 14px; display: flex; gap: 10px; align-items: center; }
+    .metric-icon {
+      width: 34px; height: 34px; display: grid; place-items: center;
+      border-radius: 50%; background: rgba(57, 120, 246, .13); color: var(--blue); font-size: 16px;
+    }
+    .metric small { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 2px; font-size: 22px; }
+    .section { margin-top: 18px; padding: 16px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .section-title h2 { font-size: 17px; }
+    .link { border: 0; background: none; color: var(--blue); font-weight: 600; cursor: pointer; }
+    .media-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 11px; align-items: flex-start; padding: 10px 0; min-height: 116px; }
+    .media-row + .media-row { border-top: 1px solid var(--line); }
+    .poster {
+      width: 64px; height: 96px; display: grid; place-items: center; flex: 0 0 auto;
+      color: white; border-radius: 12px; background: linear-gradient(145deg, #508eff, #5d54cc);
+      font-size: 20px;
+    }
+    .media-copy { min-width: 0; min-height: 96px; display: flex; flex-direction: column; justify-content: flex-start; }
+    .media-copy b { display: block; line-height: 1.25; font-size: 15px; }
+    .media-copy > span { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+    .tag, .badge { border-radius: 99px; padding: 4px 7px; font-size: 11px; color: #53627d; background: rgba(120, 129, 151, .13); white-space: nowrap; border: 1px solid rgba(120, 129, 151, .12); }
+    .badge.blue { color: #3676e5; background: rgba(57, 120, 246, .13); border-color: rgba(57, 120, 246, .2); }
+    .badge.orange { color: #bd6b0a; background: rgba(244, 163, 64, .16); border-color: rgba(244, 163, 64, .22); }
+    .badge.green { color: #20894a; background: rgba(42, 180, 102, .14); border-color: rgba(42, 180, 102, .2); }
+    .badge.red { color: #c2384a; background: rgba(220, 69, 87, .13); border-color: rgba(220, 69, 87, .2); }
+    .badge.purple, .tag.purple { color: #7954c7; background: rgba(121, 84, 199, .13); border-color: rgba(121, 84, 199, .2); }
+    .tag.cyan { color: #007f9b; background: rgba(0, 156, 188, .13); border-color: rgba(0, 156, 188, .2); }
+    .tag.teal { color: #078277; background: rgba(8, 153, 139, .13); border-color: rgba(8, 153, 139, .2); }
+    .tag.gray { color: #53627d; background: rgba(120, 129, 151, .13); }
+    .inventory-line { margin-top: 6px; font-size: 12px; font-weight: 600; }
+    .inventory-line.ok { color: #20894a; }
+    .inventory-line.warning { color: #bd6b0a; }
+    .inventory-line.missing { color: #c2384a; }
+    .source-button { margin-top: 7px; border: 0; padding: 0; color: var(--blue); background: transparent; font: inherit; font-size: 11px; cursor: pointer; }
+    .source-button:active { transform: scale(.97); }
+    .source-name { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+    .row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; align-self: center; }
+    .row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; width: 34px; }
+    .action-btn { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 7px; padding: 0; font: inherit; font-size: 16px; cursor: pointer; }
+    .action-btn:active { transform: scale(.97); }
+    .action-btn.danger { color: #c33b4a; }
+    .filterbar { display: flex; align-items: center; justify-content: space-between; margin: -4px 0 7px; padding: 0 3px; color: var(--muted); font-size: 12px; }
+    .filterbar select { border: 1px solid var(--line); color: var(--text); background: var(--surface); border-radius: 8px; padding: 5px 7px; font: inherit; }
+    .nav {
+      position: absolute; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+      padding: 10px 8px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(26px);
+    }
+    .nav button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; padding: 5px 0; }
+    .nav button.active { color: var(--blue); font-weight: 700; }
+    .nav i { display: block; font-style: normal; font-size: 20px; margin-bottom: 3px; }
+    .toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0;
+      background: #182033; color: white; padding: 10px 14px; border-radius: 12px; font-size: 13px;
+      transition: opacity .22s ease, transform .22s ease; pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  </style>
+</head>
+<body>
+  <section class="phone">
+    <header>
+      <div><h1 id="title">下午好</h1><p class="sub">家里 NAS</p></div>
+      <span class="dot" title="演示模式"></span>
+    </header>
+    <main id="content"></main>
+    <nav class="nav">
+      <button class="active" data-tab="overview"><i>⌂</i>总览</button>
+      <button data-tab="media"><i>▣</i>入库</button>
+      <button data-tab="qb"><i>⇩</i>qB</button>
+      <button data-tab="settings"><i>⚙</i>设置</button>
+    </nav>
+  </section>
+  <div class="toast" id="toast"></div>
+  <script>
+    const media = [
+      { id: "media-1", title: "天官赐福", tags: ["1080p", "外语电影", "REMUX@U版", "4.7 GB"], source: "Tian Guan Ci Fu.2020.1080p.Remux.mp4", state: "已识别", tone: "blue", inventory: { state: "exists", existing: 0, total: 12 } },
+      { id: "media-2", title: "玩命三日", tags: ["1080p", "华语电影", "WEB-DL", "2.4 GB"], source: "玩命三日.2020.1080p.WEB-DL.mp4", state: "待入库", tone: "orange", inventory: { state: "missing", existing: 0, total: 1 } },
+      { id: "media-3", title: "天气预报员", tags: ["1080p", "外语电影", "REMUX@U版", "4.7 GB"], source: "The.Weather.Man.2005.1080p.Remux.mp4", state: "已入库", tone: "green", inventory: { state: "exists", existing: 1, total: 1 } }
+    ];
+    const torrents = [
+      { id: "qb-1", title: "加勒比海盗系列", tags: ["已完成", "100%", "32.4 GB"], source: "Pirates.of.the.Caribbean.I-V.REPACK.BluRay.1080p.REMUX", state: "下载完成", progress: 100, tone: "green" },
+      { id: "qb-2", title: "圣克莱尔", tags: ["下载中", "68%", "8.1 GB"], source: "Saint.Clare.2024.1080p.Blu-ray.Remux.mkv", state: "下载中", progress: 68, tone: "orange" },
+      { id: "qb-3", title: "爱在日落黄昏时", tags: ["等待识别", "100%", "6.2 GB"], source: "Before.Sunset.2004.1080p.BluRay.mkv", state: "等待识别", progress: 100, tone: "" }
+    ];
+    const content = document.querySelector("#content");
+    const toast = document.querySelector("#toast");
+    const sourceVisible = new Set();
+    function metric(icon, label, value) {
+      return `<article class="card metric"><span class="metric-icon">${icon}</span><div><small>${label}</small><strong>${value}</strong></div></article>`;
+    }
+    function mediaActions(item, index) {
+      if (item.kind === "qb") {
+        return `<div class="row-actions"><button class="action-btn danger" title="删除任务" aria-label="删除任务" onclick="qbDelete(${index})">⌫</button></div>`;
+      }
+      const actions = [];
+      if (item.state === "已识别" || item.state === "已回退") actions.push(`<button class="action-btn" title="转待入库" aria-label="转待入库" onclick="mediaAction(${index}, 'pending')">⇩</button>`);
+      if (["已识别", "待入库", "已回退"].includes(item.state)) actions.push(`<button class="action-btn" title="入库" aria-label="入库" onclick="mediaAction(${index}, 'imported')">▣</button>`);
+      if (!["已入库", "入库中"].includes(item.state)) actions.push(`<button class="action-btn danger" title="删源" aria-label="删源" onclick="mediaAction(${index}, 'deleted')">⌫</button>`);
+      return `<div class="row-actions">${actions.join("")}</div>`;
+    }
+    function tagClass(tag) {
+      if (/^\d{3,4}p$/i.test(tag)) return "cyan";
+      if (/电影|剧集|综艺|动漫/.test(tag)) return "purple";
+      if (/REMUX|WEB|U版|版$|DIY|字幕/.test(tag)) return "teal";
+      if (/GB|TB|MB$/.test(tag)) return "gray";
+      return "";
+    }
+    function inventoryLine(item) {
+      const inv = item.inventory;
+      if (!inv) return "";
+      if (inv.state === "ambiguous") return `<div class="inventory-line warning">目录冲突</div>`;
+      if (["exists", "partial"].includes(inv.state)) return `<div class="inventory-line ${inv.existing >= inv.total ? "ok" : "missing"}">目录已存在（${inv.existing}/${inv.total}）</div>`;
+      return `<div class="inventory-line missing">目录未建立（0/${inv.total || 0}）</div>`;
+    }
+    function mediaRow(item, index) {
+      const key = item.id || `${item.kind || "media"}-${index}`;
+      const tags = (item.tags || [item.meta || item.name]).filter(Boolean);
+      const sourceOpen = sourceVisible.has(key);
+      return `<div class="media-row"><span class="poster">${item.kind === "qb" ? "⇩" : "▣"}</span><div class="media-copy"><b>${item.title}</b><div class="tag-row"><span class="badge ${item.tone || "blue"}">${item.state}</span>${tags.map(tag => `<span class="tag ${tagClass(tag)}">${tag}</span>`).join("")}</div>${inventoryLine(item)}<button class="source-button" onclick="toggleSource('${key}')">${sourceOpen ? "⌃ 隐藏源文件名" : "⌄ 源文件名"}</button>${sourceOpen ? `<div class="source-name">${item.source || item.name || "暂无源文件名"}</div>` : ""}${item.progress != null ? `<div style="margin-top:8px;background:var(--line);height:5px;border-radius:9px"><span style="display:block;width:${item.progress}%;height:100%;background:var(--blue);border-radius:9px"></span></div>` : ""}</div><div class="row-side">${mediaActions(item, index)}</div></div>`;
+    }
+    function toggleSource(key) {
+      if (sourceVisible.has(key)) sourceVisible.delete(key); else sourceVisible.add(key);
+      if (document.querySelector(".nav button.active")?.dataset.tab === "qb") qbPage();
+      else if (document.querySelector(".nav button.active")?.dataset.tab === "media") mediaPage();
+      else overview();
+    }
+    function overview() {
+      content.innerHTML = `
+        <div class="metrics">
+          ${metric("▣", "媒体记录", "131")}
+          ${metric("⇩", "qB 任务", "115")}
+          ${metric("⇩", "待入库", "8")}
+          ${metric("✓", "运行状态", "就绪")}
+        </div>
+        <section class="card section">
+          <div class="section-title"><h2>最近处理</h2><button class="link" onclick="showToast('已刷新演示数据')">刷新</button></div>
+          ${media.map(mediaRow).join("")}
+        </section>
+        <p class="sub" style="padding:12px 4px">当前为演示数据，连接 MP 后会自动切换为真实记录。</p>`;
+    }
+    function mediaPage() {
+      content.innerHTML = `<section class="card section"><div class="section-title"><h2>入库管理</h2><button class="link" onclick="showToast('已刷新')">刷新</button></div><div class="filterbar"><span>状态</span><select onchange="showToast('已切换到：' + this.options[this.selectedIndex].text)"><option>全部</option><option>已识别</option><option>待入库</option><option>已入库</option></select></div>${media.map(mediaRow).join("")}</section>`;
+    }
+    function qbPage() {
+      content.innerHTML = `<section class="card section"><div class="section-title"><h2>qB 管理</h2><button class="link" onclick="showToast('已刷新')">刷新</button></div><div class="filterbar"><span>状态</span><select onchange="showToast('已切换到：' + this.options[this.selectedIndex].text)"><option>全部</option><option>下载中</option><option>下载完成</option></select></div>${torrents.map((item, index) => mediaRow({...item, kind: "qb"}, index)).join("")}</section>`;
+    }
+    function mediaAction(index, action) {
+      if (action === "pending") media[index].state = "待入库";
+      if (action === "imported") media[index].state = "已入库";
+      if (action === "deleted") media.splice(index, 1);
+      mediaPage();
+      showToast(action === "deleted" ? "已删除源文件卡片" : "操作已完成");
+    }
+    function qbDelete(index) {
+      torrents.splice(index, 1);
+      qbPage();
+      showToast("qB 任务已删除");
+    }
+    function settings() {
+      content.innerHTML = `<section class="card section"><div class="section-title"><h2>设置</h2></div><div class="media-row"><div class="media-copy"><b>实例</b><span>家里 NAS</span></div></div><div class="media-row"><div class="media-copy"><b>地址</b><span>http://192.168.110.31:3033</span></div></div><div class="media-row"><div class="media-copy"><b>客户端</b><span>RSS一条龙 iOS 第一版</span></div></div></section>`;
+    }
+    function showToast(text) {
+      toast.textContent = text; toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 1500);
+    }
+    document.querySelectorAll(".nav button").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll(".nav button").forEach(item => item.classList.remove("active"));
+      button.classList.add("active");
+      ({ overview, media: mediaPage, qb: qbPage, settings }[button.dataset.tab])();
+    }));
+    overview();
+  </script>
+</body>
+</html>

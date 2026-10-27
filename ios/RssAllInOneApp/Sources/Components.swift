@@ -5,12 +5,28 @@ struct StatusBadge: View {
     private var color: Color {
         if ["failed", "error", "unidentified", "rolled_back"].contains(state) { return .red }
         if ["completed", "succeeded", "imported", "exists", "existing"].contains(state) { return .green }
-        if ["running", "pending", "importing", "queued"].contains(state) { return .orange }
+        if ["pending", "pending_import"].contains(state) { return .purple }
+        if ["running", "importing", "queued"].contains(state) { return .orange }
         return .blue
     }
     var body: some View {
         Text(statusText(state)).font(.caption.weight(.medium)).foregroundStyle(color)
             .padding(.horizontal, 7).padding(.vertical, 4).background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+struct InfoBadge: View {
+    let text: String
+    var color: Color = .secondary
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+            .overlay { RoundedRectangle(cornerRadius: 5).stroke(color.opacity(0.18), lineWidth: 0.6) }
+            .lineLimit(1)
     }
 }
 
@@ -20,7 +36,7 @@ struct Poster: View {
         AsyncImage(url: safeWebURL(path)) { image in image.resizable().scaledToFill() } placeholder: {
             Rectangle().fill(Color.secondary.opacity(0.12)).overlay { Image(systemName: "film").foregroundStyle(.secondary) }
         }
-        .frame(width: 56, height: 84).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
+        .frame(width: 64, height: 96).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityHidden(true)
     }
 }
@@ -28,36 +44,92 @@ struct Poster: View {
 struct RecordRow: View {
     let item: Record
     let qb: Bool
+    var interactive = false
+    var sourceExpanded = false
+    var onToggleSource: (() -> Void)? = nil
+
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 10) {
             Poster(path: item.poster)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(item.title).font(.headline).lineLimit(2)
-                Text([item["category"].text, item["season"].text.isEmpty ? "" : "S\(item["season"].text)"]
-                    .filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                ViewThatFits(in: .horizontal) {
-                    HStack { rowLabels }
-                    VStack(alignment: .leading, spacing: 4) { rowLabels }
+            VStack(alignment: .leading, spacing: 4) {
+                if interactive {
+                    NavigationLink { RecordDetailView(item: item, qb: qb) } label: {
+                        summary
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    summary
                 }
-                if !item.inventorySummary.isEmpty {
-                    Text(item.inventorySummary).font(.caption).foregroundStyle(.secondary)
+                if let onToggleSource {
+                    Button(action: onToggleSource) {
+                        Label(sourceExpanded ? "隐藏源文件名" : "源文件名",
+                              systemImage: sourceExpanded ? "chevron.up" : "doc.text")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.tint)
+                    if sourceExpanded {
+                        Text(item.sourceFileName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                    }
                 }
-                let bytes = item["size"].double > 0 ? item["size"].double : item.details["torrent"]["size"].double
-                if bytes > 0 { Text(sizeText(bytes)).font(.caption).foregroundStyle(.secondary) }
-                if qb {
-                    ProgressView(value: min(1, max(0, item["progress"].double))).tint(.teal)
-                    Text("\(Int(item["progress"].double * 100))%")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                if !item.failure.isEmpty { Label(item.failure, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).lineLimit(2) }
-                if item.labels["status"].text == "failed" { Label("站点标签获取失败", systemImage: "tag.slash").font(.caption).foregroundStyle(.orange) }
             }
-        }.padding(.vertical, 5)
+            .frame(minHeight: 96, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    @ViewBuilder private var summary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.title).font(.headline).lineLimit(2)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 5) { rowLabels }
+                VStack(alignment: .leading, spacing: 4) { rowLabels }
+            }
+            if !item.inventorySummary.isEmpty {
+                Text(item.inventorySummary)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(inventoryColor)
+                    .padding(.top, 1)
+            }
+            if qb {
+                ProgressView(value: min(1, max(0, item["progress"].double))).tint(.teal)
+                Text("\(Int(item["progress"].double * 100))%")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if !item.failure.isEmpty {
+                Label(item.failure, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.red).lineLimit(2)
+            }
+            if item.labels["status"].text == "failed" {
+                Label("站点标签获取失败", systemImage: "tag.slash")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
     @ViewBuilder private var rowLabels: some View {
         StatusBadge(state: qb ? item["recognition_state"].text : item.state)
-        if item.labels["mandarin"].flag { Text("国配").font(.caption).foregroundStyle(.red) }
-        if item.labels["effects"].flag { Text("特效").font(.caption).foregroundStyle(.teal) }
+        if !item["season"].text.isEmpty { InfoBadge(text: "S\(item["season"].text)", color: .purple) }
+        if !item.resolution.isEmpty { InfoBadge(text: item.resolution, color: .cyan) }
+        if !item.mediaCategory.isEmpty { InfoBadge(text: item.mediaCategory, color: .purple) }
+        if !item.customization.isEmpty { InfoBadge(text: item.customization, color: .teal) }
+        let bytes = item["size"].double > 0 ? item["size"].double : item.details["torrent"]["size"].double
+        if bytes > 0 { InfoBadge(text: sizeText(bytes), color: .secondary) }
+        if item.labels["mandarin"].flag { InfoBadge(text: "国配", color: .red) }
+        if item.labels["effects"].flag { InfoBadge(text: "特效", color: .teal) }
+    }
+
+    private var inventoryColor: Color {
+        switch item.inventoryTone {
+        case "ok": return .green
+        case "warning": return .orange
+        case "complete": return .green
+        default: return .red
+        }
     }
 }
 

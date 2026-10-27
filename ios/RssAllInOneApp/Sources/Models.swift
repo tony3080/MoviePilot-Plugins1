@@ -77,6 +77,11 @@ struct Record: Identifiable, Equatable, Sendable {
     }
     var state: String { value["state"].text }
     var source: String { [value["source_name"].text, value["name"].text].first { !$0.isEmpty } ?? "" }
+    var sourceFileName: String {
+        let raw = [value["source_name"].text, value["name"].text, value["source_path"].text,
+                   details["qb_source_path"].text].first { !$0.isEmpty } ?? ""
+        return URL(fileURLWithPath: raw).lastPathComponent.nonempty ?? raw
+    }
     var poster: String {
         let path = [value["poster"].text, details["media"]["poster_path"].text, details["media"]["poster"].text]
             .first { !$0.isEmpty } ?? ""
@@ -91,12 +96,57 @@ struct Record: Identifiable, Equatable, Sendable {
     var labels: JSONValue {
         details["site_labels"].object.isEmpty ? details["manual_labels"] : details["site_labels"]
     }
+    private var expectedFiles: [JSONValue] {
+        details["inventory_plan"]["expected_files"].array
+    }
+    var resolution: String {
+        for file in expectedFiles {
+            for token in file["recognition"]["resource_tokens"].array.map(\.text) {
+                if token.range(of: #"^\d{3,4}p$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+                    return token
+                }
+            }
+        }
+        return ""
+    }
+    var mediaCategory: String {
+        [value["media_category"].text, details["path_plan"]["category"].text, value["category"].text]
+            .first { !$0.isEmpty } ?? ""
+    }
+    var customization: String {
+        var values: [String] = []
+        for file in expectedFiles {
+            let value = file["recognition"]["customization"].text
+            if !value.isEmpty && !values.contains(value) { values.append(value) }
+        }
+        return values.joined(separator: "@")
+    }
     var inventorySummary: String {
         let inventory = details["inventory"]
-        let total = inventory["total_files"].int > 0 ? inventory["total_files"].int : inventory["total"].int
-        let existing = inventory["exists_count"] != .null ? inventory["exists_count"].int : inventory["exists"].int
-        if total > 0 { return "库存 \(existing)/\(total)" }
-        return statusText(value["inventory_state"].text)
+        let folderStatus = [inventory["folder_status"].text, inventory["folder"]["status"].text,
+                            value["inventory_state"].text].first { !$0.isEmpty } ?? ""
+        let total = inventory["total_files"].int > 0 ? inventory["total_files"].int :
+            (inventory["total"].int > 0 ? inventory["total"].int : expectedFiles.count)
+        let existing = inventory["exists_count"].int > 0 ? inventory["exists_count"].int : inventory["exists"].int
+        if ["ambiguous", "conflict"].contains(folderStatus) { return "目录冲突" }
+        if ["exists", "partial"].contains(folderStatus) || ["exists", "partial"].contains(value["inventory_state"].text) {
+            return "目录已存在（\(existing)/\(total)）"
+        }
+        if total > 0 { return "目录未建立（0/\(total)）" }
+        return statusText(folderStatus)
+    }
+    var inventoryTone: String {
+        let inventory = details["inventory"]
+        let state = [inventory["folder_status"].text, inventory["folder"]["status"].text,
+                     value["inventory_state"].text].first { !$0.isEmpty } ?? ""
+        if ["ambiguous", "conflict"].contains(state) { return "warning" }
+        if ["exists", "partial"].contains(state) {
+            let total = inventory["total_files"].int > 0 ? inventory["total_files"].int :
+                (inventory["total"].int > 0 ? inventory["total"].int : expectedFiles.count)
+            let existing = inventory["exists_count"].int > 0 ? inventory["exists_count"].int : inventory["exists"].int
+            return total > 0 && existing >= total ? "complete" : "missing"
+        }
+        return "missing"
     }
     var sourceURL: URL? {
         for candidate in [value["comment_url"], value["source_url_masked"], details["rss_source"]["detail_url_masked"],
