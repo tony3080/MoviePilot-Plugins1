@@ -23,6 +23,27 @@ struct ClientTests {
         #expect(a.identityPayload["info_hash"].text == "hash")
     }
 
+    @Test func downloadersWithoutNumericIDsHaveDistinctIdentities() {
+        let a = Record(value: .object(["name": .string("SSD")]))
+        let b = Record(value: .object(["name": .string("UP")]))
+        #expect(a.id != b.id)
+    }
+
+    @Test func numberIDsKeepAllDigitsAndDoNotUseLocaleGrouping() {
+        #expect(JSONValue.number(123456789).text == "123456789")
+        #expect(JSONValue.number(1.25).text == "1.25")
+    }
+
+    @Test func legacySettingsKeepUnknownFieldsAndEditableRouteStructure() throws {
+        let input = Data(#"{"future_flag":true,"cd2_token":"secret","source_routes":"[{\"name\":\"A\",\"prefix\":\"/A\",\"link_roots\":{\"default\":\"/link\"}}]"}"#.utf8)
+        let original = try JSONDecoder().decode(JSONValue.self, from: input)
+        let normalized = PluginDefaults.normalized(original)
+        #expect(normalized["future_flag"].flag)
+        #expect(normalized["cd2_token"].text == "secret")
+        #expect(normalized["source_routes"].array.first?["enabled"].flag == true)
+        #expect(normalized["source_routes"].array.first?["link_roots"]["default"].text == "/link")
+    }
+
     @Test(arguments: ["http://nas:3033", "http://nas:3033/api/v1", "http://nas:3033/"])
     func buildsPluginURL(_ base: String) throws {
         let client = APIClient(config: ServerConfig(baseURL: base))
@@ -76,6 +97,55 @@ struct ClientTests {
         let client = APIClient(config: ServerConfig(baseURL: "http://nas"), session: testSession())
         do { _ = try await client.get("overview"); Issue.record("Expected unauthorized") }
         catch APIError.unauthorized {} catch { Issue.record("Unexpected error: \(error)") }
+    }
+
+    @Test func loginEncodesLiteralPlusAndIncludesOTP() async throws {
+        MockProtocol.handler = { request in
+            #expect(request.url?.path == "/api/v1/login/access-token")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+            let body = Self.body(request)
+            #expect(body.contains("password=p%2Ba"))
+            #expect(body.contains("otp_password=123456"))
+            return (200, #"{"access_token":"new-token"}"#)
+        }
+        let client = APIClient(config: ServerConfig(baseURL: "http://nas"), session: testSession())
+        #expect(try await client.login(username: "me", password: "p+a", otp: "123456") == "new-token")
+    }
+
+    @Test func fullTaskSnapshotLoadsEveryPage() async throws {
+        MockProtocol.handler = { request in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if items.first(where: { $0.name == "offset" })?.value == "0" {
+                return (200, #"{"items":[{"id":"a"}],"total":2}"#)
+            }
+            return (200, #"{"items":[{"id":"b"}],"total":2}"#)
+        }
+        let client = APIClient(config: ServerConfig(baseURL: "http://nas"), session: testSession())
+        #expect(try await client.allTasks().map { $0["id"].text } == ["a", "b"])
+    }
+
+    @Test func partialFailuresKeepServerSummaryAndIndividualReason() async throws {
+        MockProtocol.handler = { _ in
+            (200, #"{"success":false,"partial":true,"message":"部分完成","results":[{"success":true},{"success":false,"message":"被保护"}]}"#)
+        }
+        let client = APIClient(config: ServerConfig(baseURL: "http://nas"), session: testSession())
+        do { _ = try await client.send("media/action"); Issue.record("Expected partial failure") }
+        catch { #expect(error.localizedDescription == "部分完成\n被保护") }
+    }
+
+    private static func body(_ request: URLRequest) -> String {
+        if let data = request.httpBody { return String(decoding: data, as: UTF8.self) }
+        guard let stream = request.httpBodyStream else { return "" }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            if count <= 0 { break }
+            data.append(contentsOf: bytes.prefix(count))
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func testSession() -> URLSession {

@@ -4,6 +4,7 @@ struct PluginSettingsView: View {
     @EnvironmentObject private var store: AppStore
     @State private var draft: JSONValue = .null
     @State private var original: JSONValue = .null
+    @State private var baseline: JSONValue = .null
     @State private var loaded = false
     @State private var confirming = false
     var body: some View {
@@ -23,7 +24,7 @@ struct PluginSettingsView: View {
             } else { ProgressView().frame(maxWidth: .infinity) }
         }
         .navigationTitle("插件设置")
-        .toolbar { Button("保存") { confirming = true }.disabled(!loaded || store.busy || draft == original) }
+        .toolbar { Button("保存") { confirming = true }.disabled(!loaded || store.busy || draft == baseline) }
         .confirmationDialog("保存配置并重新初始化插件？", isPresented: $confirming, titleVisibility: .visible) {
             Button("保存") { Task { await save() } }
         } message: { Text("当前插件任务可能会中断，请先确认没有正在执行的入库操作。") }
@@ -33,15 +34,62 @@ struct PluginSettingsView: View {
     private func load() async {
         do {
             original = try await store.client.get("plugin/RssAllInOne", plugin: false)
-            draft = original; loaded = true
+            draft = PluginDefaults.normalized(original); baseline = draft; loaded = true
         } catch { store.report(error) }
     }
     private func save() async {
         do {
             let latest = try await store.client.get("plugin/RssAllInOne", plugin: false)
             guard latest == original else { throw APIError.server("服务器配置已发生变化，请返回设置页重新读取后再保存") }
-            if await store.perform("plugin/RssAllInOne", body: draft, method: "PUT", plugin: false) != nil { original = draft }
+            if await store.perform("plugin/RssAllInOne", body: draft, method: "PUT", plugin: false) != nil {
+                original = draft; baseline = draft
+            }
         } catch { store.report(error) }
+    }
+}
+
+enum PluginDefaults {
+    static func normalized(_ original: JSONValue) -> JSONValue {
+        var result = value
+        for (key, field) in original.object { result[key] = field }
+        if case .string(let text) = result["source_routes"],
+           let parsed = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)),
+           case .array = parsed { result["source_routes"] = parsed }
+        if case .array(let routes) = result["source_routes"] {
+            result["source_routes"] = .array(routes.map { route in
+                var copy = route
+                if copy["enabled"] == .null { copy["enabled"] = .bool(true) }
+                var roots: JSONValue = .object(["movie": .string(""), "series": .string(""), "default": .string("")])
+                for (key, field) in copy["link_roots"].object { roots[key] = field }
+                copy["link_roots"] = roots
+                return copy
+            })
+        }
+        return result
+    }
+    private static var value: JSONValue {
+        var config: JSONValue = .object([
+            "enabled": .bool(false), "rss_enabled": .bool(true),
+            "inventory_root": .string("/SSD/云盘/strm/影视库"),
+            "pending_import_cron": .string("0 1 * * *"),
+            "cd2_discovery_timeout": .number(180), "cd2_card_timeout": .number(7200),
+            "cd2_poll_interval": .number(10), "cd2_transfer_grace": .number(20),
+            "cd2_risk_cooldown": .number(1800), "cd2_risk_retry_limit": .number(3),
+            "scan_callback_timeout": .number(7200),
+            "source_routes": .array([
+                .object(["name": .string("UP"), "prefix": .string("/MP"), "enabled": .bool(true),
+                         "link_roots": .object(["movie": .string("/MP/电影UP"), "series": .string("/MP/剧集UP")])]),
+                .object(["name": .string("SSD"), "prefix": .string("/SSD"), "enabled": .bool(true),
+                         "link_roots": .object(["default": .string("/SSD/云盘/l")])])
+            ])
+        ])
+        for key in ["cd2_grpc_addr", "cd2_token", "cd2_dest_root", "catchup_base_url", "catchup_page_id",
+                    "catchup_token", "scan_base_url", "scan_username", "scan_password", "scan_setting_name",
+                    "scan_target_name", "emby_scan_base_url", "emby_scan_api_key", "scan_callback_secret",
+                    "scan_callback_server_name", "scan_callback_server_id", "scan_callback_task_id", "scan_callback_task_name"] {
+            config[key] = .string("")
+        }
+        return config
     }
 }
 

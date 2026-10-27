@@ -35,20 +35,29 @@ struct RecordRow: View {
                 Text(item.title).font(.headline).lineLimit(2)
                 Text([item["category"].text, item["season"].text.isEmpty ? "" : "S\(item["season"].text)"]
                     .filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    StatusBadge(state: qb ? item["recognition_state"].text : item.state)
-                    if item.labels["mandarin"].flag { Text("国配").font(.caption).foregroundStyle(.red) }
-                    if item.labels["effects"].flag { Text("特效").font(.caption).foregroundStyle(.teal) }
+                ViewThatFits(in: .horizontal) {
+                    HStack { rowLabels }
+                    VStack(alignment: .leading, spacing: 4) { rowLabels }
                 }
+                if !item.inventorySummary.isEmpty {
+                    Text(item.inventorySummary).font(.caption).foregroundStyle(.secondary)
+                }
+                let bytes = item["size"].double > 0 ? item["size"].double : item.details["torrent"]["size"].double
+                if bytes > 0 { Text(sizeText(bytes)).font(.caption).foregroundStyle(.secondary) }
                 if qb {
                     ProgressView(value: min(1, max(0, item["progress"].double))).tint(.teal)
-                    Text("\(Int(item["progress"].double * 100))% · \(statusText(item["inventory_state"].text))")
+                    Text("\(Int(item["progress"].double * 100))%")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if !item.failure.isEmpty { Label(item.failure, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).lineLimit(2) }
                 if item.labels["status"].text == "failed" { Label("站点标签获取失败", systemImage: "tag.slash").font(.caption).foregroundStyle(.orange) }
             }
         }.padding(.vertical, 5)
+    }
+    @ViewBuilder private var rowLabels: some View {
+        StatusBadge(state: qb ? item["recognition_state"].text : item.state)
+        if item.labels["mandarin"].flag { Text("国配").font(.caption).foregroundStyle(.red) }
+        if item.labels["effects"].flag { Text("特效").font(.caption).foregroundStyle(.teal) }
     }
 }
 

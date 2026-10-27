@@ -123,9 +123,10 @@ struct ArrayFields: View {
                 var items = value.array
                 let route: JSONValue = .object([
                     "name": .string(""), "prefix": .string(""),
+                    "enabled": .bool(true),
                     "link_roots": .object(["movie": .string(""), "series": .string(""), "default": .string("")])
                 ])
-                items.append(first.map(blankValue) ?? (key == "source_routes" ? route : .string("")))
+                items.append(key == "source_routes" ? route : (first.map(blankValue) ?? .string("")))
                 value = .array(items)
             }
         }

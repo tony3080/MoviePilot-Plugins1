@@ -78,7 +78,8 @@ struct Record: Identifiable, Equatable, Sendable {
     var state: String { value["state"].text }
     var source: String { [value["source_name"].text, value["name"].text].first { !$0.isEmpty } ?? "" }
     var poster: String {
-        let path = [value["poster"].text, details["media"]["poster_path"].text].first { !$0.isEmpty } ?? ""
+        let path = [value["poster"].text, details["media"]["poster_path"].text, details["media"]["poster"].text]
+            .first { !$0.isEmpty } ?? ""
         return path.hasPrefix("/") ? "https://image.tmdb.org/t/p/w342" + path : path
     }
     var failure: String {
@@ -90,6 +91,13 @@ struct Record: Identifiable, Equatable, Sendable {
     var labels: JSONValue {
         details["site_labels"].object.isEmpty ? details["manual_labels"] : details["site_labels"]
     }
+    var inventorySummary: String {
+        let inventory = details["inventory"]
+        let total = inventory["total_files"].int > 0 ? inventory["total_files"].int : inventory["total"].int
+        let existing = inventory["exists_count"] != .null ? inventory["exists_count"].int : inventory["exists"].int
+        if total > 0 { return "库存 \(existing)/\(total)" }
+        return statusText(value["inventory_state"].text)
+    }
     var sourceURL: URL? {
         for candidate in [value["comment_url"], value["source_url_masked"], details["rss_source"]["detail_url_masked"],
                           details["comment_url"], details["source_url"]] {
@@ -98,8 +106,9 @@ struct Record: Identifiable, Equatable, Sendable {
         return nil
     }
     var tmdbURL: URL? {
-        let tmdb = value["tmdb_id"].int
-        return tmdb > 0 ? URL(string: "https://www.themoviedb.org/\(value["media_type"].text == "movie" ? "movie" : "tv")/\(tmdb)") : nil
+        let tmdb = value["tmdb_id"].int > 0 ? value["tmdb_id"].int : details["manual_override"]["tmdb_id"].int
+        let type = value["media_type"].text.nonempty ?? details["manual_override"]["media_type"].text
+        return tmdb > 0 ? URL(string: "https://www.themoviedb.org/\(type == "movie" ? "movie" : "tv")/\(tmdb)") : nil
     }
     var identityPayload: JSONValue {
         .object(["downloader_id": value["downloader_id"], "info_hash": value["info_hash"]])
@@ -128,6 +137,7 @@ func statusText(_ state: String) -> String {
         "queued": "排队中", "completed": "已完成", "succeeded": "已完成", "failed": "失败",
         "recognized": "已识别", "unrecognized": "未识别", "ready": "可处理",
         "filtered": "已过滤", "duplicate": "重复", "invalid": "无效",
+        "added": "已添加", "skipped": "已跳过", "content_duplicate": "内容重复",
         "cancelled": "已停止", "error": "异常", "waiting_library": "等待扫库"
     ][state] ?? state
 }
