@@ -11,8 +11,16 @@ final class AppStore: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var generation = 0
     var client: APIClient { APIClient(config: config) }
+    private var uiTesting: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("--ui-testing")
+        #else
+        return false
+        #endif
+    }
 
     init() {
+        if uiTesting { return }
         if let saved = UserDefaults.standard.data(forKey: "rssallinone.server"),
            var value = try? JSONDecoder().decode(ServerConfig.self, from: saved) {
             let migrated = value.token
@@ -39,10 +47,12 @@ final class AppStore: ObservableObject {
             }
             guard !next.token.isEmpty else { throw APIError.server("请登录 MP，或填写有效的 Bearer 访问令牌") }
             let snapshot = try await APIClient(config: next).get("overview")
-            try Credentials.save(next.token)
-            var saved = next
-            saved.token = ""
-            UserDefaults.standard.set(try JSONEncoder().encode(saved), forKey: "rssallinone.server")
+            if !uiTesting {
+                try Credentials.save(next.token)
+                var saved = next
+                saved.token = ""
+                UserDefaults.standard.set(try JSONEncoder().encode(saved), forKey: "rssallinone.server")
+            }
             config = next
             overview = snapshot
             generation += 1
@@ -76,6 +86,7 @@ final class AppStore: ObservableObject {
             await refreshOverview()
             return result
         } catch {
+            generation += 1
             report(error)
             return nil
         }
@@ -89,8 +100,10 @@ final class AppStore: ObservableObject {
     }
 
     func disconnect() {
-        try? Credentials.save("")
-        UserDefaults.standard.removeObject(forKey: "rssallinone.server")
+        if !uiTesting {
+            try? Credentials.save("")
+            UserDefaults.standard.removeObject(forKey: "rssallinone.server")
+        }
         config = ServerConfig()
         overview = .object([:])
         connected = false

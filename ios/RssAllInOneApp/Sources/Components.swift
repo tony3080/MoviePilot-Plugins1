@@ -4,7 +4,7 @@ struct StatusBadge: View {
     let state: String
     private var color: Color {
         if ["failed", "error", "unidentified", "rolled_back"].contains(state) { return .red }
-        if ["completed", "imported", "exists", "existing"].contains(state) { return .green }
+        if ["completed", "succeeded", "imported", "exists", "existing"].contains(state) { return .green }
         if ["running", "pending", "importing", "queued"].contains(state) { return .orange }
         return .blue
     }
@@ -113,11 +113,12 @@ struct ServerDocumentView: View {
 struct OperationNotice: View {
     @EnvironmentObject private var store: AppStore
     var body: some View {
-        if let message = store.notice {
+        if let message = store.error ?? store.notice {
             HStack(alignment: .top) {
-                Text(message).font(.footnote)
+                Label(message, systemImage: store.error == nil ? "checkmark.circle" : "exclamationmark.circle")
+                    .font(.footnote).foregroundStyle(store.error == nil ? Color.primary : .red)
                 Spacer()
-                Button { store.notice = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("关闭提示")
+                Button { store.error = nil; store.notice = nil } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("关闭提示")
             }.padding(12).background(.regularMaterial)
         }
     }

@@ -37,6 +37,19 @@ struct APIClient: Sendable {
         try await request(path, method: method, body: JSONEncoder().encode(body), plugin: plugin)
     }
 
+    func allTasks() async throws -> [JSONValue] {
+        var values: [JSONValue] = []
+        while true {
+            let reply = try await get("rss/tasks", query: [
+                .init(name: "offset", value: String(values.count)), .init(name: "limit", value: "200")
+            ])
+            try Task.checkCancellation()
+            let batch = reply["items"].array
+            values += batch
+            if batch.isEmpty || values.count >= reply["total"].int { return values }
+        }
+    }
+
     func login(username: String, password: String, otp: String) async throws -> String {
         var form = URLComponents()
         form.queryItems = [URLQueryItem(name: "username", value: username), URLQueryItem(name: "password", value: password)]

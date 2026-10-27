@@ -15,15 +15,18 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+    info:
+      path: GeneratedInfo.plist
+      properties:
+        CFBundleDisplayName: RSS一条龙
+        NSLocalNetworkUsageDescription: 用于连接局域网中的 MoviePilot 服务
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+        UILaunchScreen: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rssallinone.app
-        INFOPLIST_KEY_CFBundleDisplayName: RSS一条龙
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: ""
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 用于连接局域网中的 MoviePilot 服务
-        INFOPLIST_KEY_NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
-          NSAllowsArbitraryLoads: true
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
         INFOPLIST_KEY_UILaunchScreen_Generation: true
@@ -39,12 +42,25 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
+  RssAllInOneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+        excludes: ["*.py"]
+    dependencies:
+      - target: RssAllInOneApp
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
 schemes:
   RssAllInOneApp:
     build:
       targets:
         RssAllInOneApp: all
         RssAllInOneTests: [test]
+        RssAllInOneUITests: [test]
     test:
       targets:
         - RssAllInOneTests
+        - RssAllInOneUITests

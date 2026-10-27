@@ -30,12 +30,19 @@ jobs:
       - name: Test on Simulator
         working-directory: ios/RssAllInOneApp
         run: |
+          python3 UITests/mock_server.py > mock-server.log 2>&1 &
+          MOCK_PID=$!
+          trap 'kill "$MOCK_PID" 2>/dev/null || true' EXIT
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["name"].startswith("iPhone")))')
+          xcrun simctl boot "$DEVICE_ID" || true
+          xcrun simctl bootstatus "$DEVICE_ID" -b
           xcodebuild -project RssAllInOneApp.xcodeproj \
             -scheme RssAllInOneApp -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -derivedDataPath build -resultBundlePath build/TestResults.xcresult \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO test
+          xcrun xcresulttool export attachments --path build/TestResults.xcresult --output-path build/screenshots
 
       - name: Build unsigned iPhone app
         working-directory: ios/RssAllInOneApp
@@ -66,4 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-test-results
-          path: ios/RssAllInOneApp/build/TestResults.xcresult
+          path: |
+            ios/RssAllInOneApp/build/TestResults.xcresult
+            ios/RssAllInOneApp/build/screenshots
+            ios/RssAllInOneApp/mock-server.log

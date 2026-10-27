@@ -16,9 +16,7 @@ struct ContentView: View {
             } else { ConnectionView() }
         }
         .task { await store.resume() }
-        .alert("操作未完成", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
-            Button("好") { store.error = nil }
-        } message: { Text(store.error ?? "") }
+        .safeAreaInset(edge: .bottom) { OperationNotice() }
     }
 }
 
@@ -45,6 +43,7 @@ struct ConnectionView: View {
                     Toggle("使用访问令牌", isOn: $useToken)
                     if useToken {
                         SecureField("Bearer 访问令牌", text: $draft.token).textContentType(.password)
+                            .accessibilityIdentifier("bearerToken")
                     } else {
                         TextField("MP 用户名", text: $username).textContentType(.username)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -63,6 +62,7 @@ struct ConnectionView: View {
                 }
             }
             .navigationTitle("连接服务器")
+            .accessibilityIdentifier("connectionForm")
             .onAppear { draft = store.config; useToken = !draft.token.isEmpty }
         }
     }

@@ -1,0 +1,8 @@
+*.xcodeproj/
+GeneratedInfo.plist
+build/
+device-build/
+package/
+*.ipa
+mock-server.log
+__pycache__/

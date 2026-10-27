@@ -42,7 +42,7 @@ enum JSONValue: Codable, Equatable, Sendable {
     var text: String {
         switch self {
         case .string(let value): return value
-        case .number(let value): return value.formatted(.number.grouping(.never))
+        case .number(let value): return value == value.rounded() ? String(format: "%.0f", value) : String(value)
         case .bool(let value): return value ? "开启" : "关闭"
         default: return ""
         }
@@ -63,8 +63,11 @@ enum JSONValue: Codable, Equatable, Sendable {
 struct Record: Identifiable, Equatable, Sendable {
     var value: JSONValue
     var id: String {
+        if !value["row_key"].text.isEmpty { return value["row_key"].text }
         if !value["id"].text.isEmpty { return value["id"].text }
-        return value["downloader_id"].text + ":" + value["info_hash"].text
+        if !value["info_hash"].text.isEmpty { return value["downloader_id"].text + ":" + value["info_hash"].text }
+        return [value["name"].text, value["domain"].text, value["path"].text, value["source_key"].text]
+            .joined(separator: "|")
     }
     subscript(_ key: String) -> JSONValue { value[key] }
     var details: JSONValue { value["details"] }
@@ -122,7 +125,9 @@ func statusText(_ state: String) -> String {
         "pending_import": "待入库", "importing": "入库中", "imported": "已入库",
         "existing": "已存在", "exists": "已存在", "rolled_back": "已回退",
         "missing": "缺失", "partial": "不完整", "running": "运行中",
-        "queued": "排队中", "completed": "已完成", "failed": "失败",
+        "queued": "排队中", "completed": "已完成", "succeeded": "已完成", "failed": "失败",
+        "recognized": "已识别", "unrecognized": "未识别", "ready": "可处理",
+        "filtered": "已过滤", "duplicate": "重复", "invalid": "无效",
         "cancelled": "已停止", "error": "异常", "waiting_library": "等待扫库"
     ][state] ?? state
 }

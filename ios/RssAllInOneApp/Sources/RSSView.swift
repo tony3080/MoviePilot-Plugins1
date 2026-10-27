@@ -7,6 +7,8 @@ struct RSSView: View {
     @State private var loading = false
     @State private var snapshot: [JSONValue] = []
     @State private var deleteID: String?
+    @State private var testResult: JSONValue = .null
+    @State private var showTestResult = false
 
     var body: some View {
         NavigationStack {
@@ -31,10 +33,14 @@ struct RSSView: View {
                                 Spacer()
                                 Image(systemName: task["enabled"].flag ? "checkmark.circle.fill" : "pause.circle").foregroundStyle(.secondary)
                             }
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plain).accessibilityIdentifier("rss-task-\(task.id)")
                         Menu {
                             Button("测试配置", systemImage: "checkmark.magnifyingglass") {
-                                Task { await store.perform("rss/test", body: .object(["task": task.value])) }
+                                Task {
+                                    if let reply = await store.perform("rss/test", body: .object(["task": task.value])) {
+                                        testResult = reply["result"]; showTestResult = true
+                                    }
+                                }
                             }
                             Button(task["config"]["task_type"].text == "manual" ? "自动处理剩余项目" : "立即执行", systemImage: "play") {
                                 run(task, mode: "all")
@@ -47,6 +53,7 @@ struct RSSView: View {
                             }
                             Button("删除任务配置", systemImage: "trash", role: .destructive) { deleteID = task.id }
                         } label: { Label("执行操作", systemImage: "ellipsis.circle") }
+                        .accessibilityIdentifier("rss-actions-\(task.id)")
                     }
                 }
                 if loading { ProgressView().frame(maxWidth: .infinity) }
@@ -61,6 +68,7 @@ struct RSSView: View {
             .sheet(item: $editing) { item in
                 TaskEditorView(original: item.value, snapshot: snapshot) { await load() }
             }
+            .sheet(isPresented: $showTestResult) { RSSPreviewView(result: testResult) }
             .confirmationDialog("删除这条任务配置？", isPresented: Binding(get: { deleteID != nil }, set: { if !$0 { deleteID = nil } }), titleVisibility: .visible) {
                 Button("删除任务配置", role: .destructive) {
                     let target = deleteID
@@ -70,7 +78,6 @@ struct RSSView: View {
                     }
                 }
             } message: { Text("保留已有媒体卡片和文件。") }
-            .safeAreaInset(edge: .bottom) { OperationNotice() }
         }
     }
 
@@ -80,20 +87,14 @@ struct RSSView: View {
     private func load() async {
         loading = true; defer { loading = false }
         do {
-            var values: [JSONValue] = []
-            while true {
-                let result = try await store.client.get("rss/tasks", query: [.init(name: "offset", value: String(values.count)), .init(name: "limit", value: "200")])
-                let batch = result["items"].array
-                values += batch
-                if batch.isEmpty || values.count >= result["total"].int { break }
-            }
+            let values = try await store.client.allTasks()
             snapshot = values; tasks = values.map { Record(value: $0) }
         } catch { store.report(error) }
     }
     private func saveTasks(_ values: [JSONValue]) async {
         do {
-            let current = try await store.client.get("rss/tasks", query: [.init(name: "limit", value: "200")])
-            guard current["items"].array == snapshot else { throw APIError.server("服务器任务已发生变化，请刷新后再删除") }
+            let current = try await store.client.allTasks()
+            guard current == snapshot else { throw APIError.server("服务器任务已发生变化，请刷新后再删除") }
             await store.perform("rss/tasks", body: .object(["items": .array(values)]))
             await load()
         } catch { store.report(error) }
@@ -109,6 +110,8 @@ struct TaskEditorView: View {
     @State private var draft: JSONValue = .object([:])
     @State private var downloaders: [Record] = []
     @State private var sites: [Record] = []
+    @State private var testResult: JSONValue = .null
+    @State private var showTestResult = false
 
     var body: some View {
         NavigationStack {
@@ -135,7 +138,11 @@ struct TaskEditorView: View {
                 }
                 Section {
                     Button("测试当前配置", systemImage: "checkmark.magnifyingglass") {
-                        Task { await store.perform("rss/test", body: .object(["task": draft])) }
+                        Task {
+                            if let reply = await store.perform("rss/test", body: .object(["task": draft])) {
+                                testResult = reply["result"]; showTestResult = true
+                            }
+                        }
                     }
                 }
             }
@@ -145,6 +152,8 @@ struct TaskEditorView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } }.disabled(store.busy || draft["name"].text.isEmpty) }
             }
             .interactiveDismissDisabled(store.busy)
+            .safeAreaInset(edge: .bottom) { OperationNotice() }
+            .sheet(isPresented: $showTestResult) { RSSPreviewView(result: testResult) }
             .task {
                 draft = original
                 draft["config"] = .object(TaskDefaults.config.object.merging(original["config"].object) { _, new in new })
@@ -166,12 +175,24 @@ struct TaskEditorView: View {
     }
     private func save() async {
         do {
-            let current = try await store.client.get("rss/tasks", query: [.init(name: "limit", value: "200")])
-            guard current["items"].array == snapshot else { throw APIError.server("服务器任务已发生变化，请关闭编辑页并刷新后重试") }
+            let current = try await store.client.allTasks()
+            guard current == snapshot else { throw APIError.server("服务器任务已发生变化，请关闭编辑页并刷新后重试") }
             var values = snapshot
             if let index = values.firstIndex(where: { $0["id"] == original["id"] }) { values[index] = draft }
             else { draft["position"] = .number(Double(values.count)); values.append(draft) }
             if await store.perform("rss/tasks", body: .object(["items": .array(values)])) != nil { await saved(); dismiss() }
         } catch { store.report(error) }
+    }
+}
+
+struct RSSPreviewView: View {
+    @Environment(\.dismiss) private var dismiss
+    let result: JSONValue
+    var body: some View {
+        NavigationStack {
+            List { JSONDocument(value: result) }
+                .navigationTitle("RSS 测试结果")
+                .toolbar { Button("完成") { dismiss() } }
+        }
     }
 }

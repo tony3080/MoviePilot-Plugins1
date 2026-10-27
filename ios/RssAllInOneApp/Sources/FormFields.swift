@@ -64,7 +64,6 @@ struct ValueFields: View {
 struct ValueField: View {
     let key: String
     @Binding var value: JSONValue
-    @State private var invalidNumber = false
     private var secret: Bool { ["token", "password", "secret", "api_key"].contains { key.contains($0) } }
 
     var body: some View {
@@ -80,7 +79,7 @@ struct ValueField: View {
             NavigationLink(fieldTitle(key)) { Form { ValueFields(value: $value) }.navigationTitle(fieldTitle(key)) }
         case .array:
             NavigationLink {
-                ArrayFields(value: $value).navigationTitle(fieldTitle(key))
+                ArrayFields(key: key, value: $value).navigationTitle(fieldTitle(key))
             } label: { LabeledContent(fieldTitle(key), value: "\(value.array.count)") }
         case .null:
             TextField(fieldTitle(key), text: Binding(get: { value.text }, set: { value = .string($0) }))
@@ -100,6 +99,7 @@ struct ValueField: View {
 }
 
 struct ArrayFields: View {
+    let key: String
     @Binding var value: JSONValue
     var body: some View {
         Form {
@@ -121,7 +121,11 @@ struct ArrayFields: View {
             Button("添加", systemImage: "plus") {
                 let first = value.array.first
                 var items = value.array
-                items.append(first.map(blankValue) ?? .string(""))
+                let route: JSONValue = .object([
+                    "name": .string(""), "prefix": .string(""),
+                    "link_roots": .object(["movie": .string(""), "series": .string(""), "default": .string("")])
+                ])
+                items.append(first.map(blankValue) ?? (key == "source_routes" ? route : .string("")))
                 value = .array(items)
             }
         }

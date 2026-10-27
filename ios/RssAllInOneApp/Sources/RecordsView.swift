@@ -75,12 +75,12 @@ struct RecordsView: View {
                         }
                         Button("刷新列表", systemImage: "arrow.clockwise") { Task { await load() } }
                     } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityIdentifier("recordActions")
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     if editing && !selected.isEmpty { selectionBar }
-                    OperationNotice()
                 }
             }
             .sheet(isPresented: $showFilters) { filters }
@@ -183,8 +183,10 @@ struct RecordsView: View {
     }
     private func loadOptions() async {
         do {
-            let result = try await store.client.get(qb ? "qb/downloaders" : "rss/tasks", query: [.init(name: "limit", value: "200")])
-            options = result["items"].array.map { Record(value: $0) }
+            let values: [JSONValue]
+            if qb { values = try await store.client.get("qb/downloaders")["items"].array }
+            else { values = try await store.client.allTasks() }
+            options = values.map { Record(value: $0) }
         } catch { store.report(error) }
     }
     private func runAction() async {
@@ -298,6 +300,7 @@ struct IdentifyView: View {
                 }
             }
             .interactiveDismissDisabled(store.busy)
+            .safeAreaInset(edge: .bottom) { OperationNotice() }
             .task {
                 type = item["media_type"].text == "movie" ? "movie" : "tv"
                 tmdb = item["tmdb_id"].text

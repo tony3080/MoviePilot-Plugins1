@@ -65,7 +65,6 @@ struct FilesView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) { OperationNotice() }
         .disabled(store.busy)
     }
     private func load() async {
@@ -181,7 +180,7 @@ struct ImportStatusView: View {
             }
         }
         .refreshable { await load() }
-        .task(id: scenePhase) {
+        .task(id: "\(scenePhase)-\(store.generation)") {
             guard scenePhase == .active else { return }
             await load()
             while !Task.isCancelled && status["running"].flag {
@@ -211,7 +210,10 @@ struct HistoryView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(item.title).font(.headline)
-                        HStack { StatusBadge(state: item.state); Text(item["created_at"].text).font(.caption).foregroundStyle(.secondary) }
+                        HStack {
+                            StatusBadge(state: item["status"].text.nonempty ?? item.state)
+                            Text(item["updated_at"].text).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }

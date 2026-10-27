@@ -70,7 +70,7 @@ struct MaintenanceView: View {
         .navigationTitle("数据维护")
         .task {
             do {
-                tasks = try await store.client.get("rss/tasks", query: [.init(name: "limit", value: "200")])["items"].array
+                tasks = try await store.client.allTasks()
                     .filter { $0["config"]["task_type"].text == "manual" }.map { Record(value: $0) }
             } catch { store.report(error) }
         }
