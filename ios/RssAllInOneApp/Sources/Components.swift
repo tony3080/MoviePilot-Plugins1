@@ -88,7 +88,7 @@ struct Poster: View {
 struct RecordRow: View {
     let item: Record
     let qb: Bool
-    var interactive = false
+    var onShowDetails: (() -> Void)? = nil
     var selected = false
     var onSelect: (() -> Void)? = nil
     @ScaledMetric(relativeTo: .body) private var scaledPosterWidth = 112
@@ -106,11 +106,13 @@ struct RecordRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("source-\(item.id)")
                     .allowsHitTesting(false)
-                if interactive {
-                    NavigationLink { RecordDetailView(item: item, qb: qb) } label: {
+                if let onShowDetails {
+                    Button(action: onShowDetails) {
                         Image(systemName: "info.circle").frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
                     .accessibilityLabel("详情：\(item.title)")
                     .accessibilityIdentifier("detail-\(item.id)")
                 }

@@ -7,16 +7,27 @@ struct ContentView: View {
         Group {
             if store.connected {
                 TabView {
-                    RecordsView(qb: false).tabItem { Label("入库", systemImage: "archivebox") }
-                    RecordsView(qb: true).tabItem { Label("qB", systemImage: "arrow.down.circle") }
-                    RSSView().tabItem { Label("RSS", systemImage: "dot.radiowaves.left.and.right") }
-                    NavigationStack { FilesView(path: "/") }.tabItem { Label("文件", systemImage: "folder") }
-                    MoreView().tabItem { Label("更多", systemImage: "ellipsis.circle") }
+                    RecordsView(qb: false)
+                        .safeAreaInset(edge: .bottom) { OperationNotice() }
+                        .tabItem { Label("入库", systemImage: "archivebox") }
+                    RecordsView(qb: true)
+                        .safeAreaInset(edge: .bottom) { OperationNotice() }
+                        .tabItem { Label("qB", systemImage: "arrow.down.circle") }
+                    RSSView()
+                        .safeAreaInset(edge: .bottom) { OperationNotice() }
+                        .tabItem { Label("RSS", systemImage: "dot.radiowaves.left.and.right") }
+                    NavigationStack { FilesView(path: "/") }
+                        .safeAreaInset(edge: .bottom) { OperationNotice() }
+                        .tabItem { Label("文件", systemImage: "folder") }
+                    MoreView()
+                        .safeAreaInset(edge: .bottom) { OperationNotice() }
+                        .tabItem { Label("更多", systemImage: "ellipsis.circle") }
                 }
-            } else { ConnectionView() }
+            } else {
+                ConnectionView().safeAreaInset(edge: .bottom) { OperationNotice() }
+            }
         }
         .task { await store.resume() }
-        .safeAreaInset(edge: .bottom) { OperationNotice() }
     }
 }
 

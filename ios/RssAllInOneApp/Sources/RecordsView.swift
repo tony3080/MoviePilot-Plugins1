@@ -14,6 +14,7 @@ struct RecordsView: View {
     @State private var action = ""
     @State private var confirming = false
     @State private var showFilters = false
+    @State private var detail: Record?
 
     init(qb: Bool) {
         self.qb = qb
@@ -42,7 +43,7 @@ struct RecordsView: View {
                 Section {
                     ForEach(visible) { item in
                         RecordRow(
-                            item: item, qb: qb, interactive: true,
+                            item: item, qb: qb, onShowDetails: { detail = item },
                             selected: selected.contains(item.id),
                             onSelect: {
                                 if !selected.insert(item.id).inserted { selected.remove(item.id) }
@@ -91,6 +92,12 @@ struct RecordsView: View {
                 }
             }
             .sheet(isPresented: $showFilters) { filters }
+            .navigationDestination(isPresented: Binding(
+                get: { detail != nil },
+                set: { if !$0 { detail = nil } }
+            )) {
+                if let detail { RecordDetailView(item: detail, qb: qb) }
+            }
             .confirmationDialog(actionTitle, isPresented: $confirming, titleVisibility: .visible) {
                 Button(actionTitle, role: destructive ? .destructive : nil) { Task { await runAction() } }
                 Button("取消", role: .cancel) {}
