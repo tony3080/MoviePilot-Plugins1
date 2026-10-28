@@ -29,6 +29,11 @@ MEDIA = {
                            "sha1": "a" * 40, "file_size": 1073741824}],
     },
 }
+SECOND_MEDIA = {
+    **MEDIA, "id": "media-2", "title": "测试剧集", "media_type": "tv",
+    "season": 1, "source_name": "Test.Show.2026.S01E01.1080p.mkv",
+    "source_path": "/media/Test.Show.2026.S01E01.1080p.mkv",
+}
 TORRENT = {
     "downloader_id": "测试 qB", "info_hash": "b" * 40, "name": "测试下载任务",
     "recognition_state": "identified", "inventory_state": "missing", "progress": 0.52,
@@ -86,7 +91,10 @@ class Handler(BaseHTTPRequestHandler):
             })
         if path == "media":
             state = query.get("state", [""])[0]
-            return self.reply(page([MEDIA] if not state or state == MEDIA["state"] else [], query))
+            return self.reply(page(
+                [item for item in [MEDIA, SECOND_MEDIA] if not state or state == item["state"]],
+                query,
+            ))
         if path == "torrents":
             return self.reply(page([TORRENT], query))
         if path == "rss/tasks":
@@ -129,6 +137,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"success": True, "message": "识别已更新", "item": MEDIA})
         if path == "qb/check-presence":
             return self.reply({"success": True, "message": "核对完成：保留 1 项"})
+        if path == "media/action":
+            ids = payload.get("media_ids", [])
+            if payload.get("action") != "queue_import" or set(ids) != {"media-1", "media-2"}:
+                return self.reply({"success": False, "message": "批量入库选择参数错误"}, 400)
+            return self.reply({"success": True, "message": "已加入待入库：2 项"})
         if path == "rss/test":
             if payload.get("task", {}).get("id") != "task-1":
                 return self.reply({"success": False, "message": "缺少完整任务配置"}, 400)

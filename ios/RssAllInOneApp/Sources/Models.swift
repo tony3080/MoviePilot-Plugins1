@@ -76,6 +76,16 @@ struct Record: Identifiable, Equatable, Sendable {
          value["source_name"].text].first { !$0.isEmpty } ?? "未命名"
     }
     var state: String { value["state"].text }
+    var seasonLabel: String {
+        guard value["media_type"].text != "movie",
+              let season = Int(value["season"].text), season >= 0 else { return "" }
+        if season == 0 { return "特别篇(S00)" }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.numberStyle = .spellOut
+        let number = formatter.string(from: NSNumber(value: season)) ?? String(season)
+        return "第\(number)季"
+    }
     var source: String { [value["source_name"].text, value["name"].text].first { !$0.isEmpty } ?? "" }
     var sourceFileName: String {
         let raw = [value["source_name"].text, value["name"].text, value["source_path"].text,
@@ -162,6 +172,33 @@ struct Record: Identifiable, Equatable, Sendable {
     }
     var identityPayload: JSONValue {
         .object(["downloader_id": value["downloader_id"], "info_hash": value["info_hash"]])
+    }
+}
+
+enum RecordBatchAction: String {
+    case queueImport = "queue_import"
+    case importMedia = "import"
+    case deleteSource = "delete_source"
+    case deleteQB = "delete_qb"
+    case inventory
+    case deleteHardlinks = "delete_hardlinks"
+    case deleteBoth = "delete_both"
+
+    func allows(_ records: [Record], qb: Bool) -> Bool {
+        guard !records.isEmpty else { return false }
+        if qb { return self == .deleteQB }
+        switch self {
+        case .queueImport:
+            return records.allSatisfy { ["identified", "rolled_back"].contains($0.state) }
+        case .importMedia:
+            return records.allSatisfy { ["identified", "pending", "rolled_back"].contains($0.state) }
+        case .deleteSource:
+            return records.allSatisfy { ["identified", "unidentified", "existing", "pending", "rolled_back"].contains($0.state) }
+        case .inventory, .deleteHardlinks, .deleteBoth:
+            return records.allSatisfy { $0.state == "imported" }
+        case .deleteQB:
+            return false
+        }
     }
 }
 

@@ -74,11 +74,13 @@ struct BadgeFlowLayout: Layout {
 
 struct Poster: View {
     let path: String
+    var width: CGFloat = 100
+    var height: CGFloat = 150
     var body: some View {
         AsyncImage(url: safeWebURL(path)) { image in image.resizable().scaledToFill() } placeholder: {
             Rectangle().fill(Color.secondary.opacity(0.12)).overlay { Image(systemName: "film").foregroundStyle(.secondary) }
         }
-        .frame(width: 64, height: 96).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
+        .frame(width: width, height: height).clipped()
         .accessibilityHidden(true)
     }
 }
@@ -87,41 +89,64 @@ struct RecordRow: View {
     let item: Record
     let qb: Bool
     var interactive = false
-    var sourceExpanded = false
-    var onToggleSource: (() -> Void)? = nil
+    var selected = false
+    var onSelect: (() -> Void)? = nil
+    @ScaledMetric(relativeTo: .body) private var scaledPosterWidth = 112
+    private var posterWidth: CGFloat { min(128, scaledPosterWidth) }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Poster(path: item.poster)
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            summary.allowsHitTesting(false)
+            HStack(spacing: 8) {
+                Text(item.sourceFileName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("source-\(item.id)")
+                    .allowsHitTesting(false)
                 if interactive {
                     NavigationLink { RecordDetailView(item: item, qb: qb) } label: {
-                        summary
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    summary
-                }
-                if let onToggleSource {
-                    Button(action: onToggleSource) {
-                        Label(sourceExpanded ? "隐藏源文件名" : "源文件名",
-                              systemImage: sourceExpanded ? "chevron.up" : "doc.text")
+                        Image(systemName: "info.circle").frame(width: 44, height: 44)
                     }
                     .buttonStyle(.borderless)
-                    .font(.caption2)
-                    .foregroundStyle(.tint)
-                    if sourceExpanded {
-                        Text(item.sourceFileName)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                            .textSelection(.enabled)
-                    }
+                    .accessibilityLabel("详情：\(item.title)")
+                    .accessibilityIdentifier("detail-\(item.id)")
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.trailing, 12)
+        .padding(.leading, posterWidth + 12)
+        .frame(maxWidth: .infinity, minHeight: posterWidth * 1.5, alignment: .topLeading)
+        .background(alignment: .leading) {
+            GeometryReader { geometry in
+                Poster(path: item.poster, width: posterWidth, height: geometry.size.height)
+            }
+            .frame(width: posterWidth)
+            .allowsHitTesting(false)
+        }
+        .background {
+            if let onSelect {
+                Button(action: onSelect) {
+                    Rectangle().fill(Color(uiColor: .secondarySystemGroupedBackground))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("选择：\(item.title)")
+                .accessibilityValue(selected ? "已选中" : "未选中")
+                .accessibilityIdentifier("select-\(item.id)")
+            } else {
+                Color(uiColor: .secondarySystemGroupedBackground)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(selected ? Color.accentColor : .clear, lineWidth: 2)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder private var summary: some View {
@@ -133,11 +158,6 @@ struct RecordRow: View {
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(inventoryColor)
                     .padding(.top, 1)
-            }
-            if qb {
-                ProgressView(value: min(1, max(0, item["progress"].double))).tint(.teal)
-                Text("\(Int(item["progress"].double * 100))%")
-                    .font(.caption2).foregroundStyle(.secondary)
             }
             if !item.failure.isEmpty {
                 Label(item.failure, systemImage: "exclamationmark.circle")
@@ -153,7 +173,8 @@ struct RecordRow: View {
 
     @ViewBuilder private var rowLabels: some View {
         StatusBadge(state: qb ? item["recognition_state"].text : item.state)
-        if !item["season"].text.isEmpty { InfoBadge(text: "S\(item["season"].text)", color: .purple) }
+        if qb { InfoBadge(text: "\(Int(min(1, max(0, item["progress"].double)) * 100))%", color: .blue) }
+        if !item.seasonLabel.isEmpty { InfoBadge(text: item.seasonLabel, color: .purple) }
         if !item.resolution.isEmpty { InfoBadge(text: item.resolution, color: .cyan) }
         if !item.mediaCategory.isEmpty { InfoBadge(text: item.mediaCategory, color: .purple) }
         if !item.customization.isEmpty { InfoBadge(text: item.customization, color: .teal) }

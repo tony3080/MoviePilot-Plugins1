@@ -4,21 +4,24 @@ struct RecordsView: View {
     @EnvironmentObject private var store: AppStore
     let qb: Bool
     @StateObject private var page = PageStore()
-    @State private var state = ""
+    @AppStorage private var state: String
     @State private var mediaType = ""
     @State private var downloader = ""
     @State private var taskIDs: Set<String> = []
     @State private var options: [Record] = []
     @State private var search = ""
-    @State private var editing = false
     @State private var selected: Set<String> = []
     @State private var action = ""
     @State private var confirming = false
     @State private var showFilters = false
-    @State private var expandedSourceIDs: Set<String> = []
+
+    init(qb: Bool) {
+        self.qb = qb
+        _state = AppStorage(wrappedValue: "", "rssallinone.filters.\(qb ? "qb" : "media").state")
+    }
 
     private var filterKey: String { "\(state)|\(mediaType)|\(downloader)|\(taskIDs.sorted())|\(qb ? search : "")|\(store.generation)" }
-    private var selectedRows: [Record] { page.rows.filter { selected.contains($0.id) } }
+    private var selectedRows: [Record] { visible.filter { selected.contains($0.id) } }
     private var states: [String] { qb ? ["", "pending", "existing", "recognized", "unrecognized"] : ["", "identified", "unidentified", "existing", "pending", "imported", "rolled_back"] }
     private var visible: [Record] {
         qb || search.isEmpty ? page.rows : page.rows.filter { $0.title.localizedCaseInsensitiveContains(search) || $0.source.localizedCaseInsensitiveContains(search) }
@@ -37,36 +40,17 @@ struct RecordsView: View {
         NavigationStack {
             List {
                 Section {
-                    Picker("状态", selection: $state) {
-                        ForEach(states, id: \.self) { Text(filterTitle($0)).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                }
-                Section {
                     ForEach(visible) { item in
-                        HStack(alignment: .top, spacing: 8) {
-                            if editing {
-                                Button {
-                                    if !selected.insert(item.id).inserted { selected.remove(item.id) }
-                                } label: { Image(systemName: selected.contains(item.id) ? "checkmark.circle.fill" : "circle").font(.title2) }
-                                .buttonStyle(.plain).accessibilityLabel(selected.contains(item.id) ? "取消选择" : "选择")
+                        RecordRow(
+                            item: item, qb: qb, interactive: true,
+                            selected: selected.contains(item.id),
+                            onSelect: {
+                                if !selected.insert(item.id).inserted { selected.remove(item.id) }
                             }
-                            RecordRow(item: item, qb: qb, interactive: true,
-                                      sourceExpanded: expandedSourceIDs.contains(item.id)) {
-                                if !expandedSourceIDs.insert(item.id).inserted {
-                                    expandedSourceIDs.remove(item.id)
-                                }
-                            }
-                            if !editing {
-                                RecordActions(item: item, qb: qb) { action in
-                                    selected = [item.id]
-                                    self.action = action
-                                    confirming = true
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 12))
+                        )
+                        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
                     PageFooter(page: page) { await load(more: true) }
                 }
@@ -74,16 +58,27 @@ struct RecordsView: View {
             }
             .navigationTitle(qb ? "qB 管理" : "入库管理")
             .searchable(text: $search, prompt: qb ? "搜索任务" : "搜索已加载的媒体")
-            .listSectionSpacing(.compact)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground))
             .listRowSpacing(0)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                selectionBar.background(.regularMaterial)
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { showFilters = true } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("筛选")
                     Menu {
-                        Button(editing ? "结束选择" : "选择卡片", systemImage: "checkmark.circle") { editing.toggle(); selected.removeAll() }
-                        if editing {
-                            Button("全选已加载记录", systemImage: "checkmark.circle.fill") { selected = Set(page.rows.map(\.id)) }
+                        if !qb {
+                            if RecordBatchAction.inventory.allows(selectedRows, qb: qb) {
+                                Button("复查库存") { action = "inventory"; confirming = true }
+                            }
+                            if RecordBatchAction.deleteHardlinks.allows(selectedRows, qb: qb) {
+                                Button("只删除插件硬链接", role: .destructive) { action = "delete_hardlinks"; confirming = true }
+                                Button("删除硬链接和源文件", role: .destructive) { action = "delete_both"; confirming = true }
+                            }
                         }
+                        Button("清除选择", systemImage: "xmark.circle") { selected.removeAll() }
                         if qb {
                             Button("核对待下载任务", systemImage: "checkmark.magnifyingglass") { action = "presence"; confirming = true }
                             Button("刷新识别 qB 任务", systemImage: "arrow.clockwise") { action = "refresh_qb"; confirming = true }
@@ -93,11 +88,6 @@ struct RecordsView: View {
                         Button("刷新列表", systemImage: "arrow.clockwise") { Task { await load() } }
                     } label: { Image(systemName: "ellipsis.circle") }
                     .accessibilityIdentifier(qb ? "qbActions" : "mediaActions")
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    if editing && !selected.isEmpty { selectionBar }
                 }
             }
             .sheet(isPresented: $showFilters) { filters }
@@ -113,35 +103,70 @@ struct RecordsView: View {
                 await load()
             }
             .task { await loadOptions() }
+            .onChange(of: search) { selected.removeAll() }
+            .onChange(of: page.rows) {
+                selected.formIntersection(Set(visible.map(\.id)))
+            }
+            .onDisappear { selected.removeAll() }
             .disabled(store.busy)
         }
     }
 
     private var selectionBar: some View {
-        HStack {
-            Text("已选 \(selected.count) 项").font(.footnote)
-            Spacer()
-            Menu {
-                if qb {
-                    Button("删除 qB 任务，保留文件") { action = "delete_qb"; confirming = true }
-                } else {
-                    if selectedRows.allSatisfy({ ["identified", "rolled_back"].contains($0.state) }) {
-                        Button("转待入库") { action = "queue_import"; confirming = true }
-                    }
-                    if selectedRows.allSatisfy({ ["identified", "pending", "rolled_back"].contains($0.state) }) {
-                        Button("入库") { action = "import"; confirming = true }
-                    }
-                    if selectedRows.allSatisfy({ $0.state == "imported" }) {
-                        Button("复查库存") { action = "inventory"; confirming = true }
-                    }
-                    if selectedRows.allSatisfy({ $0.state != "imported" && $0.state != "importing" }) {
-                        Button("删除源文件", role: .destructive) { action = "delete_source"; confirming = true }
-                    }
-                    Button("只删除插件硬链接", role: .destructive) { action = "delete_hardlinks"; confirming = true }
-                    Button("删除硬链接和源文件", role: .destructive) { action = "delete_both"; confirming = true }
-                }
-            } label: { Label("批量操作", systemImage: "ellipsis.circle") }
-        }.padding().background(.regularMaterial)
+        HStack(spacing: 0) {
+            Text(selected.isEmpty ? "共 \(page.total) 项" : "已选 \(selected.count) 项")
+                .font(.footnote.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(selected.isEmpty ? Color.secondary : Color.accentColor)
+                .accessibilityIdentifier("selectionCount")
+            Button {
+                let ids = Set(visible.map(\.id))
+                if !ids.isEmpty && ids.isSubset(of: selected) { selected.removeAll() }
+                else { selected = ids }
+            } label: {
+                Image(systemName: !visible.isEmpty && Set(visible.map(\.id)).isSubset(of: selected)
+                      ? "checkmark.circle.fill" : "checkmark.circle")
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("全选或取消全选")
+            .disabled(visible.isEmpty)
+            Spacer(minLength: 0)
+            if qb {
+                selectionButton("删除 qB 任务", symbol: "trash", action: .deleteQB, destructive: true)
+            } else {
+                selectionButton("转待入库", symbol: "tray.and.arrow.down", action: .queueImport)
+                selectionButton("入库", symbol: "archivebox", action: .importMedia)
+                selectionButton("删源", symbol: "trash", action: .deleteSource, destructive: true)
+            }
+            Picker("状态", selection: $state) {
+                ForEach(states, id: \.self) { Text(filterTitle($0)).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .font(.subheadline)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minHeight: 44)
+            .accessibilityLabel("状态")
+            .accessibilityIdentifier("recordStateFilter")
+        }
+        .buttonStyle(.borderless)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+    }
+
+    private func selectionButton(_ title: String, symbol: String, action: RecordBatchAction, destructive: Bool = false) -> some View {
+        Button {
+            self.action = action.rawValue
+            confirming = true
+        } label: {
+            Image(systemName: symbol).frame(width: 44, height: 44)
+        }
+        .tint(destructive ? .red : .accentColor)
+        .disabled(!action.allows(selectedRows, qb: qb))
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("batch-\(action.rawValue)")
+        .help(title)
     }
 
     private var filters: some View {
@@ -207,12 +232,15 @@ struct RecordsView: View {
         } catch { store.report(error) }
     }
     private func runAction() async {
-        let ids = JSONValue.strings(selectedRows.map(\.id))
+        let rows = selectedRows
+        if let batchAction = RecordBatchAction(rawValue: action),
+           !batchAction.allows(rows, qb: qb) { return }
+        let ids = JSONValue.strings(rows.map(\.id))
         switch action {
         case "presence": await store.perform("qb/check-presence", body: .object(["downloader_id": .string(downloader), "keyword": .string(search)]))
         case "refresh_qb": await store.perform("qb/refresh", body: .object(["force_recognition": .bool(true)]))
         case "run_pending": await store.perform("import/run")
-        case "delete_qb": await store.perform("qb/delete", body: .object(["items": .array(selectedRows.map(\.identityPayload))]))
+        case "delete_qb": await store.perform("qb/delete", body: .object(["items": .array(rows.map(\.identityPayload))]))
         case "inventory": await store.perform("media/inventory/refresh-batch", body: .object(["media_ids": ids]))
         default:
             var body: JSONValue = .object(["action": .string(action), "media_ids": ids])
@@ -221,54 +249,6 @@ struct RecordsView: View {
         }
         selected.removeAll()
         await load()
-    }
-}
-
-struct RecordActions: View {
-    let item: Record
-    let qb: Bool
-    let onAction: (String) -> Void
-
-    private var mediaCanQueue: Bool { ["identified", "rolled_back"].contains(item.state) }
-    private var mediaCanImport: Bool { ["identified", "pending", "rolled_back"].contains(item.state) }
-    private var mediaCanDeleteSource: Bool { !["imported", "importing"].contains(item.state) }
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            if qb {
-                actionButton("删任务", systemImage: "trash", action: "delete_qb", destructive: true)
-            } else {
-                if mediaCanQueue { actionButton("转待入库", systemImage: "tray.and.arrow.down", action: "queue_import") }
-                if mediaCanImport { actionButton("入库", systemImage: "archivebox", action: "import") }
-                if mediaCanDeleteSource { actionButton("删源", systemImage: "trash", action: "delete_source", destructive: true) }
-            }
-        }
-        .frame(width: 44)
-        .frame(minHeight: 96, alignment: .center)
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private func actionButton(_ title: String, systemImage: String, action: String, destructive: Bool = false) -> some View {
-        if destructive {
-            Button(role: .destructive) { onAction(action) } label: {
-                Image(systemName: systemImage)
-                    .frame(width: 30, height: 30)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .accessibilityLabel(title)
-            .help(title)
-        } else {
-            Button { onAction(action) } label: {
-                Image(systemName: systemImage)
-                    .frame(width: 30, height: 30)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .accessibilityLabel(title)
-            .help(title)
-        }
     }
 }
 

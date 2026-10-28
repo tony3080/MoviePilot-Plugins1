@@ -27,7 +27,7 @@ final class AppFlowTests: XCTestCase {
         let film = app.staticTexts["测试电影"]
         XCTAssertTrue(film.waitForExistence(timeout: 10))
         capture("01-media-list")
-        film.tap()
+        app.buttons["detail-media-1"].tap()
         XCTAssertTrue(app.links["P · 种子页面"].exists || app.buttons["P · 种子页面"].exists)
         app.buttons["编辑识别与标签"].tap()
         XCTAssertTrue(app.navigationBars["编辑识别"].waitForExistence(timeout: 5))
@@ -44,20 +44,52 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["测试电影"].waitForExistence(timeout: 10))
         assertWrappedLabels()
         XCTAssertTrue(app.staticTexts["目录已存在（0/12）"].exists)
-        let source = app.buttons["源文件名"].firstMatch
+        let source = app.staticTexts["source-media-1"]
         XCTAssertTrue(source.exists)
+        XCTAssertLessThan(source.frame.height, 30)
         XCTAssertLessThan(source.frame.maxY - app.staticTexts["测试电影"].frame.minY, 190)
+        XCTAssertFalse(app.buttons["源文件名"].exists)
         capture("08-media-wrapped-labels")
-        source.tap()
-        XCTAssertTrue(app.staticTexts["Test.Movie.2026.1080p.mkv"].waitForExistence(timeout: 5))
-        app.buttons["隐藏源文件名"].tap()
-        XCTAssertFalse(app.staticTexts["Test.Movie.2026.1080p.mkv"].exists)
+        app.buttons["detail-media-1"].tap()
+        XCTAssertTrue(app.staticTexts["Test.Movie.2026.1080p.mkv"].firstMatch.waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
 
         app.tabBars.buttons["qB"].tap()
         XCTAssertTrue(app.staticTexts["测试下载任务"].waitForExistence(timeout: 10))
         assertWrappedLabels()
-        XCTAssertTrue(app.buttons["删任务"].exists)
+        XCTAssertTrue(app.buttons["batch-delete_qb"].exists)
+        XCTAssertFalse(app.buttons["batch-delete_qb"].isEnabled)
         capture("09-qb-wrapped-labels")
+    }
+
+    func testTapCardsAndBatchToolbarActions() {
+        let first = app.buttons["select-media-1"]
+        let second = app.buttons["select-media-2"]
+        let queue = app.buttons["batch-queue_import"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertFalse(queue.isEnabled)
+        first.tap()
+        XCTAssertEqual(first.value as? String, "已选中")
+        XCTAssertTrue(queue.isEnabled)
+        second.tap()
+        XCTAssertTrue(app.staticTexts["已选 2 项"].exists)
+        capture("10-media-multiselect")
+        queue.tap()
+        app.buttons["转待入库"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["已加入待入库：2 项"].waitForExistence(timeout: 10))
+        XCTAssertFalse(queue.isEnabled)
+
+        first.tap()
+        XCTAssertTrue(app.staticTexts["source-media-1"].exists)
+        XCTAssertEqual(first.value as? String, "已选中")
+        first.tap()
+        XCTAssertFalse(queue.isEnabled)
+        app.tabBars.buttons["qB"].tap()
+        let qbCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'select-'")).firstMatch
+        XCTAssertTrue(qbCard.waitForExistence(timeout: 10))
+        qbCard.tap()
+        XCTAssertTrue(app.buttons["batch-delete_qb"].isEnabled)
+        capture("11-qb-selected")
     }
 
     private func assertWrappedLabels() {

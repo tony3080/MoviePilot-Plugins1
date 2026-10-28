@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Client contracts", .serialized)
 struct ClientTests {
+    @Test func batchActionsRequireASelectionAndCompatibleStates() {
+        func record(_ state: String) -> Record {
+            Record(value: .object(["id": .string(state), "state": .string(state)]))
+        }
+        let identified = record("identified")
+        let pending = record("pending")
+        let imported = record("imported")
+        let unidentified = record("unidentified")
+        #expect(!RecordBatchAction.queueImport.allows([], qb: false))
+        #expect(RecordBatchAction.queueImport.allows([identified], qb: false))
+        #expect(!RecordBatchAction.queueImport.allows([identified, pending], qb: false))
+        #expect(RecordBatchAction.importMedia.allows([identified, pending], qb: false))
+        #expect(!RecordBatchAction.importMedia.allows([identified, imported], qb: false))
+        #expect(RecordBatchAction.deleteSource.allows([identified, unidentified], qb: false))
+        #expect(!RecordBatchAction.deleteSource.allows([identified, imported], qb: false))
+        #expect(RecordBatchAction.deleteQB.allows([identified], qb: true))
+        #expect(!RecordBatchAction.deleteQB.allows([], qb: true))
+        #expect(!RecordBatchAction.deleteSource.allows([identified], qb: true))
+        #expect(!RecordBatchAction.deleteHardlinks.allows([identified], qb: false))
+        #expect(RecordBatchAction.deleteBoth.allows([imported], qb: false))
+    }
+
     @Test func preservesUnknownConfigurationFields() throws {
         let data = Data(#"{"config":{"enabled":true,"future":{"x":[1,"二",null]}},"tmdb_id":42}"#.utf8)
         var value = try JSONDecoder().decode(JSONValue.self, from: data)
