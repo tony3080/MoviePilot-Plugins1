@@ -139,6 +139,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"success": True, "message": "核对完成：保留 1 项"})
         if path == "media/action":
             ids = payload.get("media_ids", [])
+            if payload.get("action") == "force_upload":
+                if (not isinstance(ids, list) or not ids or len(ids) != len(set(ids))
+                        or not set(ids).issubset({"media-1", "media-2"})):
+                    return self.reply({"success": False, "message": "强制入库选择参数错误"}, 400)
+                return self.reply({"success": True, "message": f"强制入库已启动：{len(ids)} 项"})
             if payload.get("action") != "queue_import" or set(ids) != {"media-1", "media-2"}:
                 return self.reply({"success": False, "message": "批量入库选择参数错误"}, 400)
             return self.reply({"success": True, "message": "已加入待入库：2 项"})

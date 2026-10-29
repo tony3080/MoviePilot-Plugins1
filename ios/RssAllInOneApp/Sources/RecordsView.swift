@@ -144,6 +144,7 @@ struct RecordsView: View {
             } else {
                 selectionButton("转待入库", symbol: "tray.and.arrow.down", action: .queueImport)
                 selectionButton("入库", symbol: "archivebox", action: .importMedia)
+                selectionButton("强制入库", symbol: "arrow.up.circle.fill", action: .forceUpload)
                 selectionButton("删源", symbol: "trash", action: .deleteSource, destructive: true)
             }
             Picker("状态", selection: $state) {
@@ -207,7 +208,7 @@ struct RecordsView: View {
     private var actionTitle: String {
         [
             "presence": "核对待下载任务", "refresh_qb": "刷新识别 qB 任务", "run_pending": "立刻处理待入库",
-            "delete_qb": "删除 qB 任务", "queue_import": "转待入库", "import": "入库",
+            "delete_qb": "删除 qB 任务", "queue_import": "转待入库", "import": "入库", "force_upload": "强制入库",
             "inventory": "复查库存", "delete_source": "删除源文件", "delete_hardlinks": "只删除插件硬链接",
             "delete_both": "删除硬链接和源文件"
         ][action] ?? "执行操作"
@@ -219,6 +220,7 @@ struct RecordsView: View {
         if action == "delete_source" { return "永久删除选中卡片映射的源文件并移除卡片，保留硬链接。" }
         if action == "delete_both" { return "永久删除源文件和本插件拥有的硬链接，无法撤销。" }
         if action == "delete_hardlinks" { return "删除本插件拥有的硬链接，源文件保留，卡片回退。" }
+        if action == "force_upload" { return "对选中的 \(selected.count) 项优先尝试秒传，无法秒传时继续真实上传。" }
         return selected.isEmpty ? "确认执行\(actionTitle)？" : "对选中的 \(selected.count) 项执行\(actionTitle)？"
     }
     private func filterTitle(_ value: String) -> String {

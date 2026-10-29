@@ -38,6 +38,20 @@ struct ClientTests {
         #expect(decoded["config"]["enabled"].flag == false)
     }
 
+    @Test func forceUploadUsesImportStatesAndRejectsOtherCards() {
+        func record(_ state: String) -> Record {
+            Record(value: .object(["id": .string(state), "state": .string(state)]))
+        }
+        #expect(RecordBatchAction.forceUpload.rawValue == "force_upload")
+        #expect(!RecordBatchAction.forceUpload.allows([], qb: false))
+        let allowed = ["identified", "pending", "rolled_back"].map(record)
+        #expect(RecordBatchAction.forceUpload.allows(allowed, qb: false))
+        for state in ["unidentified", "existing", "importing", "imported"] {
+            #expect(!RecordBatchAction.forceUpload.allows([allowed[0], record(state)], qb: false))
+        }
+        #expect(!RecordBatchAction.forceUpload.allows(allowed, qb: true))
+    }
+
     @Test func cardIdentityIncludesDownloaderAndHash() {
         let a = Record(value: .object(["downloader_id": .string("A"), "info_hash": .string("hash")]))
         let b = Record(value: .object(["downloader_id": .string("B"), "info_hash": .string("hash")]))

@@ -178,6 +178,7 @@ struct Record: Identifiable, Equatable, Sendable {
 enum RecordBatchAction: String {
     case queueImport = "queue_import"
     case importMedia = "import"
+    case forceUpload = "force_upload"
     case deleteSource = "delete_source"
     case deleteQB = "delete_qb"
     case inventory
@@ -190,7 +191,7 @@ enum RecordBatchAction: String {
         switch self {
         case .queueImport:
             return records.allSatisfy { ["identified", "rolled_back"].contains($0.state) }
-        case .importMedia:
+        case .importMedia, .forceUpload:
             return records.allSatisfy { ["identified", "pending", "rolled_back"].contains($0.state) }
         case .deleteSource:
             return records.allSatisfy { ["identified", "unidentified", "existing", "pending", "rolled_back"].contains($0.state) }

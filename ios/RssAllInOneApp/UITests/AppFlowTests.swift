@@ -112,6 +112,38 @@ final class AppFlowTests: XCTestCase {
         XCTAssertLessThan(customization.frame.maxX, app.frame.maxX)
     }
 
+    func testForceUploadSupportsSingleAndMultipleSelections() {
+        let first = app.buttons["select-media-1"]
+        let second = app.buttons["select-media-2"]
+        let force = app.buttons["batch-force_upload"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(force.exists)
+        XCTAssertFalse(force.isEnabled)
+        first.tap()
+        XCTAssertTrue(force.isEnabled)
+        XCTAssertGreaterThanOrEqual(force.frame.width, 44)
+        XCTAssertLessThanOrEqual(force.frame.maxX, app.frame.maxX)
+        force.tap()
+        XCTAssertTrue(app.staticTexts["对选中的 1 项优先尝试秒传，无法秒传时继续真实上传。"].waitForExistence(timeout: 5))
+        app.buttons["取消"].tap()
+        XCTAssertEqual(first.value as? String, "已选中")
+        force.tap()
+        app.buttons["强制入库"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["强制入库已启动：1 项"].waitForExistence(timeout: 10))
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertFalse(force.isEnabled)
+        first.tap()
+        second.tap()
+        capture("12-force-upload-selected")
+        force.tap()
+        XCTAssertTrue(app.staticTexts["对选中的 2 项优先尝试秒传，无法秒传时继续真实上传。"].waitForExistence(timeout: 5))
+        app.buttons["强制入库"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["强制入库已启动：2 项"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["qB"].tap()
+        XCTAssertTrue(app.buttons["batch-delete_qb"].waitForExistence(timeout: 10))
+        XCTAssertFalse(force.exists)
+    }
+
     func testQBAndPresenceCheck() {
         app.tabBars.buttons["qB"].tap()
         XCTAssertTrue(app.staticTexts["测试下载任务"].waitForExistence(timeout: 10))
