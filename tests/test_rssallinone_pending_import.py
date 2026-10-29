@@ -8,6 +8,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -955,6 +956,8 @@ class PendingImportTest(unittest.TestCase):
             coordinator.run("cron")
             batch = store.latest_active_import_batch()
             batch["scan_callback_deadline"] = "2000-01-01T00:00:00+00:00"
+            batch["details"]["scan_refresh_retry_count"] = pending_import.SCAN_RETRY_LIMIT
+            batch["details"]["scan_retry_due_at"] = "2000-01-01T00:00:00+00:00"
             store.upsert_import_batch(batch)
             coordinator.run("cron")
             self.assertIsNone(store.latest_active_import_batch())
@@ -964,7 +967,7 @@ class PendingImportTest(unittest.TestCase):
 
     def test_running_emby_scan_extends_callback_deadline(self):
         self.assertEqual(pending_import.SCAN_STATUS_POLL_INTERVAL, 600)
-        self.assertEqual(pending_import.SCAN_RUNNING_POLL_INTERVAL, 600)
+        self.assertEqual(pending_import.SCAN_RUNNING_POLL_INTERVAL, 60)
         with tempfile.TemporaryDirectory() as directory:
             store, _source, _target, _inventory = self.make_store(directory)
             controls = FakeControls()
@@ -1008,6 +1011,136 @@ class PendingImportTest(unittest.TestCase):
             )
             self.assertEqual(scanner.status_calls, 1)
             self.assertEqual(controls.restored, 0)
+
+    def start_scan_wait(self, directory):
+        store, source, target, _inventory = self.make_store(directory)
+        scanner, controls = FakeScanner(), FakeControls()
+        coordinator = self.coordinator(
+            store, Path(directory) / "staging",
+            FakeCd2({
+                "key": "finished-upload", "dest_path": "/cloud/Movie/Movie.mkv",
+                "size": 1024, "transferred_bytes": 0, "status": "Finish",
+                "error_message": "",
+            }), controls, scanner,
+        )
+        coordinator.run("cron")
+        return store, coordinator, scanner, controls, source, target
+
+    def check_scan_at(self, store, coordinator, now):
+        batch = store.latest_active_import_batch()
+        batch["details"]["next_scan_status_check_at"] = "2000-01-01T00:00:00+00:00"
+        store.upsert_import_batch(batch)
+        with patch.object(pending_import, "datetime", wraps=pending_import.datetime) as clock:
+            clock.now.return_value = now
+            coordinator.run("supervisor")
+
+    def test_unstarted_scan_retries_are_bounded_and_survive_coordinator_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, coordinator, scanner, controls, source, target = self.start_scan_wait(directory)
+            batch = store.latest_active_import_batch()
+            initial = pending_import._parse_time(batch["refresh_requested_at"])
+            self.check_scan_at(store, coordinator, initial + pending_import.timedelta(seconds=20))
+            self.assertEqual(scanner.refreshes, 1)
+            self.assertNotIn("scan_retry_due_at", store.latest_active_import_batch()["details"])
+            now = initial
+            for count in range(1, pending_import.SCAN_RETRY_LIMIT + 1):
+                now += pending_import.timedelta(seconds=pending_import.SCAN_START_TIMEOUT + 1)
+                self.check_scan_at(store, coordinator, now)
+                batch = store.latest_active_import_batch()
+                self.assertIn("scan_retry_due_at", batch["details"])
+                now += pending_import.timedelta(seconds=pending_import.SCAN_RETRY_DELAY + 1)
+                coordinator = self.coordinator(
+                    store, Path(directory) / "staging", FakeCd2({}), controls, scanner,
+                )
+                self.check_scan_at(store, coordinator, now)
+                self.assertEqual(scanner.refreshes, count + 1)
+                self.assertEqual(
+                    store.latest_active_import_batch()["details"]["scan_refresh_retry_count"], count,
+                )
+            now += pending_import.timedelta(seconds=pending_import.SCAN_START_TIMEOUT + 1)
+            self.check_scan_at(store, coordinator, now)
+            now += pending_import.timedelta(seconds=pending_import.SCAN_RETRY_DELAY + 1)
+            self.check_scan_at(store, coordinator, now)
+            finished = store.get_import_batch(batch["id"])
+            self.assertEqual(finished["state"], "failed")
+            self.assertIn("已自动重试 2 次", finished["error_message"])
+            self.assertEqual(controls.restored, 1)
+            self.assertTrue(source.exists())
+            self.assertTrue(target.exists())
+            self.assertEqual(store.get_media_item("media-1")["state"], "imported")
+
+    def test_interrupted_scan_is_rechecked_before_retry_and_delayed_success_wins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, coordinator, scanner, controls, _source, _target = self.start_scan_wait(directory)
+            requested = pending_import._parse_time(store.latest_active_import_batch()["refresh_requested_at"])
+            scanner.task_status.update({"state": "Running", "is_running": True})
+            self.check_scan_at(store, coordinator, requested + pending_import.timedelta(seconds=20))
+            scanner.task_status.update({
+                "state": "Idle", "is_running": False, "last_status": "Completed",
+                "last_started_at": "2020-01-01T00:00:00Z",
+                "last_finished_at": "2020-01-01T00:01:00Z",
+            })
+            self.check_scan_at(store, coordinator, requested + pending_import.timedelta(seconds=80))
+            batch = store.latest_active_import_batch()
+            self.assertIn("扫库中断", batch["error_message"])
+            self.assertEqual(scanner.refreshes, 1)
+            self.assertEqual(controls.restored, 0)
+            scanner.task_status.update({
+                "last_started_at": (requested + pending_import.timedelta(seconds=1)).isoformat(),
+                "last_finished_at": (requested + pending_import.timedelta(seconds=90)).isoformat(),
+            })
+            self.check_scan_at(store, coordinator, requested + pending_import.timedelta(seconds=150))
+            self.assertEqual(scanner.refreshes, 1)
+            self.assertEqual(store.get_import_batch(batch["id"])["state"], "completed")
+            self.assertEqual(controls.restored, 1)
+
+    def test_retry_request_failure_uses_budget_and_successful_retry_can_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, coordinator, scanner, controls, _source, _target = self.start_scan_wait(directory)
+            batch = store.latest_active_import_batch()
+            batch["details"]["scan_retry_due_at"] = "2000-01-01T00:00:00+00:00"
+            store.upsert_import_batch(batch)
+            now = pending_import.datetime.now(pending_import.timezone.utc)
+            with patch.object(scanner, "request_emby_refresh", side_effect=RuntimeError("server restarting")):
+                self.check_scan_at(store, coordinator, now)
+            batch = store.latest_active_import_batch()
+            self.assertEqual(batch["details"]["scan_refresh_retry_count"], 1)
+            self.assertEqual(batch["details"]["scan_retry_request_error"], "server restarting")
+            self.check_scan_at(store, coordinator, now + pending_import.timedelta(seconds=61))
+            batch = store.latest_active_import_batch()
+            self.assertEqual(batch["details"]["scan_refresh_retry_count"], 2)
+            requested = pending_import._parse_time(batch["refresh_requested_at"])
+            scanner.task_status.update({
+                "last_status": "Completed",
+                "last_started_at": (requested + pending_import.timedelta(seconds=1)).isoformat(),
+                "last_finished_at": (requested + pending_import.timedelta(seconds=10)).isoformat(),
+            })
+            self.check_scan_at(store, coordinator, requested + pending_import.timedelta(seconds=20))
+            self.assertEqual(store.get_import_batch(batch["id"])["state"], "completed")
+            self.assertEqual(controls.restored, 1)
+
+    def test_retry_does_not_resurrect_batch_completed_by_callback_during_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store, coordinator, scanner, controls, _source, _target = self.start_scan_wait(directory)
+            batch = store.latest_active_import_batch()
+            batch["details"]["scan_retry_due_at"] = "2000-01-01T00:00:00+00:00"
+            store.upsert_import_batch(batch)
+
+            def refresh_with_callback():
+                result = coordinator.handle_scan_callback({
+                    "event_name": "scheduledtasks.completed",
+                    "server_id": "srv1", "task_id": "task1",
+                })
+                self.assertTrue(result["accepted"])
+                return {"server_id": "srv1", "task_id": "task1"}
+
+            with patch.object(scanner, "request_emby_refresh", side_effect=refresh_with_callback):
+                self.check_scan_at(
+                    store, coordinator, pending_import.datetime.now(pending_import.timezone.utc),
+                )
+            self.assertIsNone(store.latest_active_import_batch())
+            self.assertEqual(store.get_import_batch(batch["id"])["state"], "completed")
+            self.assertEqual(controls.restored, 1)
 
     def test_api_confirmed_scan_completion_replaces_missing_callback(self):
         with tempfile.TemporaryDirectory() as directory:

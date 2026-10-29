@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import threading
@@ -11,12 +12,13 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _SQLITE_WRITE_LOCK = threading.RLock()
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 _BACKGROUND_TASK_FAILURE_SQL = """(
     state IN ('failed', 'partial')
@@ -42,6 +44,40 @@ def _path_identity(value: object) -> str:
     return os.path.normcase(os.path.normpath(raw))
 
 
+def file_identity(path: object) -> Tuple[Path, os.stat_result, str]:
+    source = Path(path).expanduser().resolve(strict=True)
+    stat = source.stat()
+    if not source.is_file() or stat.st_size <= 0:
+        raise ValueError("文件不是非空普通文件")
+    # Neither rename nor creating a hardlink changes these content attributes.
+    key = json.dumps([stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns])
+    return source, stat, key
+
+
+def _source_url(value: object) -> str:
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = f"[{host}]"
+        if parsed.port:
+            host += f":{parsed.port}"
+        sensitive = {
+            "accesstoken", "apikey", "auth", "authkey", "key", "passkey",
+            "password", "pwd", "rsskey", "refreshtoken", "secret", "sig",
+            "signature", "token",
+        }
+        query = sorted(
+            (key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key.lower().replace("_", "").replace("-", "") not in sensitive
+        )
+        return urlunsplit((parsed.scheme.lower(), host, parsed.path, urlencode(query), ""))
+    except ValueError:
+        return ""
+
+
 class SQLiteStore:
     """Small repository layer with one connection per operation."""
 
@@ -53,6 +89,7 @@ class SQLiteStore:
         self._write_lock = _SQLITE_WRITE_LOCK
         self._busy_timeout_ms = 10000
         self._write_retry_delays = (0.1, 0.25, 0.5, 1.0)
+        self.on_media_files_changed = None
 
     def _open_connection(self) -> sqlite3.Connection:
         timeout_seconds = max(1.0, self._busy_timeout_ms / 1000)
@@ -354,6 +391,52 @@ class SQLiteStore:
                 self._migrate_v6(connection)
                 self._migrate_v7(connection)
                 self._migrate_v8(connection)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS file_hashes (
+                        identity_key TEXT PRIMARY KEY,
+                        sha1 TEXT NOT NULL,
+                        source_path TEXT NOT NULL,
+                        file_size INTEGER NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                connection.execute("""
+                    CREATE TABLE IF NOT EXISTS media_hash_preparations (
+                        media_id TEXT PRIMARY KEY,
+                        paths_json TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'queued'
+                    )
+                """)
+                # Existing cards have no initial admission snapshot. Missing
+                # hashes on these cards are calculated only when importing.
+                connection.execute("""
+                    INSERT OR IGNORE INTO media_hash_preparations(media_id, paths_json, state)
+                    SELECT id, '[]', 'done' FROM media_items
+                """)
+                source_tables_exist = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_origins'"
+                ).fetchone()
+                connection.executescript("""
+                    CREATE TABLE IF NOT EXISTS file_origins (
+                        origin_key TEXT PRIMARY KEY,
+                        detail_url TEXT NOT NULL,
+                        site_id TEXT NOT NULL DEFAULT '',
+                        downloader_id TEXT NOT NULL DEFAULT '',
+                        info_hash TEXT NOT NULL DEFAULT ''
+                    );
+                    CREATE TABLE IF NOT EXISTS file_origin_links (
+                        identity_key TEXT NOT NULL,
+                        origin_key TEXT NOT NULL REFERENCES file_origins(origin_key),
+                        PRIMARY KEY (identity_key, origin_key)
+                    );
+                    CREATE TABLE IF NOT EXISTS file_source_backfill (
+                        media_id TEXT PRIMARY KEY
+                    );
+                """)
+                if not source_tables_exist:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO file_source_backfill SELECT id FROM media_items"
+                    )
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, utc_now()),
@@ -837,7 +920,19 @@ class SQLiteStore:
             rows = connection.execute(
                 """SELECT DISTINCT media_id, current_source_path
                    FROM file_mappings
-                   WHERE media_id != '' AND current_source_path != ''"""
+                   WHERE media_id != '' AND current_source_path != ''
+                   UNION ALL
+                   SELECT m.id AS media_id, f.value AS current_source_path
+                   FROM media_items AS m,
+                        json_each(
+                            CASE WHEN json_type(m.details_json, '$.source_files') = 'array'
+                            THEN json_extract(m.details_json, '$.source_files')
+                            ELSE '[]' END
+                        ) AS f
+                   WHERE m.id != '' AND f.type = 'text' AND f.value != ''
+                     AND NOT EXISTS (
+                         SELECT 1 FROM file_mappings AS fm WHERE fm.media_id = m.id
+                     )"""
             ).fetchall()
         owners = []
         for row in rows:
@@ -852,6 +947,15 @@ class SQLiteStore:
         identity = str(media_id or "").strip()
         if not identity:
             return False
+        item = self.get_media_item(identity)
+        if item:
+            details = dict(item.get("details") or {})
+            if not details.get("file_mappings"):
+                details["file_mappings"] = self.list_file_mappings(
+                    item.get("downloader_id"), item.get("info_hash")
+                )
+                item["details"] = details
+            self.preserve_file_sources(item)
         with self.write_connection() as connection:
             connection.execute(
                 "DELETE FROM file_mappings WHERE media_id = ?",
@@ -1139,6 +1243,45 @@ class SQLiteStore:
             )
         return len(outside)
 
+    def list_pending_torrent_snapshots(
+        self, *, downloader_id: str = "", keyword: str = ""
+    ) -> List[Dict[str, Any]]:
+        clauses = ["present = 1", "inventory_state != 'exists'"]
+        params: List[Any] = []
+        if downloader_id:
+            clauses.append("downloader_id = ?")
+            params.append(downloader_id)
+        if keyword:
+            clauses.append("(name LIKE ? OR media_title LIKE ? OR info_hash LIKE ?)")
+            params.extend([f"%{keyword}%"] * 3)
+        with self.connection() as connection:
+            rows = connection.execute(
+                f"""SELECT * FROM torrent_snapshots
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY downloader_id, info_hash""", params,
+            ).fetchall()
+        # Keep the raw database values for the compare-and-delete guard.
+        return [dict(row) for row in rows]
+
+    def delete_missing_pending_snapshot(self, snapshot: Dict[str, Any]) -> bool:
+        downloader = snapshot.get("downloader_id")
+        info_hash = snapshot.get("info_hash")
+        with self.write_connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM torrent_snapshots
+                   WHERE downloader_id = ? AND info_hash = ?
+                     AND present = 1 AND inventory_state != 'exists'""",
+                (downloader, info_hash),
+            ).fetchone()
+            if row is None or dict(row) != snapshot:
+                return False
+            connection.execute(
+                """DELETE FROM torrent_snapshots
+                   WHERE downloader_id = ? AND info_hash = ?""",
+                (downloader, info_hash),
+            )
+        return True
+
     def delete_torrent_snapshot(
         self, downloader_id: object, info_hash: object
     ) -> bool:
@@ -1347,7 +1490,8 @@ class SQLiteStore:
                 values,
             )
 
-    def upsert_media_item(self, record: Dict[str, Any]) -> None:
+    def upsert_media_item(self, record: Dict[str, Any], *, prepare_hashes: bool = False) -> None:
+        source_records = self._file_source_records(record)
         now = record.get("updated_at") or utc_now()
         values = (
             record["id"], record["state"], record.get("media_type"),
@@ -1361,6 +1505,16 @@ class SQLiteStore:
             record.get("created_at") or now, now,
         )
         with self.write_connection() as connection:
+            mappings = (record.get("details") or {}).get("file_mappings") or []
+            paths = list(dict.fromkeys(
+                str(row["current_source_path"]) for row in mappings
+                if row.get("current_source_path") and not row.get("inventory_exists")
+            )) if prepare_hashes and record.get("state") in {"identified", "unidentified", "pending", "rolled_back"} else []
+            prepared = connection.execute(
+                """INSERT OR IGNORE INTO media_hash_preparations(media_id, paths_json, state)
+                   VALUES (?, ?, ?)""",
+                (record["id"], self._json_dump(paths), "queued" if paths else "done"),
+            ).rowcount
             connection.execute(
                 """INSERT INTO media_items(
                     id, state, media_type, title, source_name, source_path,
@@ -1387,6 +1541,201 @@ class SQLiteStore:
                     updated_at = excluded.updated_at""",
                 values,
             )
+            self._save_file_source_records(connection, source_records)
+        if prepared and paths:
+            self._notify_media_files_changed(record["id"])
+
+    def _notify_media_files_changed(self, media_id: object) -> None:
+        if callable(self.on_media_files_changed):
+            self.on_media_files_changed(str(media_id or ""))
+
+    def hash_candidate_ids(self) -> List[str]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT media_id FROM media_hash_preparations WHERE state='queued'"
+            ).fetchall()
+        return [str(row["media_id"]) for row in rows]
+
+    def initial_hash_paths(self, media_id: str) -> List[str]:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT paths_json FROM media_hash_preparations WHERE media_id=? AND state='queued'",
+                (media_id,),
+            ).fetchone()
+        return json.loads(row["paths_json"]) if row else []
+
+    def finish_hash_preparation(self, media_id: str) -> None:
+        with self.write_connection() as connection:
+            connection.execute(
+                "UPDATE media_hash_preparations SET state='done' WHERE media_id=?", (media_id,)
+            )
+
+    def get_file_sha1(self, identity_key: str) -> str:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT sha1 FROM file_hashes WHERE identity_key = ?", (identity_key,)
+            ).fetchone()
+        return str(row["sha1"]) if row else ""
+
+    def save_file_sha1(self, identity_key: str, sha1: str, path: str, size: int) -> None:
+        with self.write_connection() as connection:
+            connection.execute(
+                """INSERT INTO file_hashes(identity_key, sha1, source_path, file_size, updated_at)
+                   VALUES (?, ?, ?, ?, ?) ON CONFLICT(identity_key) DO UPDATE SET
+                   sha1=excluded.sha1, source_path=excluded.source_path,
+                   file_size=excluded.file_size, updated_at=excluded.updated_at
+                   WHERE file_hashes.sha1 != excluded.sha1
+                      OR file_hashes.source_path != excluded.source_path
+                      OR file_hashes.file_size != excluded.file_size""",
+                (identity_key, sha1, path, size, utc_now()),
+            )
+
+    @staticmethod
+    def _file_source_records(record: Dict[str, Any]) -> List[Tuple[str, dict]]:
+        details = record.get("details") or {}
+        preserved = details.get("preserved_source") or {}
+        rss = details.get("rss_source") or {}
+        labels = details.get("site_labels") or {}
+        url = _source_url(
+            record.get("comment_url") or record.get("source_url_masked")
+            or rss.get("detail_url_masked") or details.get("comment_url")
+            or details.get("source_url") or preserved.get("detail_url")
+            or labels.get("request_url_masked")
+        )
+        if not url:
+            return []
+        origin = {
+            "detail_url": url,
+            "site_id": str(preserved.get("site_id") or labels.get("site_id") or ""),
+            "downloader_id": str(preserved.get("downloader_id") or record.get("downloader_id") or ""),
+            "info_hash": str(preserved.get("info_hash") or record.get("info_hash") or "").lower(),
+        }
+        paths = [
+            row.get("current_source_path") for row in details.get("file_mappings") or []
+        ]
+        paths.extend(details.get("source_files") or [])
+        if record.get("source_path"):
+            paths.append(record["source_path"])
+        identities = set()
+        for path in dict.fromkeys(value for value in paths if value):
+            try:
+                identities.add(file_identity(path)[2])
+            except (OSError, ValueError, RuntimeError):
+                continue
+        return [(key, origin) for key in identities]
+
+    @staticmethod
+    def _save_file_source_records(connection: sqlite3.Connection, records: list) -> None:
+        saved_origins = set()
+        links = set()
+        for identity_key, origin in records:
+            origin_key = hashlib.sha256(
+                json.dumps(
+                    [origin["detail_url"], origin["downloader_id"], origin["info_hash"]],
+                    ensure_ascii=True, separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if origin_key not in saved_origins:
+                connection.execute(
+                    """INSERT INTO file_origins(origin_key, detail_url, site_id, downloader_id, info_hash)
+                       VALUES (?, ?, ?, ?, ?) ON CONFLICT(origin_key) DO UPDATE SET site_id=excluded.site_id
+                       WHERE file_origins.site_id='' AND excluded.site_id!=''""",
+                    (origin_key, origin["detail_url"], origin["site_id"],
+                     origin["downloader_id"], origin["info_hash"]),
+                )
+                saved_origins.add(origin_key)
+            links.add((identity_key, origin_key))
+        connection.executemany(
+            "INSERT OR IGNORE INTO file_origin_links(identity_key, origin_key) VALUES (?, ?)",
+            sorted(links),
+        )
+
+    def preserve_file_sources(self, record: Dict[str, Any]) -> None:
+        records = self._file_source_records(record)
+        if records:
+            with self.write_connection() as connection:
+                self._save_file_source_records(connection, records)
+
+    def find_file_sources(self, paths: Iterable[object]) -> Dict[str, Any]:
+        identities = set()
+        for path in paths:
+            try:
+                identities.add(file_identity(path)[2])
+            except (OSError, ValueError, RuntimeError):
+                continue
+        origins = {}
+        matched = set()
+        known = False
+        keys = sorted(identities)
+        with self.connection() as connection:
+            for offset in range(0, len(keys), 200):
+                batch = keys[offset:offset + 200]
+                placeholders = ",".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"""SELECT l.identity_key, o.* FROM file_origin_links AS l
+                        JOIN file_origins AS o ON o.origin_key=l.origin_key
+                        WHERE l.identity_key IN ({placeholders}) ORDER BY o.origin_key""",
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    matched.add(row["identity_key"])
+                    origins[row["origin_key"]] = {
+                        name: row[name] for name in (
+                            "origin_key", "detail_url", "site_id", "downloader_id", "info_hash"
+                        )
+                    }
+                known = known or bool(rows) or bool(connection.execute(
+                    f"SELECT 1 FROM file_hashes WHERE identity_key IN ({placeholders}) LIMIT 1",
+                    batch,
+                ).fetchone())
+        candidates = list(origins.values())
+        urls = {row["detail_url"] for row in candidates}
+        return {
+            "known": known,
+            "source": candidates[0] if len(urls) == 1 and matched == identities else {},
+            "ambiguous": len(urls) > 1,
+        }
+
+    def backfill_file_sources(self, stop_event: threading.Event) -> int:
+        processed = 0
+        while not stop_event.is_set():
+            with self.connection() as connection:
+                rows = connection.execute(
+                    "SELECT media_id FROM file_source_backfill ORDER BY media_id LIMIT 50"
+                ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                if stop_event.is_set():
+                    return processed
+                item = self.get_media_item(row["media_id"])
+                if item:
+                    if not (item.get("details") or {}).get("file_mappings"):
+                        item.setdefault("details", {})["file_mappings"] = self.list_file_mappings(
+                            item.get("downloader_id"), item.get("info_hash")
+                        )
+                    self.preserve_file_sources(item)
+                with self.write_connection() as connection:
+                    connection.execute(
+                        "DELETE FROM file_source_backfill WHERE media_id=?", (row["media_id"],)
+                    )
+                processed += 1
+        return processed
+
+    def save_mapping_upload_result(self, media_id: str, file_index: int, result: dict) -> None:
+        with self.write_connection() as connection:
+            row = connection.execute(
+                "SELECT details_json FROM file_mappings WHERE media_id=? AND file_index=?",
+                (media_id, file_index),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("上传文件映射已不存在，停止入库")
+            details = json.loads(row["details_json"] or "{}")
+            details["remote_upload"] = result
+            connection.execute(
+                "UPDATE file_mappings SET details_json=?, updated_at=? WHERE media_id=? AND file_index=?",
+                (self._json_dump(details), utc_now(), media_id, file_index),
+            )
 
     def replace_file_mappings(
         self,
@@ -1400,11 +1749,23 @@ class SQLiteStore:
             raise ValueError("文件映射缺少下载器或 info-hash")
         now = utc_now()
         prepared = []
+        source_items = {}
         for fallback_index, record in enumerate(records or []):
             try:
                 file_index = int(record.get("file_index", fallback_index))
             except (TypeError, ValueError):
                 file_index = fallback_index
+            media_id = str(record.get("media_id") or "")
+            if media_id not in source_items:
+                item = self.get_media_item(media_id) or {}
+                source_items[media_id] = {
+                    **item,
+                    "details": {
+                        **(item.get("details") or {}),
+                        "file_mappings": [],
+                    },
+                }
+            source_items[media_id]["details"]["file_mappings"].append(record)
             prepared.append((
                 downloader,
                 normalized_hash,
@@ -1422,6 +1783,9 @@ class SQLiteStore:
                 str(record.get("created_at") or now),
                 now,
             ))
+        source_records = [
+            row for item in source_items.values() for row in self._file_source_records(item)
+        ]
         with self.write_connection() as connection:
             connection.execute(
                 "DELETE FROM file_mappings WHERE downloader_id = ? AND info_hash = ?",
@@ -1436,6 +1800,7 @@ class SQLiteStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 prepared,
             )
+            self._save_file_source_records(connection, source_records)
         return self.list_file_mappings(downloader, normalized_hash)
 
     def list_file_mappings(

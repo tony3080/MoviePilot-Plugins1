@@ -562,6 +562,7 @@ class MoviePilotQbGateway:
         torrent_files: Sequence[Any],
         title_override: str = "",
         torrent_meta: Any = None,
+        season_override: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Use the complete MoviePilot naming pipeline for media and STRM paths."""
 
@@ -634,6 +635,9 @@ class MoviePilotQbGateway:
                 file_meta, torrent_meta
             )
             if media_type == "tv":
+                if season_override is not None:
+                    file_meta.begin_season = int(season_override)
+                    file_meta.end_season = None
                 season = getattr(file_meta, "begin_season", None)
                 episode = getattr(file_meta, "begin_episode", None)
                 if season is None:
@@ -942,6 +946,7 @@ class QbSyncService:
         downloader_id: object,
         info_hash: object,
         manual_override: Optional[Dict[str, Any]] = None,
+        manual_labels: Optional[Dict[str, Any]] = None,
         *,
         schedule_delete: bool = False,
         completion_confirmed: bool = False,
@@ -980,6 +985,7 @@ class QbSyncService:
             raw=raw,
             force_recognition=True,
             manual_override=manual_override,
+            manual_labels=manual_labels,
             scope=scope,
             schedule_delete=schedule_delete,
             completion_confirmed=completion_confirmed,
@@ -1007,6 +1013,7 @@ class QbSyncService:
         self,
         media_id: object,
         manual_override: Optional[Dict[str, Any]] = None,
+        manual_labels: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Refresh a library card from persisted local files without querying qB."""
 
@@ -1030,6 +1037,29 @@ class QbSyncService:
         local_files = _saved_local_torrent_files(item, saved_mappings)
         if not local_files:
             raise RuntimeError("已保存的本地媒体文件不存在，无法重新识别")
+        if isinstance(manual_labels, dict):
+            from .rss_rename import transform_name
+            renamed_files = []
+            for file in local_files:
+                current = Path(file["current_source_path"])
+                new_name = transform_name(
+                    current.name,
+                    is_file=True,
+                    add_cn=bool(manual_labels.get("mandarin")),
+                    add_fx=bool(manual_labels.get("effects")),
+                )
+                target = current.with_name(new_name)
+                if target != current:
+                    if target.exists() and target.resolve() != current.resolve():
+                        raise RuntimeError(f"本地重命名目标已存在：{target}")
+                    current.rename(target)
+                renamed_files.append({
+                    **file,
+                    "name": PurePosixPath(file["name"].replace("\\", "/"))
+                    .with_name(target.name).as_posix(),
+                    "current_source_path": str(target.resolve(strict=True)),
+                })
+            local_files = renamed_files
 
         refreshed_source_path = _refreshed_item_source_path(item, local_files)
         if refreshed_source_path:
@@ -1102,6 +1132,8 @@ class QbSyncService:
                     media,
                     local_files,
                     torrent_meta=meta,
+                    **({"season_override": override["season"]}
+                       if override.get("season") is not None else {}),
                 )
                 path_plan = self.library_layout.plan(
                     source_path=str(item.get("source_path") or ""),
@@ -1125,6 +1157,8 @@ class QbSyncService:
                         local_files,
                         title_override=inventory_title,
                         torrent_meta=meta,
+                        **({"season_override": override["season"]}
+                           if override.get("season") is not None else {}),
                     )
                     path_plan = self.library_layout.plan(
                         source_path=str(item.get("source_path") or ""),
@@ -1195,6 +1229,18 @@ class QbSyncService:
             "recognized_title": recognized_media_title,
             "inventory_title": inventory_title,
         })
+        if isinstance(manual_labels, dict):
+            details["site_labels"] = {
+                **dict(details.get("site_labels") or {}),
+                "source": "manual",
+                "manual_override": True,
+                "mandarin": bool(manual_labels.get("mandarin")),
+                "effects": bool(manual_labels.get("effects")),
+                "mandarin_allowed": bool(manual_labels.get("mandarin")),
+                "mandarin_pending": False,
+                "mandarin_applied": bool(manual_labels.get("mandarin")),
+            }
+            details["manual_labels"] = details["site_labels"]
         previous_state = str(item.get("state") or "")
         state = preserve_refresh_workflow_state(previous_state, state)
         previous_failure = str(item.get("failure_code") or "")
@@ -1624,6 +1670,7 @@ class QbSyncService:
         raw: Dict[str, Any],
         force_recognition: bool,
         manual_override: Optional[Dict[str, Any]] = None,
+        manual_labels: Optional[Dict[str, Any]] = None,
         scope: Optional[RssTaskQbScope] = None,
         schedule_delete: bool = False,
         completion_confirmed: bool = False,
@@ -1718,9 +1765,25 @@ class QbSyncService:
                 state=hr_state,
                 completed_at=utc_now() if torrent_completed else None,
             )
-        manual_labels: Dict[str, Any] = dict(
-            (rss_history.get("payload") or {}).get("site_labels") or {}
+        requested_manual_labels = (
+            dict(manual_labels) if isinstance(manual_labels, dict) else None
         )
+        explicit_manual_labels = bool(
+            requested_manual_labels and requested_manual_labels.get("manual_override")
+        )
+        manual_labels: Dict[str, Any] = dict(
+            (rss_history.get("payload") or {}).get("site_labels")
+            or existing_details.get("site_labels")
+            or (persisted_media.get("details") or {}).get("site_labels")
+            or {}
+        )
+        if explicit_manual_labels:
+            manual_labels.update({
+                "source": "manual",
+                "manual_override": True,
+                "mandarin": bool(requested_manual_labels.get("mandarin")),
+                "effects": bool(requested_manual_labels.get("effects")),
+            })
         if task_rule and task_rule.task_type == "manual":
             raw = dict(raw)
             comment_url = _extract_torrent_source_url(raw)
@@ -1775,16 +1838,19 @@ class QbSyncService:
                     min_request_interval_seconds=task_rule.query_interval,
                 )
                 needs_site_refresh = (
-                    force_manual_metadata_refresh
-                    or str(manual_labels.get("source") or "") != "manual"
-                    or (
-                        task_rule.add_chinese_title
-                        and not str(manual_labels.get("chinese_title") or "").strip()
-                    )
-                    or not re.search(
-                        r"/details\.php\?[^\s]*\bid=\d+",
-                        str(manual_labels.get("request_url_masked") or ""),
-                        flags=re.IGNORECASE,
+                    not explicit_manual_labels
+                    and (
+                        force_manual_metadata_refresh
+                        or str(manual_labels.get("source") or "") != "manual"
+                        or (
+                            task_rule.add_chinese_title
+                            and not str(manual_labels.get("chinese_title") or "").strip()
+                        )
+                        or not re.search(
+                            r"/details\.php\?[^\s]*\bid=\d+",
+                            str(manual_labels.get("request_url_masked") or ""),
+                            flags=re.IGNORECASE,
+                        )
                     )
                 )
                 if needs_site_refresh:
@@ -1867,7 +1933,7 @@ class QbSyncService:
                         rename_enabled=bool(task_rule.rename_rules),
                         rename_rules=task_rule.rename_rules,
                         add_chinese_title=task_rule.add_chinese_title,
-                        add_cn=False,
+                        add_cn=bool(manual_labels.get("mandarin")),
                         add_fx=bool(manual_labels.get("effects")),
                     )
                     manual_labels["rename"] = rename_result
@@ -1909,6 +1975,47 @@ class QbSyncService:
                 if stop_event and stop_event.is_set():
                     raise RuntimeError("手动添加处理已停止") from error
                 manual_labels = {"status": "failed", "reason": str(error)[:500]}
+        if explicit_manual_labels and not (
+            task_rule and task_rule.task_type == "manual" and task_rule.site_id
+        ):
+            try:
+                from .rss_rename import QbSourceRenameService
+                server = self.gateway.get_server(downloader.name)
+                rename_result = QbSourceRenameService(self.gateway).apply(
+                    server,
+                    info_hash,
+                    rss_title=title,
+                    rename_enabled=False,
+                    rename_rules="",
+                    add_chinese_title=False,
+                    add_cn=bool(manual_labels.get("mandarin")),
+                    add_fx=bool(manual_labels.get("effects")),
+                )
+                manual_labels["rename"] = rename_result
+                if rename_result.get("status") in {"renamed", "unchanged"}:
+                    display_name = _rename_result_display_name(rename_result)
+                    if display_name:
+                        self.gateway.rename_torrent_name(server, info_hash, display_name)
+                        title = display_name
+                        raw["title"] = display_name
+                        raw["name"] = display_name
+                manual_labels.update({
+                    "mandarin_allowed": bool(manual_labels.get("mandarin")),
+                    "mandarin_pending": False,
+                    "mandarin_applied": bool(manual_labels.get("mandarin")),
+                })
+            except Exception as error:
+                manual_labels["rename"] = {
+                    "status": "failed",
+                    "error": str(error)[:500],
+                }
+            history_payload = dict(rss_history.get("payload") or {})
+            history_payload["site_labels"] = manual_labels
+            self.store.upsert_rss_history({
+                **rss_history,
+                "payload": history_payload,
+                "updated_at": utc_now(),
+            })
         import_enabled = bool(task_rule and task_rule.import_enabled)
         completion_requires_processing = _completion_requires_processing(
             task_rule, rss_history
@@ -2082,7 +2189,9 @@ class QbSyncService:
                         downloader.name, info_hash
                     )
                     inventory_plan = self.gateway.plan_inventory_files(
-                        media, torrent_files, torrent_meta=meta
+                        media, torrent_files, torrent_meta=meta,
+                        **({"season_override": override["season"]}
+                           if override.get("season") is not None else {}),
                     )
                     path_plan = self.library_layout.plan(
                         source_path=content_path,
@@ -2106,6 +2215,8 @@ class QbSyncService:
                             torrent_files,
                             title_override=inventory_title,
                             torrent_meta=meta,
+                            **({"season_override": override["season"]}
+                               if override.get("season") is not None else {}),
                         )
                         path_plan = self.library_layout.plan(
                             source_path=content_path,
@@ -2141,6 +2252,9 @@ class QbSyncService:
                         expected_files=inventory_plan.get("expected_files") or [],
                         path_plan=path_plan,
                         inventory_details=inventory_details,
+                    )
+                    file_mappings = bind_local_source_paths(
+                        file_mappings, local_torrent_files
                     )
                     mapping_refresh_succeeded = True
                 except Exception as error:
@@ -2213,7 +2327,7 @@ class QbSyncService:
             },
             "qb_delete": qb_delete,
             "manual_labels": manual_labels,
-            "site_labels": (rss_history.get("payload") or {}).get("site_labels") or {},
+            "site_labels": manual_labels,
         }
         target_name = ""
         if path_plan.get("inventory_files"):
@@ -2318,6 +2432,11 @@ class QbSyncService:
                         details=hr_details,
                     )
         if create_candidate and not imported_record:
+            if not details.get("file_mappings"):
+                details["source_files"] = [
+                    row["current_source_path"] for row in local_torrent_files
+                    if row.get("current_source_path")
+                ]
             self.store.upsert_media_item({
                 "id": media_id,
                 "state": media_state,
@@ -2344,7 +2463,7 @@ class QbSyncService:
                 "rolled_back": bool(existing_media.get("rolled_back")),
                 "details": details,
                 "updated_at": now,
-            })
+            }, prepare_hashes=not bool(existing_media))
         elif not imported_record:
             self.store.delete_media_item(media_id)
         should_persist_mappings = bool(
@@ -3049,18 +3168,21 @@ def resolve_current_source_path(
     source_relative_path: str,
 ) -> str:
     source = PurePosixPath(str(source_relative_path or "").replace("\\", "/"))
-    save_path = str(torrent.get("save_path") or "").strip().replace("\\", "/")
-    if save_path:
-        return PurePosixPath(save_path).joinpath(source).as_posix()
-
     content_value = str(
         torrent.get("content_path") or torrent.get("path") or ""
     ).strip().replace("\\", "/")
+    content = PurePosixPath(content_value)
+    if (
+        content_value
+        and len(source.parts) == 1
+        and content.name.casefold() == source.name.casefold()
+    ):
+        return content.as_posix()
+    save_path = str(torrent.get("save_path") or "").strip().replace("\\", "/")
+    if save_path:
+        return PurePosixPath(save_path).joinpath(source).as_posix()
     if not content_value:
         return source.as_posix()
-    content = PurePosixPath(content_value)
-    if content.name.casefold() == source.name.casefold() and len(source.parts) == 1:
-        return content.as_posix()
     if source.parts and content.name.casefold() == source.parts[0].casefold():
         return content.parent.joinpath(source).as_posix()
     return content.joinpath(source).as_posix()
@@ -3345,10 +3467,12 @@ def _valid_tmdb_id(value: object) -> bool:
 
 
 def preserve_refresh_workflow_state(previous_state: object, refreshed_state: object) -> str:
-    """Keep queue and rollback states while refreshing recognition data."""
+    """Keep queued work and incomplete rollbacks while refreshing inventory."""
 
     previous = str(previous_state or "").strip()
     refreshed = str(refreshed_state or "").strip()
+    if previous == "rolled_back" and refreshed == "existing":
+        return refreshed
     if previous in {"pending", "pending_import", "rolled_back"} and refreshed in {
         "identified",
         "existing",

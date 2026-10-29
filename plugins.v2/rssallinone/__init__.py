@@ -27,6 +27,8 @@ from .external_controls import (
     ScanSystemClient,
 )
 from .file_manager import FILE_BATCH_TASK_TYPE, FileManagerError, LocalFileManagerService
+from .file_hashes import FileHashCache, FileHashWorker
+from .file_sources import FileSourceIndexer
 from .inventory import LocalInventoryChecker
 from .layout import LibraryLayout, default_layout_config
 from .media_actions import (
@@ -35,6 +37,7 @@ from .media_actions import (
     MediaInventoryRefreshService,
 )
 from .pending_import import PendingImportConfig, PendingImportCoordinator
+from .qb_presence import QbPresenceCheckService
 from .qb_sync import (
     MoviePilotQbGateway,
     QB_TASK_TYPE,
@@ -55,7 +58,7 @@ from .rss_site_labels import (
     count_chd_hr_torrent_links,
     parse_chd_hr_total_count,
 )
-from .rss_tasks import normalize_rss_tasks
+from .rss_tasks import build_rss_trigger, normalize_rss_tasks
 
 
 PLUGIN_ID = "RssAllInOne"
@@ -85,7 +88,7 @@ class RssAllInOne(_PluginBase):
         "https://raw.githubusercontent.com/tony3080/MoviePilot-Plugins1/"
         "main/plugins.v2/rssallinone/assets/dragon.png"
     )
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.13"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "rssallinone_"
@@ -129,6 +132,7 @@ class RssAllInOne(_PluginBase):
         self._manual_refresh_run_mode = "all"
         self._manual_mandarin_repair_lock = threading.Lock()
         self._qb_delete_lock = threading.Lock()
+        self._qb_presence_lock = threading.Lock()
         self._rss_queue_lock = threading.RLock()
         self._rss_active_run_ids: Dict[str, str] = {}
         self._rss_active_downloaders: Dict[str, str] = {}
@@ -145,6 +149,8 @@ class RssAllInOne(_PluginBase):
         self._last_emby_callback_probe: Dict[str, Any] = {}
         self._source_routes: List[Dict[str, Any]] = []
         self._library_layout = LibraryLayout("", [])
+        self._hash_worker = None
+        self._source_indexer = None
 
     def init_plugin(self, config: dict = None) -> None:
         config = config or {}
@@ -212,6 +218,22 @@ class RssAllInOne(_PluginBase):
         try:
             self._store = SQLiteStore(self._database_path())
             self._store.initialize()
+            if self._source_indexer is not None:
+                self._source_indexer.stop.set()
+            self._source_indexer = None
+            if self._enabled:
+                self._source_indexer = FileSourceIndexer(self._store, logger)
+                self._source_indexer.thread.start()
+            if self._hash_worker is not None:
+                self._hash_worker.cache.stop.set()
+            self._hash_worker = None
+            if self._enabled:
+                self._hash_worker = FileHashWorker(
+                    FileHashCache(self._store, threading.Event(), logger)
+                )
+                self._store.on_media_files_changed = self._hash_worker.submit
+                for media_id in self._store.hash_candidate_ids():
+                    self._hash_worker.submit(media_id)
             recovered = self._store.recover_incomplete_tasks(
                 preserve_queued_types={RSS_RUN_TASK_TYPE}
             )
@@ -272,10 +294,10 @@ class RssAllInOne(_PluginBase):
                 task_type = str(config.get("task_type") or "rss").strip().casefold()
                 if task_type == "rss" and rss_url and rss_cron:
                     try:
-                        trigger = CronTrigger.from_crontab(rss_cron)
-                    except (TypeError, ValueError) as error:
+                        trigger = build_rss_trigger(rss_cron)
+                    except (TypeError, ValueError, OverflowError) as error:
                         logger.error(
-                            f"RSS一条龙：任务 {task_name} 的 RSS CRON 无效：{error}"
+                            f"RSS一条龙：任务 {task_name} 的 RSS 调度无效：{error}"
                         )
                     else:
                         services.append({
@@ -322,7 +344,7 @@ class RssAllInOne(_PluginBase):
                             "func_kwargs": {"task_id": task_id},
                         })
         except ImportError:
-            logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS CRON")
+            logger.error("RSS一条龙：缺少 APScheduler，无法注册 RSS 调度")
         try:
             from apscheduler.triggers.cron import CronTrigger
 
@@ -368,6 +390,15 @@ class RssAllInOne(_PluginBase):
         self._stop_event.set()
         self._rss_stop_event.set()
         self._manual_refresh_stop_event.set()
+        if self._source_indexer is not None:
+            self._source_indexer.stop.set()
+            if self._source_indexer.thread is not threading.current_thread():
+                self._source_indexer.thread.join(timeout=3)
+        if self._hash_worker is not None:
+            self._hash_worker.cache.stop.set()
+            worker = self._hash_worker.thread
+            if worker is not None and worker is not threading.current_thread():
+                worker.join(timeout=3)
         self._store = None
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -439,6 +470,7 @@ class RssAllInOne(_PluginBase):
             self._api("/torrents", self.api_torrents, "GET", "QB 管理列表"),
             self._api("/qb/downloaders", self.api_qb_downloaders, "GET", "可用 qB 节点"),
             self._api("/qb/refresh", self.api_qb_refresh, "POST", "刷新并识别 QB 任务"),
+            self._api("/qb/check-presence", self.api_qb_check_presence, "POST", "核对待下载任务并清理不存在的卡片"),
             self._api("/layout", self.api_layout, "GET", "目录规划配置"),
             self._api("/rss/tasks", self.api_rss_tasks, "GET", "RSS 任务列表"),
             self._api("/rss/tasks", self.api_save_rss_tasks, "POST", "保存 RSS 任务"),
@@ -567,6 +599,33 @@ class RssAllInOne(_PluginBase):
         force = self._as_bool((payload or {}).get("force_recognition", False))
         return self._start_qb_refresh(force_recognition=force, source="manual")
 
+    def api_qb_check_presence(
+        self, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self._qb_presence_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有 qB 任务核对正在执行"}
+        try:
+            data = payload or {}
+            result = QbPresenceCheckService(
+                self._require_store(), MoviePilotQbGateway
+            ).check(
+                downloader_id=str(data.get("downloader_id") or "").strip(),
+                keyword=str(data.get("keyword") or "").strip(),
+            )
+            logger.info(f"RSS一条龙：qB 任务核对完成：{result['message']}")
+            for error in result["errors"]:
+                logger.warning(
+                    "RSS一条龙：qB 任务核对未完成：%s/%s：%s",
+                    error["downloader_id"], error.get("info_hash", ""),
+                    error["message"],
+                )
+            return result
+        except Exception as error:
+            logger.error(f"RSS一条龙：qB 任务核对失败：{error}", exc_info=True)
+            return {"success": False, "message": f"qB 任务核对失败：{error}"}
+        finally:
+            self._qb_presence_lock.release()
+
     def api_qb_item_refresh(
         self, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
@@ -603,6 +662,15 @@ class RssAllInOne(_PluginBase):
         category = self._library_layout.canonical_category(
             str(data.get("category") or "").strip()
         )
+        raw_labels = data.get("manual_labels")
+        manual_labels = None
+        if isinstance(raw_labels, dict):
+            manual_labels = {
+                "source": "manual",
+                "manual_override": True,
+                "mandarin": bool(raw_labels.get("mandarin")),
+                "effects": bool(raw_labels.get("effects")),
+            }
         try:
             media_id = str(data.get("media_id") or "").strip()
             media_item = self._require_store().get_media_item(media_id) if media_id else None
@@ -622,6 +690,7 @@ class RssAllInOne(_PluginBase):
                         "season": season,
                         "category": category,
                     },
+                    manual_labels=manual_labels,
                     refresh_media_id=media_id,
                 )
                 return {
@@ -630,15 +699,28 @@ class RssAllInOne(_PluginBase):
                     "item": result.get("item"),
                 }
             if media_item:
-                item = self._qb_sync_service().refresh_media_from_saved_files(
-                    media_id,
-                    manual_override={
-                        "media_type": media_type,
-                        "tmdb_id": tmdb_id,
-                        "season": season,
-                        "category": category,
-                    },
-                )
+                override = {
+                    "media_type": media_type,
+                    "tmdb_id": tmdb_id,
+                    "season": season,
+                    "category": category,
+                }
+                if manual_labels and media_item.get("downloader_id") and media_item.get("info_hash"):
+                    try:
+                        item = self._qb_sync_service().refresh_item(
+                            media_item.get("downloader_id"),
+                            media_item.get("info_hash"),
+                            manual_override=override,
+                            manual_labels=manual_labels,
+                        )
+                    except Exception:
+                        item = self._qb_sync_service().refresh_media_from_saved_files(
+                            media_id, manual_override=override, manual_labels=manual_labels,
+                        )
+                else:
+                    item = self._qb_sync_service().refresh_media_from_saved_files(
+                        media_id, manual_override=override, manual_labels=manual_labels,
+                    )
                 return {
                     "success": True,
                     "message": "已按指定信息重新识别",
@@ -653,6 +735,7 @@ class RssAllInOne(_PluginBase):
                     "season": season,
                     "category": category,
                 },
+                manual_labels=manual_labels,
             )
             return {
                 "success": True,
@@ -1127,7 +1210,10 @@ class RssAllInOne(_PluginBase):
                 ),
                 watched_media_ids={
                     watch.get("media_id") for watch in active_watches
-                },
+                } | set(
+                    ((pending_status.get("batch") or {}).get("details") or {})
+                    .get("selected_media_ids") or []
+                ),
             )
             if conflict:
                 return {"success": False, "message": conflict}
@@ -1138,8 +1224,12 @@ class RssAllInOne(_PluginBase):
         if not self._media_action_lock.acquire(blocking=False):
             return {"success": False, "message": "已有入库管理操作正在执行"}
         try:
+            if action == "force_upload":
+                return self._start_direct_import(media_ids, allow_full_upload=True)
+            if action == "import":
+                return self._start_direct_import(media_ids)
             result = MediaActionService(
-                self._require_store(), self._library_layout
+                self._require_store(), self._library_layout,
             ).execute(action, media_ids)
             if result["success"]:
                 result["message"] = f"操作完成：成功 {result['succeeded']} 项"
@@ -3274,6 +3364,24 @@ class RssAllInOne(_PluginBase):
             stop_event=self._stop_event,
             logger=logger,
             notify=self._notify_pending_import,
+            remote_upload=self._media_upload_service(),
+        )
+
+    def _media_upload_service(self):
+        from .media_upload import MediaUploadService, UploadPacing
+        if getattr(self, "_media_upload_pacing", None) is None:
+            self._media_upload_pacing = UploadPacing()
+        return MediaUploadService(
+            self._require_store(),
+            CloudDriveClient(self._cd2_grpc_addr, self._cd2_token),
+            self._cd2_staging_roots(),
+            self._cd2_dest_root,
+            self._stop_event,
+            logger,
+            timeout=self._bounded_int(
+                self._runtime_config.get("cd2_card_timeout"), 1800, 60, 7200
+            ),
+            pacing=self._media_upload_pacing,
         )
 
     def _cd2_staging_roots(self) -> List[str]:
@@ -3303,7 +3411,7 @@ class RssAllInOne(_PluginBase):
             return {"success": True, "message": "当前没有待入库项目", **status}
         if not status.get("batch"):
             try:
-                if not self._scan_callback_secret:
+                if trigger_source != "manual" and not self._scan_callback_secret:
                     raise RuntimeError("未配置 Emby 扫库回调密钥")
                 self._pending_coordinator().preflight(
                     manage_external_switches=(
@@ -3324,6 +3432,34 @@ class RssAllInOne(_PluginBase):
             "success": True,
             "message": "待入库队列已启动",
             **status,
+        }
+
+    def _start_direct_import(
+        self, media_ids: List[str], *, allow_full_upload: bool = False,
+    ) -> Dict[str, Any]:
+        if not self._enabled:
+            return {"success": False, "message": "插件尚未启用"}
+        if not self._pending_import_lock.acquire(blocking=False):
+            return {"success": False, "message": "已有入库队列正在执行，请等待完成"}
+        try:
+            batch = self._pending_coordinator().queue_direct(
+                media_ids, allow_full_upload=allow_full_upload,
+            )
+            worker = threading.Thread(
+                target=self._run_pending_import,
+                kwargs={"trigger_source": "direct"},
+                name="RssAllInOneDirectImport", daemon=True,
+            )
+            worker.start()
+        except Exception:
+            self._pending_import_lock.release()
+            raise
+        return {
+            "success": True, "accepted": True, "batch_id": batch["id"],
+            "message": (
+                f"已提交 {len(batch['details']['selected_media_ids'])} 项，后台串行创建硬链接并上传 CD2"
+                + ("；优先秒传，无法秒传时继续真实上传" if allow_full_upload else "")
+            ),
         }
 
     def _run_pending_import(self, *, trigger_source: str) -> None:

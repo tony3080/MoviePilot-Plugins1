@@ -41,6 +41,7 @@ const qbView = ref('pending')
 const qbKeyword = ref('')
 const qbMobileFiltersOpen = ref(false)
 const qbTask = ref(null)
+const qbPresenceChecking = ref(false)
 const rssTestingTaskId = ref('')
 const rssRunningTaskId = ref('')
 const manualRunningMode = ref('')
@@ -149,7 +150,7 @@ const capabilityPhaseLabels = {
   host_runtime: '使用 MoviePilot 内置能力',
   enqueue: '读取 RSS 并推送 qB',
   moviepilot_media_type_layout: '按 MoviePilot 类型规划目录',
-  upload_monitoring: '监控 CloudDrive2 秒传状态',
+  upload_monitoring: '监控 CloudDrive2 上传状态',
   connection_pending: '等待连接配置',
   batch_switch_guard: '入库批次开关保护',
   refresh_callback_restore: '扫库回调后恢复开关',
@@ -935,6 +936,7 @@ async function pollQbTask(taskId) {
 }
 
 async function refreshQb() {
+  if (qbPresenceChecking.value) return
   errorMessage.value = ''
   try {
     const response = unwrap(
@@ -959,8 +961,36 @@ async function refreshQb() {
   }
 }
 
+async function checkQbPresence() {
+  if (qbPresenceChecking.value || qbRefreshing.value || batchAction.value) return
+  qbPresenceChecking.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const response = unwrap(
+      await props.api.post('plugin/RssAllInOne/qb/check-presence', {
+        downloader_id: qbDownloader.value,
+        keyword: (qbKeyword.value || '').trim(),
+      }),
+    ) || {}
+    clearSelection()
+    await loadActive()
+    if (response.success) {
+      successMessage.value = response.message
+    } else {
+      const details = (response.errors || []).slice(0, 3)
+        .map(item => `${item.downloader_id}：${item.message}`).join('；')
+      errorMessage.value = `${response.message || '核对任务失败'}${details ? `；${details}` : ''}`
+    }
+  } catch (error) {
+    errorMessage.value = error?.message || '核对任务失败'
+  } finally {
+    qbPresenceChecking.value = false
+  }
+}
+
 async function deleteSelectedQbTasks() {
-  if (!selectedItems.value.length || batchAction.value) return
+  if (!selectedItems.value.length || batchAction.value || qbPresenceChecking.value) return
   batchAction.value = 'delete_qb_task'
   errorMessage.value = ''
   successMessage.value = ''
@@ -1130,6 +1160,7 @@ async function markUnidentified(item) {
 const mediaActionLabels = {
   queue_import: '转待入库',
   import: '入库',
+  force_upload: '强制上传',
   delete_source: '删源',
   delete_hardlinks: '只删硬链接',
   delete_both: '删除硬链接和源文件',
@@ -1139,6 +1170,9 @@ async function runMediaAction(action) {
   if (!selectedItems.value.length || batchAction.value) return
   const label = mediaActionLabels[action] || action
   const destructive = ['delete_source', 'delete_hardlinks', 'delete_both'].includes(action)
+  if (action === 'force_upload') {
+    if (!window.confirm(`对选中的 ${selectedItems.value.length} 项优先尝试秒传，无法秒传时继续真实上传，可能传输完整文件。\n\n确定执行“${label}”吗？`)) return
+  }
   if (destructive) {
     const warning = action === 'delete_source'
       ? '将删除选中卡片持久化映射中的源文件，并移除插件记录；不会删除硬链接。'
@@ -1162,6 +1196,8 @@ async function runMediaAction(action) {
     if (!response?.success && !response?.partial) {
       throw new Error(response?.message || `${label}失败`)
     }
+    clearSelection()
+    await loadActive()
     if (response.partial) {
       const failures = (response.results || [])
         .filter(item => !item.success)
@@ -1172,8 +1208,6 @@ async function runMediaAction(action) {
     } else {
       successMessage.value = response.message || `${label}完成`
     }
-    clearSelection()
-    await loadActive()
   } catch (error) {
     errorMessage.value = error?.message || `${label}失败`
   } finally {
@@ -1494,13 +1528,19 @@ onBeforeUnmount(() => {
               :items="rssTaskFilterOptions"
               label="RSS任务"
               multiple
-              chips
-              closable-chips
               clearable
               density="compact"
               hide-details
               class="rss-task-filter mobile-filter-detail"
-            />
+            >
+              <template #selection="{ item, index }">
+                <span
+                  v-if="index === 0"
+                  class="rss-task-filter-summary"
+                  :title="mediaRssTaskIds.length === 1 ? item.title : undefined"
+                >{{ mediaRssTaskIds.length === 1 ? item.title : `已选 ${mediaRssTaskIds.length} 项` }}</span>
+              </template>
+            </VSelect>
             <VSpacer />
             <span class="management-total text-caption text-medium-emphasis">{{ total }} 项</span>
             <div class="toolbar-actions">
@@ -1599,6 +1639,15 @@ onBeforeUnmount(() => {
               :loading="batchAction === 'import'"
               @click="runMediaAction('import')"
             >入库</VBtn>
+            <VBtn
+              size="small"
+              variant="tonal"
+              color="warning"
+              prepend-icon="mdi-cloud-upload-outline"
+              :disabled="!selectionCanImport || Boolean(batchAction)"
+              :loading="batchAction === 'force_upload'"
+              @click="runMediaAction('force_upload')"
+            >强制上传</VBtn>
             <VBtn
               size="small"
               variant="tonal"
@@ -1717,12 +1766,26 @@ onBeforeUnmount(() => {
           />
           <VSpacer />
           <span class="management-total text-caption text-medium-emphasis">{{ total }} 项</span>
+          <VTooltip v-if="qbView === 'pending'" text="核对当前筛选范围内所有待下载卡片，仅清理 qB 中已不存在的任务卡片">
+            <template #activator="{ props: tooltipProps }">
+              <VBtn
+                v-bind="tooltipProps"
+                icon="mdi-list-status"
+                size="small"
+                variant="tonal"
+                :loading="qbPresenceChecking"
+                :disabled="qbPresenceChecking || qbRefreshing || Boolean(batchAction) || loading"
+                aria-label="核对任务"
+                @click="checkQbPresence"
+              />
+            </template>
+          </VTooltip>
           <VBtn
             color="primary"
             variant="tonal"
             prepend-icon="mdi-refresh"
             :loading="qbRefreshing"
-            :disabled="qbRefreshing || !overview.plugin?.enabled"
+            :disabled="qbRefreshing || qbPresenceChecking || !overview.plugin?.enabled"
             class="desktop-action-button"
             @click="refreshQb"
           >
@@ -1738,7 +1801,7 @@ onBeforeUnmount(() => {
                 variant="tonal"
                 class="mobile-action-button"
                 :loading="qbRefreshing"
-                :disabled="qbRefreshing || !overview.plugin?.enabled"
+                :disabled="qbRefreshing || qbPresenceChecking || !overview.plugin?.enabled"
                 aria-label="刷新识别"
                 @click="refreshQb"
               />
@@ -1786,7 +1849,7 @@ onBeforeUnmount(() => {
                     variant="tonal"
                     prepend-icon="mdi-delete-outline"
                     :loading="batchAction === 'delete_qb_task'"
-                    :disabled="!selectedItems.length || Boolean(batchAction) || qbRefreshing"
+                    :disabled="!selectedItems.length || Boolean(batchAction) || qbRefreshing || qbPresenceChecking"
                     @click="deleteSelectedQbTasks"
                   >删除任务</VBtn>
                 </template>
@@ -2337,6 +2400,14 @@ onBeforeUnmount(() => {
   flex: 0 1 300px;
   min-width: 220px;
   max-width: 340px;
+}
+
+.rss-task-filter-summary {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-count {

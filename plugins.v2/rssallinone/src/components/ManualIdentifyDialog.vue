@@ -9,7 +9,10 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'save'])
-const form = reactive({ media_type: 'tv', tmdb_id: '', season: 1, category: '' })
+const form = reactive({
+  media_type: 'tv', tmdb_id: '', season: 1, category: '',
+  mandarin: false, effects: false,
+})
 const open = computed({
   get: () => props.modelValue,
   set: value => emit('update:modelValue', value),
@@ -27,6 +30,9 @@ watch(() => [props.modelValue, props.item], ([visible]) => {
   form.tmdb_id = override.tmdb_id || props.item.tmdb_id || ''
   form.season = override.season ?? props.item.season ?? 1
   form.category = override.category || ''
+  const labels = props.item.details?.site_labels || props.item.details?.manual_labels || {}
+  form.mandarin = Boolean(labels.mandarin)
+  form.effects = Boolean(labels.effects)
 }, { immediate: true })
 
 function submit() {
@@ -38,6 +44,12 @@ function submit() {
     tmdb_id: Number(form.tmdb_id || 0),
     season: form.media_type === 'tv' ? Number(form.season || 0) : null,
     category: form.category,
+    manual_labels: {
+      source: 'manual',
+      manual_override: true,
+      mandarin: Boolean(form.mandarin),
+      effects: Boolean(form.effects),
+    },
   })
 }
 </script>
@@ -87,6 +99,14 @@ function submit() {
           <span>MoviePilot 自动分类</span>
           <strong>{{ automaticCategory }}</strong>
         </div>
+        <div class="manual-labels">
+          <span class="manual-labels-title">手动添加标签</span>
+          <div class="manual-labels-options">
+            <VCheckbox v-model="form.mandarin" label="国配" hide-details density="compact" />
+            <VCheckbox v-model="form.effects" label="特效" hide-details density="compact" />
+          </div>
+          <small>标签会写入文件名，并按“国配-特效-REMUX/版本”顺序插入。</small>
+        </div>
       </VCardText>
       <VDivider />
       <VCardActions class="dialog-actions">
@@ -115,5 +135,9 @@ function submit() {
 .type-toggle :deep(.v-btn) { flex: 1 1 50%; }
 .automatic-category { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 6px; font-size: .82rem; }
 .automatic-category span { color: rgba(var(--v-theme-on-surface), .62); }
+.manual-labels { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 6px; }
+.manual-labels-title { color: rgba(var(--v-theme-on-surface), .62); font-size: .82rem; }
+.manual-labels-options { display: flex; gap: 18px; }
+.manual-labels small { color: rgba(var(--v-theme-on-surface), .56); font-size: .75rem; }
 .dialog-actions { justify-content: flex-end; padding: 12px 18px; }
 </style>

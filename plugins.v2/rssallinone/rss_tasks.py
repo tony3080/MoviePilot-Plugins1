@@ -86,6 +86,28 @@ INTEGER_LIMITS = {
 TASK_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
+def rss_interval_minutes(value: object) -> int | None:
+    schedule = str(value).strip() if value is not None else ""
+    if re.fullmatch(r"[0-9]+", schedule):
+        minutes = int(schedule)
+        if minutes > 0:
+            return minutes
+    elif not schedule or len(schedule.split()) > 1:
+        return None
+    raise ValueError("RSS 调度请填写正整数分钟数或五段 Cron 表达式")
+
+
+def build_rss_trigger(value: object):
+    minutes = rss_interval_minutes(value)
+    if minutes is not None:
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        return IntervalTrigger(minutes=minutes)
+    from apscheduler.triggers.cron import CronTrigger
+
+    return CronTrigger.from_crontab(str(value or "").strip())
+
+
 def default_rss_task(position: int = 0) -> Dict[str, Any]:
     return {
         "id": uuid.uuid4().hex,
@@ -139,11 +161,16 @@ def normalize_rss_task(item: Dict[str, Any], position: int) -> Dict[str, Any]:
     # Path routing is configured globally by the plugin, not per RSS task.
     normalized_config.pop("path_mappings", None)
     for field in TEXT_FIELDS:
-        normalized_config[field] = str(normalized_config.get(field) or "").strip()
+        value = normalized_config.get(field)
+        normalized_config[field] = str(
+            value if field == "rss_cron" and value is not None else value or ""
+        ).strip()
     if not normalized_config.get("hr_cron"):
         normalized_config["hr_cron"] = DEFAULT_RSS_TASK_CONFIG["hr_cron"]
     task_type = str(normalized_config.get("task_type") or "rss").strip().casefold()
     normalized_config["task_type"] = "manual" if task_type in {"manual", "手动", "手动添加"} else "rss"
+    if normalized_config["task_type"] == "rss":
+        rss_interval_minutes(normalized_config["rss_cron"])
     for field in BOOLEAN_FIELDS:
         normalized_config[field] = _as_bool(normalized_config.get(field))
     for field, (minimum, maximum) in INTEGER_LIMITS.items():

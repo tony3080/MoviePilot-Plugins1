@@ -450,6 +450,71 @@ class RssExecutionServiceTest(unittest.TestCase):
 
 
 class SiteLabelParsingTest(unittest.TestCase):
+    def test_search_title_handles_nested_and_stray_brackets(self):
+        release = "Saint Clare 2024 1080p Blu-ray Remux AVC DTS-HD MA 5.1-HDS"
+        for title in (
+            f"[圣克莱尔 [简繁英字幕]] {release}",
+            f"{release} [圣克莱尔 [简繁英字幕]]",
+            f"【圣克莱尔 [简繁英字幕]】 {release} ]",
+            f"[圣克莱尔 【简繁英字幕】] {release}",
+            f"<![CDATA[[圣克莱尔 [简繁英字幕]] {release}]]>",
+            f"{release} ]",
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(rss_site_labels.clean_search_title(title), release)
+        self.assertEqual(
+            rss_site_labels.clean_search_title(f"[{release} [简繁英字幕]]"),
+            release,
+        )
+        self.assertEqual(
+            rss_site_labels.clean_search_title("[REMUX] [国语]"),
+            "",
+        )
+        folder = "Battle.Los.Angeles.2011.GER.BluRay.1080p.REMUX.AVC.DTS-HD.MA 5.1-UBits"
+        self.assertEqual(rss_site_labels.clean_search_title(folder), folder)
+
+    def test_hdsky_still_searches_with_detail_url_and_uses_only_selected_row(self):
+        class Gateway:
+            calls = []
+
+            @classmethod
+            def fetch_site_html(cls, url, access):
+                cls.calls.append(url)
+                if "details.php" in url:
+                    raise AssertionError("SKY labels must come from search results")
+                return """
+                    <table class="torrents">
+                      <tr><td><a href="details.php?id=41">Other</a></td></tr>
+                      <tr><td><a href="details.php?id=42">Saint Clare</a>
+                        <span class="optiontag">国配</span>
+                        <span class="optiontag">特效字幕</span>
+                      </td></tr>
+                    </table>
+                """
+
+        access = types.SimpleNamespace(
+            site_key="hdsky", site_url="https://hdsky.me",
+            referer="https://hdsky.me",
+        )
+        labels = rss_site_labels.SiteLabelService(
+            Gateway(), sleeper=lambda _seconds: None,
+        ).detect(
+            access=access,
+            title="[圣克莱尔 [简繁英字幕]] Saint Clare 2024-HDS ]",
+            detail_url="https://hdsky.me/details.php?id=42",
+            torrent_id="42",
+            cn_keywords="国语,国配",
+            recognize_cn=True,
+            recognize_fx=True,
+        )
+        self.assertEqual(
+            Gateway.calls,
+            ["https://hdsky.me/torrents.php?search=Saint%20Clare%202024-HDS"],
+        )
+        self.assertEqual(labels["status"], "matched")
+        self.assertTrue(labels["mandarin"])
+        self.assertTrue(labels["effects"])
+
     def test_ubits_without_detail_url_does_not_search_by_default(self):
         class Gateway:
             calls = []

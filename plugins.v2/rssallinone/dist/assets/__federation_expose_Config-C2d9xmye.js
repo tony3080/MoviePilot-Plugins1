@@ -449,7 +449,7 @@ return (_ctx, _cache) => {
                     _createVNode(_component_VTextField, {
                       modelValue: config.value.cd2_dest_root,
                       "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((config.value.cd2_dest_root) = $event)),
-                      label: "CD2 上传任务目标根目录 *",
+                      label: "CD2 云端上传目标根目录 *",
                       placeholder: "/115/影视库",
                       hint: "优先填 CD2 gRPC 中的云盘路径；填写本机挂载路径时会自动校正",
                       "persistent-hint": ""
@@ -505,7 +505,7 @@ return (_ctx, _cache) => {
               class: "advanced-panels"
             }, {
               default: _withCtx(() => [
-                _createVNode(_component_VExpansionPanel, { title: "CD2 高级监控参数" }, {
+                _createVNode(_component_VExpansionPanel, { title: "CD2 上传与恢复参数" }, {
                   default: _withCtx(() => [
                     _createVNode(_component_VExpansionPanelText, null, {
                       default: _withCtx(() => [
@@ -909,6 +909,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-9f550139"]]);
+const Config = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-6cc3520e"]]);
 
 export { Config as default };

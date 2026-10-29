@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path, PurePosixPath
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +166,21 @@ class MediaActionServiceTest(unittest.TestCase):
             ),
             "",
         )
+
+    def test_force_upload_cannot_target_cards_owned_by_active_import(self) -> None:
+        for kwargs in (
+            {"current_media_id": "card"},
+            {"watched_media_ids": ["card"]},
+        ):
+            self.assertTrue(self.service.pending_batch_action_error(
+                "force_upload", [{"id": "card", "state": "identified"}], **kwargs,
+            ))
+        self.assertTrue(self.service.pending_batch_action_error(
+            "force_upload", [{"id": "card", "state": "importing"}],
+        ))
+        self.assertEqual(self.service.pending_batch_action_error(
+            "force_upload", [{"id": "card", "state": "identified"}],
+        ), "")
 
     def test_realtime_task_cannot_queue_before_link_source_is_ready(self) -> None:
         source = self.root / "CHD" / "Movie.mkv"
@@ -632,6 +648,188 @@ class MediaActionServiceTest(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertIn("拒绝猜测", result["results"][0]["message"])
+
+    def add_unmapped_item(self, media_id, source_root, source_files):
+        self.store.upsert_media_item({
+            "id": media_id,
+            "state": "unidentified",
+            "downloader_id": "qb-main",
+            "info_hash": media_id,
+            "source_path": str(source_root),
+            "details": {"source_files": [str(path) for path in source_files]},
+        })
+
+    def test_unidentified_delete_restores_persisted_single_file(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        self.add_unmapped_item("unknown", source, [source])
+
+        restored = self.service._mappings(
+            self.store.get_media_item("unknown"), allow_source_only=True
+        )
+        self.assertEqual(restored[0]["current_source_path"], str(source))
+        self.assertEqual(restored[0]["local_hardlink_path"], "")
+        self.assertEqual(restored[0]["state"], "source_only")
+        self.assertEqual(
+            self.store.get_media_item("unknown")["details"]["file_mappings"],
+            restored,
+        )
+        result = self.service.execute("delete_source", ["unknown"])
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["results"][0]["deleted"], 1)
+        self.assertFalse(source.exists())
+        self.assertIsNone(self.store.get_media_item("unknown"))
+
+    def test_unidentified_delete_uses_only_saved_files_in_directory(self) -> None:
+        folder = self.root / "Unknown.Show"
+        folder.mkdir()
+        first, second, keep = [folder / name for name in ("E01.mkv", "E02.mkv", "other.mkv")]
+        for path in (first, second, keep):
+            path.write_bytes(b"episode")
+        self.add_unmapped_item("show", folder, [first, second, first])
+
+        result = self.service.execute("delete_source", ["show"])
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["results"][0]["deleted"], 2)
+        self.assertFalse(first.exists())
+        self.assertFalse(second.exists())
+        self.assertTrue(keep.is_file())
+
+    def test_unmapped_shared_source_is_preserved_until_last_owner(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        self.add_unmapped_item("unknown-one", source, [source])
+        self.add_unmapped_item("unknown-two", source, [source])
+
+        first = self.service.execute("delete_source", ["unknown-one"])
+
+        self.assertTrue(first["success"], first)
+        self.assertEqual(first["results"][0]["preserved"], 1)
+        self.assertTrue(source.is_file())
+        second = self.service.execute("delete_source", ["unknown-two"])
+        self.assertTrue(second["success"], second)
+        self.assertEqual(second["results"][0]["deleted"], 1)
+        self.assertFalse(source.exists())
+
+    def test_mapped_source_preserves_reference_from_unmapped_card(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        self.add_item("mapped", [{
+            "source_relative_path": source.name,
+            "source": source,
+            "new_rel": "Movie.mkv",
+            "target": self.root / "links" / "Movie.mkv",
+        }])
+        self.add_unmapped_item("unknown", source, [source])
+
+        result = self.service.execute("delete_source", ["mapped"])
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["results"][0]["preserved"], 1)
+        self.assertTrue(source.is_file())
+
+    def test_unidentified_delete_accepts_already_missing_saved_file(self) -> None:
+        source = self.root / "Missing.mkv"
+        self.add_unmapped_item("missing", source, [source])
+
+        result = self.service.execute("delete_source", ["missing"])
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["results"][0]["missing"], 1)
+
+    def test_source_list_validation_happens_before_deleting_any_file(self) -> None:
+        folder = self.root / "Unknown"
+        folder.mkdir()
+        valid = folder / "Movie.mkv"
+        outside = self.root / "Other.mkv"
+        valid.write_bytes(b"movie")
+        outside.write_bytes(b"other")
+        for invalid in (outside, folder / ".." / outside.name, folder, Path("relative.mkv")):
+            with self.subTest(invalid=invalid):
+                self.add_unmapped_item("unsafe", folder, [valid, invalid])
+                result = self.service.execute("delete_source", ["unsafe"])
+                self.assertFalse(result["success"], result)
+                self.assertTrue(valid.is_file())
+                self.assertTrue(outside.is_file())
+                self.assertIsNotNone(self.store.get_media_item("unsafe"))
+                self.assertEqual(self.store.list_file_mappings("qb-main", "unsafe"), [])
+
+    def test_source_list_cannot_escape_through_symlink(self) -> None:
+        folder = self.root / "Unknown"
+        folder.mkdir()
+        outside = self.root / "Other"
+        outside.mkdir()
+        source = outside / "Movie.mkv"
+        source.write_bytes(b"movie")
+        link = folder / "link"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            self.skipTest("Directory symlinks unavailable")
+        self.add_unmapped_item("symlink", folder, [link / source.name])
+
+        result = self.service.execute("delete_source", ["symlink"])
+
+        self.assertFalse(result["success"], result)
+        self.assertTrue(source.is_file())
+
+    def test_resolved_source_path_must_remain_in_saved_root(self) -> None:
+        folder = self.root / "Unknown"
+        folder.mkdir()
+        source = folder / "Movie.mkv"
+        source.write_bytes(b"movie")
+        self.add_unmapped_item("resolved-outside", folder, [source])
+        resolve = Path.resolve
+
+        def redirected(path, *args, **kwargs):
+            if path == source:
+                return self.root / "Other" / source.name
+            return resolve(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "resolve", redirected):
+            result = self.service.execute("delete_source", ["resolved-outside"])
+
+        self.assertFalse(result["success"], result)
+        self.assertTrue(source.is_file())
+        self.assertEqual(self.store.list_file_mappings("qb-main", "resolved-outside"), [])
+
+    def test_invalid_saved_source_list_cannot_be_used_for_deletion(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        for invalid in (str(source), [str(source), None], {"file": str(source)}):
+            with self.subTest(source_files=invalid):
+                self.add_unmapped_item("invalid-list", source, [])
+                item = self.store.get_media_item("invalid-list")
+                item["details"]["source_files"] = invalid
+                self.store.upsert_media_item(item)
+                result = self.service.execute("delete_source", ["invalid-list"])
+                self.assertFalse(result["success"], result)
+                self.assertTrue(source.is_file())
+                self.assertEqual(self.store.list_file_mappings("qb-main", "invalid-list"), [])
+
+    def test_source_root_alone_is_not_a_file_list(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        self.add_unmapped_item("no-files", source, [])
+
+        result = self.service.execute("delete_source", ["no-files"])
+
+        self.assertFalse(result["success"])
+        self.assertIn("拒绝猜测", result["results"][0]["message"])
+        self.assertTrue(source.is_file())
+
+    def test_source_only_fallback_does_not_enable_import_or_hardlink_deletion(self) -> None:
+        source = self.root / "Unknown.mkv"
+        source.write_bytes(b"movie")
+        self.add_unmapped_item("unknown", source, [source])
+        for action in ("import", "delete_hardlinks", "delete_both"):
+            with self.subTest(action=action):
+                result = self.service.execute(action, ["unknown"])
+                self.assertFalse(result["success"], result)
+                self.assertTrue(source.is_file())
+                self.assertEqual(self.store.list_file_mappings("qb-main", "unknown"), [])
 
     def test_imported_refresh_rechecks_saved_strm_paths_without_recognition(self) -> None:
         source_dir = self.root / "source"

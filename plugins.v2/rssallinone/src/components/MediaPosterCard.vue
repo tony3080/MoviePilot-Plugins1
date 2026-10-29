@@ -70,9 +70,20 @@ const showMarkUnidentified = computed(() => props.mode === 'qb'
   : ['identified', 'existing', 'rolled_back'].includes(props.item.state))
 const isRolledBack = computed(() => props.item.state !== 'unidentified'
   && (Boolean(props.item.rolled_back) || props.item.state === 'rolled_back'))
+const failureMessage = computed(() => {
+  const message = String(props.item.failure_message || props.item.recognition_error || '入库失败')
+  if (/云端同路径文件(?:大小|\s*SHA1)\s*不一致|云端目标已存在|云盘中已存在/.test(message)) {
+    return '云盘中已存在'
+  }
+  return message
+})
 const hasFailureMarker = computed(() => !isRolledBack.value && Boolean(
   props.item.failure_message || props.item.recognition_error,
 ))
+const siteLabels = computed(() => details.value.site_labels || details.value.manual_labels || {})
+const siteLabelFailure = computed(() => siteLabels.value.status === 'failed'
+  ? String(siteLabels.value.reason || '站点标签获取失败，国配或特效标签可能缺失')
+  : '')
 const status = computed(() => {
   if (props.mode === 'qb') {
     if (props.item.recognition_state === 'unidentified') return { text: '未识别', color: 'error' }
@@ -163,7 +174,7 @@ function usableSourceUrl(value) {
             <span v-bind="tooltipProps" class="corner-badge rollback">R</span>
           </template>
         </VTooltip>
-        <VTooltip v-if="hasFailureMarker" :text="item.failure_message || item.recognition_error || '入库失败'">
+        <VTooltip v-if="hasFailureMarker" :text="failureMessage">
           <template #activator="{ props: tooltipProps }">
             <span v-bind="tooltipProps" class="corner-badge failure">!</span>
           </template>
@@ -239,6 +250,14 @@ function usableSourceUrl(value) {
           </VChip>
         </div>
       </div>
+      <VTooltip v-if="siteLabelFailure" :text="siteLabelFailure">
+        <template #activator="{ props: tooltipProps }">
+          <div v-bind="tooltipProps" class="site-label-warning" role="status" tabindex="0" :aria-label="`标签获取失败：${siteLabelFailure}`">
+            <VIcon icon="mdi-alert-outline" size="15" />
+            <span>标签获取失败</span>
+          </div>
+        </template>
+      </VTooltip>
       <div v-if="sourceName" class="source-slot">
         <VTooltip :text="sourceName">
           <template #activator="{ props: tooltipProps }">
@@ -357,6 +376,18 @@ button.corner-badge { cursor: pointer; }
 .customization-chip-long { width: 100%; flex-basis: 100%; }
 .customization-chip :deep(.v-chip__content) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .inventory-incomplete-chip { border-color: #b91c1c !important; background: #dc2626 !important; color: #fff !important; }
+.site-label-warning {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: rgb(var(--v-theme-warning));
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.site-label-warning .v-icon { flex: 0 0 auto; }
 .source-name, .target-name, .inventory-line { margin: 0; overflow-wrap: anywhere; }
 .source-name,
 .target-name {

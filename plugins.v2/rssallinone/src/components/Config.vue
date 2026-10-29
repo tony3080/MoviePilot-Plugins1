@@ -271,7 +271,7 @@ onMounted(() => {
           <VCol cols="12" md="6">
             <VTextField
               v-model="config.cd2_dest_root"
-              label="CD2 上传任务目标根目录 *"
+              label="CD2 云端上传目标根目录 *"
               placeholder="/115/影视库"
               hint="优先填 CD2 gRPC 中的云盘路径；填写本机挂载路径时会自动校正"
               persistent-hint
@@ -306,7 +306,7 @@ onMounted(() => {
         </VRow>
 
         <VExpansionPanels variant="accordion" class="advanced-panels">
-          <VExpansionPanel title="CD2 高级监控参数">
+          <VExpansionPanel title="CD2 上传与恢复参数">
             <VExpansionPanelText>
               <VRow>
                 <VCol cols="12" md="4">

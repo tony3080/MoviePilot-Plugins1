@@ -652,13 +652,36 @@ def _normalized_search_title(value: object) -> str:
 
 def clean_search_title(value: object) -> str:
     title = re.sub(r"<!\[CDATA\[|\]\]>", "", str(value or ""), flags=re.I)
-    bracket_values = re.findall(r"\[([^\]]*)\]|【([^】]*)】", title)
-    outside = re.sub(r"\[[^\]]*\]|【[^】]*】", " ", title)
+    # Keep release text outside balanced annotations; nested subtitle brackets
+    # belong to their enclosing annotation, not to the search query.
+    pairs = {"[": "]", "【": "】"}
+    stack: List[str] = []
+    outside_chars: List[str] = []
+    bracket_chars: List[str] = []
+    bracket_values: List[str] = []
+    for character in title:
+        if character in pairs:
+            if not stack:
+                outside_chars.append(" ")
+                bracket_chars = []
+            elif len(stack) == 1:
+                bracket_chars.append(" ")
+            stack.append(pairs[character])
+        elif character in pairs.values():
+            if stack and character == stack[-1]:
+                stack.pop()
+                if not stack:
+                    bracket_values.append("".join(bracket_chars))
+            # Stray closing brackets are never meaningful search text.
+        elif not stack:
+            outside_chars.append(character)
+        elif len(stack) == 1:
+            bracket_chars.append(character)
+    outside = "".join(outside_chars)
     outside = re.sub(r"\s+", " ", outside).strip(" ._-|")
     if outside:
         return outside
-    for groups in bracket_values:
-        bracket = next((item for item in groups if item), "")
+    for bracket in bracket_values:
         for candidate in re.split(r"\s*(?:/|\|)\s*", bracket):
             candidate = re.sub(r"\([^)]*\)|（[^）]*）", " ", candidate)
             candidate = re.sub(r"\s+", " ", candidate).strip(" ._-|")

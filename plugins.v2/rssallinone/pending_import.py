@@ -44,7 +44,11 @@ COMPLETED_SCAN_EVENTS = {
     "scheduledtasks.completed",
 }
 SCAN_STATUS_POLL_INTERVAL = 600
-SCAN_RUNNING_POLL_INTERVAL = 600
+SCAN_RUNNING_POLL_INTERVAL = 60
+SCAN_START_POLL_INTERVAL = 15
+SCAN_START_TIMEOUT = 120
+SCAN_RETRY_DELAY = 60
+SCAN_RETRY_LIMIT = 2
 
 
 def _parse_time(value: object) -> Optional[datetime]:
@@ -131,17 +135,17 @@ class PendingImportConfig:
             str(value or "").strip() for value in values if str(value or "").strip()
         ))
 
-    def validate(self) -> None:
+    def validate(self, *, require_scan_callback: bool = True) -> None:
         if not self.staging_roots():
             raise RuntimeError("源路径路由中没有可用的硬链接根目录")
         if not str(self.cd2_dest_root or "").strip():
             raise RuntimeError("未配置 CD2 云端目标根目录")
-        if not (
+        if require_scan_callback and not (
             str(self.callback_server_name or "").strip()
             or str(self.callback_server_id or "").strip()
         ):
             raise RuntimeError("至少配置 SA 扫库节点名或 Emby 服务器 ID")
-        if not (
+        if require_scan_callback and not (
             str(self.callback_task_id or "").strip()
             or str(self.callback_task_name or "").strip()
         ):
@@ -162,6 +166,7 @@ class PendingImportCoordinator:
         stop_event: Any,
         logger: Any,
         notify: Optional[Callable[[str, str], None]] = None,
+        remote_upload: Optional[Callable] = None,
     ):
         self.store = store
         self.config = config
@@ -171,6 +176,7 @@ class PendingImportCoordinator:
         self.stop_event = stop_event
         self.logger = logger
         self.notify = notify or (lambda _title, _text: None)
+        self.remote_upload = remote_upload
         self._resolved_cd2_dest_root = ""
 
     def status(self) -> Dict[str, Any]:
@@ -184,7 +190,7 @@ class PendingImportCoordinator:
         }
 
     def preflight(self, *, manage_external_switches: bool = True) -> None:
-        self.config.validate()
+        self.config.validate(require_scan_callback=manage_external_switches)
         if not self.cd2.ready:
             raise RuntimeError("CloudDrive2 gRPC 地址或令牌未配置")
         # Manual runs only process the serial import/CD2 queue. They do not
@@ -194,6 +200,48 @@ class PendingImportCoordinator:
             raise RuntimeError("Emby 扫库配置不完整")
         if manage_external_switches and not self.controls.ready:
             raise RuntimeError("追更或外部扫库联动配置不完整")
+
+    def queue_direct(
+        self, media_ids: Iterable[object], *, allow_full_upload: bool = False,
+    ) -> Dict[str, Any]:
+        """Persist a bounded manual batch before returning to the HTTP caller."""
+        if self.store.latest_active_import_batch():
+            raise RuntimeError("已有入库队列正在执行，请等待完成")
+        self.preflight(manage_external_switches=False)
+        identities = list(dict.fromkeys(
+            str(value or "").strip() for value in media_ids if str(value or "").strip()
+        ))
+        if not identities:
+            raise RuntimeError("请至少选择一个媒体项目")
+        for media_id in identities:
+            item = self.store.get_media_item(media_id)
+            if not item or item.get("state") not in {"identified", "pending", "rolled_back"}:
+                raise RuntimeError("仅可入库已识别、待入库或已回退的卡片")
+        now = utc_now()
+        batch = {
+            "id": uuid.uuid4().hex, "state": "running", "trigger_source": "direct",
+            "current_media_id": "", "created_at": now, "updated_at": now,
+            "details": {
+                "manage_external_switches": False, "selected_media_ids": identities,
+                "handled_media_ids": [], "remote_upload": True,
+                "allow_full_upload": bool(allow_full_upload),
+            },
+        }
+        self.store.upsert_import_batch(batch)
+        return batch
+
+    def _next_batch_item(self, batch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        details = batch.get("details") or {}
+        if "selected_media_ids" not in details:
+            return self.store.next_media_in_state("pending")
+        handled = set(details.get("handled_media_ids") or [])
+        for media_id in details["selected_media_ids"]:
+            if media_id in handled:
+                continue
+            item = self.store.get_media_item(media_id)
+            if item and item.get("state") in {"identified", "pending", "rolled_back"}:
+                return item
+        return None
 
     def run(self, trigger_source: str) -> Dict[str, Any]:
         batch = self.store.latest_active_import_batch()
@@ -264,6 +312,7 @@ class PendingImportCoordinator:
                     "risk_count": 0,
                     "details": {
                         "manage_external_switches": True,
+                        "remote_upload": bool(self.remote_upload),
                         "switch_snapshot_saved_at": now,
                     },
                     "created_at": now,
@@ -297,6 +346,7 @@ class PendingImportCoordinator:
                     "risk_count": 0,
                     "details": {
                         "manage_external_switches": False,
+                        "remote_upload": bool(self.remote_upload),
                         "switch_management_skipped_at": now,
                     },
                     "created_at": now,
@@ -308,7 +358,7 @@ class PendingImportCoordinator:
         if resumed == "risk":
             return self.status()
         while not self.stop_event.is_set():
-            item = self.store.next_media_in_state("pending")
+            item = self._next_batch_item(batch)
             if not item:
                 break
             outcome = self._process_card(batch, item)
@@ -478,11 +528,39 @@ class PendingImportCoordinator:
     def _resume_current_card_if_needed(self, batch: Dict[str, Any]) -> str:
         media_id = str(batch.get("current_media_id") or "").strip()
         if not media_id:
-            importing = self.store.next_media_in_state("importing")
+            importing = (
+                None if "selected_media_ids" in (batch.get("details") or {})
+                else self.store.next_media_in_state("importing")
+            )
             media_id = str((importing or {}).get("id") or "")
         if not media_id:
             return "none"
+        item = self.store.get_media_item(media_id)
+        if "selected_media_ids" in (batch.get("details") or {}) and (
+            not item or item.get("state") != "importing"
+        ):
+            # A restart between selecting a card and creating its hardlinks
+            # must retry preparation, not roll back an unstarted operation.
+            if item and item.get("state") in {"identified", "pending", "rolled_back"}:
+                batch["current_media_id"] = ""
+                self.store.upsert_import_batch(batch)
+            else:
+                self._increment_batch(batch, current_media_id="")
+            return "none"
         watches = self.store.list_import_watches(batch_id=batch["id"], media_id=media_id)
+        if not watches and self.remote_upload and (batch.get("details") or {}).get("remote_upload"):
+            operation_id = str(
+                ((item or {}).get("details") or {}).get("import_result", {}).get("operation_id") or ""
+            )
+            mappings = self.store.list_file_mappings(
+                (item or {}).get("downloader_id"), (item or {}).get("info_hash")
+            )
+            prepared = [
+                row for row in mappings if operation_id and not row.get("inventory_exists")
+                and (row.get("details") or {}).get("hardlink_operation_id") == operation_id
+            ]
+            if prepared:
+                watches = self._create_watches(batch, media_id, prepared, [], {})
         if not watches:
             MediaActionService(self.store).rollback_monitored_import(
                 media_id,
@@ -508,11 +586,13 @@ class PendingImportCoordinator:
     def _process_card(self, batch: Dict[str, Any], item: Dict[str, Any]) -> str:
         media_id = str(item.get("id") or "")
         self._increment_batch(batch, current_media_id=media_id)
-        baseline_uploads = self.cd2.list_uploads()
-        cloud_baselines = self._cloud_baselines(item)
+        baseline_uploads = [] if self.remote_upload else self.cd2.list_uploads()
+        cloud_baselines = {} if self.remote_upload else self._cloud_baselines(item)
         try:
             prepared = MediaActionService(self.store).prepare_monitored_import(media_id)
-            created = list(prepared.get("created_mappings") or [])
+            created = list(prepared.get(
+                "upload_mappings" if self.remote_upload else "created_mappings"
+            ) or [])
             if not created:
                 MediaActionService(self.store).finalize_monitored_import(media_id)
                 self._increment_batch(batch, succeeded=1, current_media_id="")
@@ -587,6 +667,7 @@ class PendingImportCoordinator:
                 "file_size": expected_size,
                 "transferred_bytes": 0,
                 "details": {
+                    "remote_upload": bool(self.remote_upload),
                     "baseline_keys": sorted(matching_baseline_tasks),
                     "baseline_tasks": matching_baseline_tasks,
                     "cloud_baseline": cloud_baselines.get(
@@ -692,6 +773,8 @@ class PendingImportCoordinator:
         media_id: str,
         watches: List[Dict[str, Any]],
     ) -> str:
+        if watches and all((watch.get("details") or {}).get("remote_upload") for watch in watches):
+            return self._upload_remote_card(batch, media_id, watches)
         self._refresh_watch_destination_paths(batch["id"], media_id)
         while not self.stop_event.is_set():
             uploads = self.cd2.list_uploads()
@@ -959,6 +1042,43 @@ class PendingImportCoordinator:
         text = str(message or "").casefold()
         return bool(text and any(word in text for word in RISK_WORDS))
 
+    def _upload_remote_card(self, batch, media_id, watches):
+        if not self.remote_upload:
+            return "failed:主动上传服务不可用"
+        item = self.store.get_media_item(media_id)
+        if not item:
+            return "failed:媒体记录已不存在"
+        mappings = {
+            int(row.get("file_index") or 0): row for row in self.store.list_file_mappings(
+                item.get("downloader_id"), item.get("info_hash")
+            )
+        }
+        for watch in watches:
+            if watch.get("state") == "done":
+                continue
+            if self.stop_event.is_set():
+                return "stopped"
+            mapping = mappings.get(int(watch.get("file_index") or 0))
+            if not mapping:
+                return "failed:上传文件映射已不存在"
+            watch.update(state="watching", updated_at=utc_now())
+            self.store.upsert_import_watch(watch)
+            try:
+                if (batch.get("details") or {}).get("allow_full_upload") is True:
+                    self.remote_upload(media_id, [mapping], allow_full_upload=True)
+                else:
+                    self.remote_upload(media_id, [mapping])
+            except Exception as error:
+                if self.stop_event.is_set():
+                    return "stopped"
+                message = str(error)
+                if any(word in message.casefold() for word in RISK_WORDS):
+                    return "risk"
+                return "failed:" + message
+            watch.update(state="done", updated_at=utc_now())
+            self.store.upsert_import_watch(watch)
+        return "success"
+
     def _stop_cd2_tasks(self, batch_id: str, media_id: str) -> None:
         keys = [
             str(watch.get("cd2_key") or "")
@@ -1018,7 +1138,10 @@ class PendingImportCoordinator:
 
     def _finish_queue(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         batch = self.store.get_import_batch(batch["id"]) or batch
-        if self.store.count_media_states(["pending", "importing"]) > 0:
+        if "selected_media_ids" in (batch.get("details") or {}):
+            if self._next_batch_item(batch) or batch.get("current_media_id"):
+                return self.status()
+        elif self.store.count_media_states(["pending", "importing"]) > 0:
             return self.status()
         if self.store.list_import_watches(states=ACTIVE_WATCH_STATES):
             return self.status()
@@ -1038,6 +1161,11 @@ class PendingImportCoordinator:
         requested_at = datetime.now(timezone.utc)
         details = dict(batch.get("details") or {})
         details["waiting_scan_callback_at"] = requested_at.isoformat(timespec="seconds")
+        details["scan_initial_requested_at"] = requested_at.isoformat(timespec="seconds")
+        details["scan_attempt_requested_at"] = requested_at.isoformat(timespec="seconds")
+        details["next_scan_status_check_at"] = (
+            requested_at + timedelta(seconds=SCAN_START_POLL_INTERVAL)
+        ).isoformat(timespec="seconds")
         batch.update({
             "state": "waiting_scan_callback",
             "current_media_id": "",
@@ -1085,7 +1213,7 @@ class PendingImportCoordinator:
         if (
             not next_status_check
             and requested_at
-            and now < requested_at + timedelta(seconds=SCAN_STATUS_POLL_INTERVAL)
+            and now < requested_at + timedelta(seconds=SCAN_START_POLL_INTERVAL)
             and (not deadline or now < deadline)
         ):
             return self.status()
@@ -1127,6 +1255,9 @@ class PendingImportCoordinator:
             details.get("scan_status_check_count") or 0
         ) + 1
         if task.get("is_running"):
+            details.setdefault("scan_running_observed_at", utc_now())
+            details.pop("scan_retry_due_at", None)
+            details.pop("scan_interrupted_reason", None)
             details["next_scan_status_check_at"] = (
                 now + timedelta(seconds=SCAN_RUNNING_POLL_INTERVAL)
             ).isoformat(timespec="seconds")
@@ -1155,27 +1286,131 @@ class PendingImportCoordinator:
             self._restore_and_finish(batch, final_state="completed")
             return self.status()
 
-        if not deadline or now < deadline:
+        attempt_at = _parse_time(details.get("scan_attempt_requested_at")) or requested_at
+        last_started_at = _parse_time(task.get("last_started_at"))
+        current_failed_execution = bool(
+            requested_at and last_started_at and last_started_at >= requested_at
+            and str(task.get("last_status") or "").casefold()
+            in {"failed", "cancelled", "canceled", "aborted"}
+        )
+        interrupted = bool(
+            details.get("scan_running_observed_at")
+            or details.get("scan_retry_due_at")
+            or current_failed_execution
+            or (attempt_at and now >= attempt_at + timedelta(seconds=SCAN_START_TIMEOUT))
+            or (deadline and now >= deadline)
+        )
+        if not interrupted:
             details["next_scan_status_check_at"] = (
-                now + timedelta(seconds=SCAN_STATUS_POLL_INTERVAL)
+                now + timedelta(seconds=SCAN_START_POLL_INTERVAL)
             ).isoformat(timespec="seconds")
-            batch.update({
-                "error_message": "",
-                "details": details,
-                "updated_at": utc_now(),
-            })
+            batch.update({"error_message": "", "details": details, "updated_at": utc_now()})
             self.store.upsert_import_batch(batch)
             return self.status()
 
+        retry_due = _parse_time(details.get("scan_retry_due_at"))
+        if not retry_due:
+            reason = (
+                "Emby 扫库中断：此前已运行，目前未运行且没有本轮成功记录，可能服务已重启"
+                if details.get("scan_running_observed_at")
+                else "Emby 扫库未成功启动或执行失败，目前没有本轮成功记录"
+            )
+            details["scan_interrupted_reason"] = reason
+            details["scan_retry_due_at"] = (
+                now + timedelta(seconds=SCAN_RETRY_DELAY)
+            ).isoformat(timespec="seconds")
+            details["next_scan_status_check_at"] = details["scan_retry_due_at"]
+            details["scan_interruptions"] = [
+                *list(details.get("scan_interruptions") or []),
+                {"time": utc_now(), "reason": reason, "task_status": copy.deepcopy(task)},
+            ][-(SCAN_RETRY_LIMIT + 1):]
+            batch.update({"error_message": reason, "details": details, "updated_at": utc_now()})
+            self.store.upsert_import_batch(batch)
+            self.logger.warning(f"RSS一条龙：{reason}，{SCAN_RETRY_DELAY} 秒后复核")
+            return self.status()
+        if now < retry_due:
+            details["next_scan_status_check_at"] = retry_due.isoformat(timespec="seconds")
+            batch.update({"details": details, "updated_at": utc_now()})
+            self.store.upsert_import_batch(batch)
+            return self.status()
+
+        retry_count = int(details.get("scan_refresh_retry_count") or 0)
+        if retry_count < SCAN_RETRY_LIMIT:
+            batch["details"] = details
+            return self._retry_emby_scan(batch, now)
+
         batch["error_message"] = (
-            "等待 Emby 回调超时，API 显示扫库任务未运行，"
-            f"最近状态为 {task.get('last_status') or task.get('state') or '未知'}"
+            f"Emby 扫库中断或未启动，已自动重试 {retry_count} 次，"
+            "任务仍未运行且没有本轮成功记录"
         )
-        details["scan_callback_timeout_at"] = utc_now()
+        details["scan_retry_exhausted_at"] = utc_now()
         batch["details"] = details
         self.store.upsert_import_batch(batch)
-        self.notify("RSS一条龙扫库回调超时", batch["error_message"])
+        self.notify("RSS一条龙扫库恢复失败", batch["error_message"])
         self._restore_and_finish(batch, final_state="failed")
+        return self.status()
+
+    def _retry_emby_scan(self, batch: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        if self.stop_event.is_set():
+            return self.status()
+        batch = self.store.get_import_batch(batch["id"]) or batch
+        if batch.get("state") != "waiting_scan_callback":
+            return self.status()
+        # Reserve an attempt before the external request so a restart cannot
+        # reset the retry budget or immediately send a duplicate refresh.
+        details = dict(batch.get("details") or {})
+        details.setdefault("scan_initial_requested_at", batch.get("refresh_requested_at"))
+        details["scan_refresh_retry_count"] = int(details.get("scan_refresh_retry_count") or 0) + 1
+        details["scan_attempt_requested_at"] = now.isoformat(timespec="seconds")
+        details["next_scan_status_check_at"] = (
+            now + timedelta(seconds=SCAN_START_POLL_INTERVAL)
+        ).isoformat(timespec="seconds")
+        for key in ("scan_running_observed_at", "scan_retry_due_at", "scan_interrupted_reason"):
+            details.pop(key, None)
+        batch.update({
+            "refresh_requested_at": now.isoformat(timespec="seconds"),
+            "scan_callback_deadline": (
+                now + timedelta(seconds=self.config.scan_callback_timeout)
+            ).isoformat(timespec="seconds"),
+            "details": details,
+            "error_message": "",
+            "updated_at": utc_now(),
+        })
+        self.store.upsert_import_batch(batch)
+        retry_count = details["scan_refresh_retry_count"]
+        self.logger.warning(f"RSS一条龙：重新请求 Emby 扫库，第 {retry_count}/{SCAN_RETRY_LIMIT} 次")
+        try:
+            target = self.scanner.request_emby_refresh()
+            expected_server = str(self.config.callback_server_id or "").strip()
+            actual_server = str(target.get("server_id") or "").strip()
+            if expected_server and actual_server and expected_server != actual_server:
+                raise RuntimeError("扫库节点服务器 ID 与回调服务器 ID 配置不一致")
+        except Exception as error:
+            current = self.store.get_import_batch(batch["id"]) or batch
+            if current.get("state") != "waiting_scan_callback":
+                return self.status()
+            details = dict(current.get("details") or {})
+            details["scan_retry_request_error"] = str(error)
+            details["scan_retry_request_error_at"] = utc_now()
+            details["scan_retry_due_at"] = (
+                now + timedelta(seconds=SCAN_RETRY_DELAY)
+            ).isoformat(timespec="seconds")
+            details["next_scan_status_check_at"] = details["scan_retry_due_at"]
+            current.update({
+                "error_message": "Emby 扫库重试请求失败，将复核任务状态",
+                "details": details,
+                "updated_at": utc_now(),
+            })
+            self.store.upsert_import_batch(current)
+            return self.status()
+        current = self.store.get_import_batch(batch["id"]) or batch
+        if current.get("state") == "waiting_scan_callback":
+            details = dict(current.get("details") or {})
+            details["refresh_target"] = target
+            details.pop("scan_retry_request_error", None)
+            details.pop("scan_retry_request_error_at", None)
+            current.update({"details": details, "updated_at": utc_now()})
+            self.store.upsert_import_batch(current)
         return self.status()
 
     def _restore_and_finish(self, batch: Dict[str, Any], *, final_state: str) -> None:
@@ -1282,6 +1517,14 @@ class PendingImportCoordinator:
         current["succeeded"] = int(current.get("succeeded") or 0) + int(succeeded)
         current["failed"] = int(current.get("failed") or 0) + int(failed)
         if current_media_id is not None:
+            previous = str(current.get("current_media_id") or "")
+            details = dict(current.get("details") or {})
+            if current_media_id == "" and previous and "selected_media_ids" in details:
+                handled = list(details.get("handled_media_ids") or [])
+                if previous not in handled:
+                    handled.append(previous)
+                details["handled_media_ids"] = handled
+                current["details"] = details
             current["current_media_id"] = current_media_id
         current["updated_at"] = utc_now()
         self.store.upsert_import_batch(current)

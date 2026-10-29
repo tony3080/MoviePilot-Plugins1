@@ -409,7 +409,11 @@ watch(
               <VTextField v-model="task.config.save_path" label="保存路径" />
             </VCol>
             <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
-              <VTextField v-model="task.config.rss_cron" label="RSS周期 (CRON)" />
+              <VTextField
+                v-model="task.config.rss_cron"
+                label="RSS Cron / 固定间隔（分钟）"
+                placeholder="19 或 */19 * * * *"
+              />
             </VCol>
             <VCol v-if="task.config.task_type === 'rss'" cols="12" md="6">
               <VTextField v-model="task.config.start_cron" label="开始任务 CRON" />

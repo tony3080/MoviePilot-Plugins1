@@ -149,6 +149,7 @@ class LocalFileManagerService:
         cn_keywords: object = "国语,国配",
         query_interval: object = 60,
         rename_rules: object = "",
+        manual_labels: Optional[Dict[str, Any]] = None,
         site_search_title: object = "",
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
@@ -188,6 +189,7 @@ class LocalFileManagerService:
             cn_keywords=cn_keywords,
             query_interval=query_interval,
             rename_rules=rename_rules,
+            manual_labels=manual_labels,
             site_search_title=site_search_name,
             stop_event=stop_event,
         )
@@ -361,6 +363,7 @@ class LocalFileManagerService:
         query_interval: object = 60,
         rename_rules: object = "",
         site_search_title: object = "",
+        manual_labels: Optional[Dict[str, Any]] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         if stop_event and stop_event.is_set():
@@ -370,17 +373,34 @@ class LocalFileManagerService:
             self.store.get_media_item(requested_media_id)
             if requested_media_id else None
         ) or {}
+        recovered = self.store.find_file_sources(files) if not requested_media_id else {}
         override = _normalize_override(manual_override)
         site_labels: Dict[str, Any] = dict(
             (requested_item.get("details") or {}).get("site_labels") or {}
         )
+        explicit_labels = isinstance(manual_labels, dict)
+        if explicit_labels:
+            site_labels.update({
+                "source": "manual",
+                "manual_override": True,
+                "mandarin": bool(manual_labels.get("mandarin")),
+                "effects": bool(manual_labels.get("effects")),
+            })
         requested_details = dict(requested_item.get("details") or {})
+        if recovered.get("source"):
+            recovered_source = recovered["source"]
+            requested_details["preserved_source"] = recovered_source
+            requested_details.setdefault("rss_source", {
+                "detail_url_masked": recovered_source["detail_url"],
+            })
+        if recovered.get("ambiguous") and self.logger:
+            self.logger.warning("RSS一条龙：文件关联多个不同来源，未自动恢复 P 链接")
         existing_detail_url = str(
             (requested_details.get("rss_source") or {}).get("detail_url_masked")
             or site_labels.get("request_url_masked")
             or ""
         ).strip()
-        if site_id and (recognize_cn or recognize_fx or add_chinese_title):
+        if site_id and (recognize_cn or recognize_fx or add_chinese_title) and not explicit_labels:
             try:
                 from .rss_execute import MoviePilotRssGateway
                 from .rss_site_labels import SiteLabelService
@@ -454,7 +474,7 @@ class LocalFileManagerService:
                 source = files[0]
 
         category_probe = str(override.get("category") or "").strip()
-        if site_labels.get("mandarin") and not category_probe:
+        if site_labels.get("mandarin") and not category_probe and not explicit_labels:
             try:
                 if override.get("media_type") and override.get("tmdb_id"):
                     _probe_meta, probe_media = self.gateway.recognize_manual(
@@ -470,8 +490,8 @@ class LocalFileManagerService:
                 ).strip()
             except Exception:
                 category_probe = ""
-        add_cn = False
-        if site_labels.get("mandarin"):
+        add_cn = bool(site_labels.get("mandarin")) if explicit_labels else False
+        if site_labels.get("mandarin") and not explicit_labels:
             category_policy = _manual_mandarin_category_policy(category_probe)
             add_cn = category_policy == "apply"
             site_labels.update({
@@ -498,6 +518,12 @@ class LocalFileManagerService:
                 files = [source / item.relative_to(old_source) for item in files]
             elif files:
                 source = files[0]
+        if explicit_labels:
+            site_labels.update({
+                "mandarin_allowed": bool(site_labels.get("mandarin")),
+                "mandarin_pending": False,
+                "mandarin_applied": bool(site_labels.get("mandarin")),
+            })
 
         generated_media_id, generated_source_hash = _source_identity(source)
         media_id = requested_media_id or generated_media_id
@@ -559,6 +585,7 @@ class LocalFileManagerService:
                 "recursive": recursive,
             },
             "manual_override": override,
+            "manual_labels": site_labels if explicit_labels else {},
             "source_identity": {
                 "kind": source_kind,
                 "source_path": str(source),
@@ -577,7 +604,7 @@ class LocalFileManagerService:
                 "torrent_completed": True,
             },
         }
-        for key in ("rss_source", "comment_url", "source_url"):
+        for key in ("rss_source", "comment_url", "source_url", "preserved_source"):
             if requested_details.get(key):
                 details[key] = requested_details[key]
         if site_labels:
@@ -625,6 +652,8 @@ class LocalFileManagerService:
                     media,
                     torrent_files,
                     torrent_meta=meta,
+                    **({"season_override": override["season"]}
+                       if override.get("season") is not None else {}),
                 )
                 path_plan = self.library_layout.plan(
                     source_path=str(source),
@@ -648,6 +677,8 @@ class LocalFileManagerService:
                         torrent_files,
                         title_override=inventory_title,
                         torrent_meta=meta,
+                        **({"season_override": override["season"]}
+                           if override.get("season") is not None else {}),
                     )
                     path_plan = self.library_layout.plan(
                         source_path=str(source),
@@ -706,6 +737,8 @@ class LocalFileManagerService:
 
         details["recognized_title"] = recognized_media_title
         details["inventory_title"] = inventory_title
+        if not mappings:
+            details["source_files"] = source_paths
         previous = self.store.get_media_item(media_id) or existing or {}
         state = preserve_refresh_workflow_state(previous.get("state"), state)
         self.store.upsert_media_item({

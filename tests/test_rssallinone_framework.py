@@ -12,7 +12,7 @@ import time
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import ANY
+from unittest.mock import ANY, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1011,6 +1011,7 @@ class PluginLifecycleTest(unittest.TestCase):
         apscheduler_triggers = types.ModuleType("apscheduler.triggers")
         apscheduler_triggers.__path__ = []
         apscheduler_cron = types.ModuleType("apscheduler.triggers.cron")
+        apscheduler_interval = types.ModuleType("apscheduler.triggers.interval")
 
         class Logger:
             @staticmethod
@@ -1024,6 +1025,10 @@ class PluginLifecycleTest(unittest.TestCase):
             @staticmethod
             def from_crontab(value):
                 return str(value)
+
+        class IntervalTrigger:
+            def __init__(self, *, minutes):
+                self.minutes = minutes
 
         class SiteOper:
             @staticmethod
@@ -1056,12 +1061,14 @@ class PluginLifecycleTest(unittest.TestCase):
             app_plugins._PluginBase = PluginBase
             app_site_oper.SiteOper = SiteOper
             apscheduler_cron.CronTrigger = CronTrigger
+            apscheduler_interval.IntervalTrigger = IntervalTrigger
             previous = {
                 name: sys.modules.get(name)
                 for name in (
                     "app", "app.log", "app.plugins", "app.db",
                     "app.db.site_oper", "apscheduler", "apscheduler.triggers",
-                    "apscheduler.triggers.cron", "rssallinone",
+                    "apscheduler.triggers.cron", "apscheduler.triggers.interval",
+                    "rssallinone",
                 )
             }
             sys.modules["app"] = app
@@ -1072,6 +1079,7 @@ class PluginLifecycleTest(unittest.TestCase):
             sys.modules["apscheduler"] = apscheduler
             sys.modules["apscheduler.triggers"] = apscheduler_triggers
             sys.modules["apscheduler.triggers.cron"] = apscheduler_cron
+            sys.modules["apscheduler.triggers.interval"] = apscheduler_interval
             try:
                 spec = importlib.util.spec_from_file_location(
                     "rssallinone",
@@ -1137,7 +1145,27 @@ class PluginLifecycleTest(unittest.TestCase):
                 api_paths = {item["path"] for item in plugin.get_api()}
                 self.assertIn("/qb/completed", api_paths)
                 self.assertIn("/qb/delete", api_paths)
+                self.assertIn("/qb/check-presence", api_paths)
+                empty_presence = plugin.api_qb_check_presence({"keyword": "not-found"})
+                self.assertTrue(empty_presence["success"])
+                self.assertEqual(empty_presence["total"], 0)
+                plugin._qb_presence_lock.acquire()
+                try:
+                    self.assertFalse(plugin.api_qb_check_presence()["success"])
+                finally:
+                    plugin._qb_presence_lock.release()
                 self.assertIn("/media/action", api_paths)
+                with patch.object(plugin, "_start_direct_import", return_value={
+                    "success": True, "accepted": True,
+                }) as start_import:
+                    forced = plugin.api_media_action({
+                        "action": "force_upload", "media_ids": ["urgent-card"],
+                    })
+                    self.assertTrue(forced["accepted"])
+                    start_import.assert_called_once_with(["urgent-card"], allow_full_upload=True)
+                    start_import.reset_mock()
+                    plugin.api_media_action({"action": "import", "media_ids": ["normal-card"]})
+                    start_import.assert_called_once_with(["normal-card"])
                 self.assertIn("/media/refresh", api_paths)
                 self.assertIn("/media/inventory/refresh-batch", api_paths)
                 self.assertIn("/data/clear-cards", api_paths)
@@ -1304,6 +1332,40 @@ class PluginLifecycleTest(unittest.TestCase):
                 self.assertIn("RssAllInOne.QbDeleteJobs", service_ids)
                 self.assertIn("RssAllInOne.Start.movies", service_ids)
                 self.assertNotIn("RssAllInOne.QbRefresh", service_ids)
+
+                original_tasks = plugin._store.list_all_rss_tasks()
+                try:
+                    plugin._store.replace_rss_tasks(module.normalize_rss_tasks(original_tasks + [
+                        {
+                            "id": "interval",
+                            "name": "固定间隔",
+                            "enabled": True,
+                            "config": {"rss_url": "https://example.test/rss", "rss_cron": "19"},
+                        },
+                        {
+                            "id": "disabled-interval",
+                            "enabled": False,
+                            "config": {"rss_url": "https://example.test/rss", "rss_cron": "19"},
+                        },
+                        {
+                            "id": "manual-interval",
+                            "enabled": True,
+                            "config": {
+                                "task_type": "manual",
+                                "rss_url": "https://example.test/rss",
+                                "rss_cron": "19",
+                            },
+                        },
+                    ]))
+                    services = {item["id"]: item for item in plugin.get_service()}
+                    interval_service = services["RssAllInOne.Rss.interval"]
+                    self.assertIsInstance(interval_service["trigger"], IntervalTrigger)
+                    self.assertEqual(interval_service["trigger"].minutes, 19)
+                    self.assertEqual(interval_service["func_kwargs"], {"task_id": "interval"})
+                    self.assertNotIn("RssAllInOne.Rss.disabled-interval", services)
+                    self.assertNotIn("RssAllInOne.Rss.manual-interval", services)
+                finally:
+                    plugin._store.replace_rss_tasks(original_tasks)
 
                 original_list_torrents = module.MoviePilotQbGateway.list_torrents
                 original_resume_torrents = module.MoviePilotQbGateway.resume_torrents
@@ -1765,6 +1827,11 @@ class PluginLifecycleTest(unittest.TestCase):
 
                 self.assertTrue(clouddrive_pb2_grpc.CloudDriveFileSrvStub)
             finally:
+                if "plugin" in locals():
+                    plugin.stop_service()
+                    # Let the last queue dispatch release its database connection.
+                    with plugin._rss_queue_lock:
+                        pass
                 for name, value in previous.items():
                     if value is None:
                         sys.modules.pop(name, None)

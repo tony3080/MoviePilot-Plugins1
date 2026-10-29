@@ -45,7 +45,7 @@ class MediaActionService:
 
         normalized_action = str(action or "").strip().casefold()
         if normalized_action not in {
-            "import", "delete_source", "delete_hardlinks", "delete_both"
+            "import", "force_upload", "delete_source", "delete_hardlinks", "delete_both"
         }:
             return ""
 
@@ -69,9 +69,11 @@ class MediaActionService:
         self,
         store: SQLiteStore,
         library_layout: Optional[LibraryLayout] = None,
+        upload: Any = None,
     ):
         self.store = store
         self.library_layout = library_layout
+        self.upload = upload
 
     def execute(self, action: object, media_ids: Iterable[object]) -> Dict[str, Any]:
         normalized_action = str(action or "").strip().casefold()
@@ -114,8 +116,24 @@ class MediaActionService:
         if action == "queue_import":
             return self._queue_import(item)
         if action == "import":
+            if self.upload is not None:
+                prepared = self._import(item, finalize=False)
+                if prepared.get("state") == "imported":
+                    return prepared
+                try:
+                    self.upload(media_id, prepared.get("upload_mappings") or [])
+                except Exception as error:
+                    self.rollback_monitored_import(
+                        media_id,
+                        failure_code="cd2_upload_failed",
+                        failure_message=str(error),
+                        mark_as_rolled_back="真实传输" in str(error),
+                    )
+                    raise MediaActionError(str(error)) from error
+                self.finalize_monitored_import(media_id)
+                return {**prepared, "state": "imported", "message": "硬链接与 CD2 上传已完成"}
             return self._import(item)
-        mappings = self._mappings(item)
+        mappings = self._mappings(item, allow_source_only=action == "delete_source")
         if action == "delete_source":
             return self._delete_source(item, mappings)
         if action == "delete_hardlinks":
@@ -378,6 +396,11 @@ class MediaActionService:
                 if (mapping.get("details") or {}).get("hardlink_operation_id") == operation_id
                 and (mapping.get("details") or {}).get("hardlink_created_in_operation")
             ],
+            "upload_mappings": [
+                mapping for mapping in persisted
+                if not mapping.get("inventory_exists")
+                and (mapping.get("details") or {}).get("hardlink_operation_id") == operation_id
+            ],
         }
 
     @staticmethod
@@ -541,10 +564,24 @@ class MediaActionService:
             "state": "deleted",
         }
 
-    def _mappings(self, item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _mappings(
+        self, item: Dict[str, Any], *, allow_source_only: bool = False
+    ) -> List[Dict[str, Any]]:
         mappings = self.store.list_file_mappings(
             item.get("downloader_id"), item.get("info_hash")
         )
+        if not mappings and allow_source_only:
+            mappings = self._saved_source_mappings(item)
+            if mappings:
+                persisted = self.store.replace_file_mappings(
+                    item.get("downloader_id"), item.get("info_hash"), mappings
+                )
+                details = dict(item.get("details") or {})
+                details["file_mappings"] = copy.deepcopy(persisted)
+                item["details"] = details
+                item["updated_at"] = utc_now()
+                self.store.upsert_media_item(item)
+                return persisted
         if not mappings:
             raise MediaActionError("没有持久化的文件映射，拒绝猜测文件路径")
         repaired = self._repair_missing_source_paths(item, mappings)
@@ -560,6 +597,54 @@ class MediaActionService:
         item["updated_at"] = utc_now()
         self.store.upsert_media_item(item)
         return persisted
+
+    @staticmethod
+    def _saved_source_mappings(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Restore source-only mappings from an exact persisted file list."""
+
+        details = item.get("details") or {}
+        source_files = details.get("source_files")
+        if not isinstance(source_files, list) or not source_files:
+            return []
+        source_text = str(item.get("source_path") or "").strip()
+        if not source_text:
+            raise MediaActionError("源文件清单缺少所属源路径，拒绝删除")
+        source_root = Path(source_text).expanduser()
+        if not source_root.is_absolute():
+            raise MediaActionError("所属源路径必须是绝对路径")
+        resolved_root = source_root.resolve(strict=False)
+        mappings = []
+        seen = set()
+        for source_text in source_files:
+            if not isinstance(source_text, str) or not source_text.strip():
+                raise MediaActionError("保存的源文件清单无效，拒绝删除")
+            source = Path(source_text).expanduser()
+            if not source.is_absolute():
+                raise MediaActionError(f"源文件路径必须是绝对路径：{source}")
+            resolved = source.resolve(strict=False)
+            if (
+                (source != source_root and source_root not in source.parents)
+                or (resolved != resolved_root and resolved_root not in resolved.parents)
+            ):
+                raise MediaActionError(f"源文件清单超出所属源路径，拒绝删除：{source}")
+            if source.is_symlink() or (source.exists() and not source.is_file()):
+                raise MediaActionError(f"源路径不是普通文件，拒绝删除：{source}")
+            key = os.path.normcase(str(resolved))
+            if key in seen:
+                continue
+            seen.add(key)
+            mappings.append({
+                "media_id": item.get("id"),
+                "file_index": len(mappings),
+                "source_relative_path": (
+                    str(source.relative_to(source_root)) if source != source_root
+                    else source.name
+                ),
+                "current_source_path": str(source),
+                "state": "source_only",
+                "details": {"restored_from": "source_files"},
+            })
+        return mappings
 
     @staticmethod
     def _repair_missing_source_paths(

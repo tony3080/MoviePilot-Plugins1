@@ -43,6 +43,155 @@ file_manager = load_package_module("file_manager")
 rss_rename = load_package_module("rss_rename")
 
 
+class RefreshWorkflowStateTest(unittest.TestCase):
+    def test_refresh_preserves_queues_and_only_completes_full_rollbacks(self):
+        for previous, refreshed, expected in (
+            ("rolled_back", "existing", "existing"),
+            ("rolled_back", "identified", "rolled_back"),
+            ("rolled_back", "unidentified", "unidentified"),
+            ("pending", "existing", "pending"),
+            ("pending", "identified", "pending"),
+            ("pending_import", "existing", "pending_import"),
+            ("identified", "existing", "existing"),
+            ("existing", "identified", "identified"),
+        ):
+            with self.subTest(previous=previous, refreshed=refreshed):
+                self.assertEqual(
+                    qb_sync.preserve_refresh_workflow_state(previous, refreshed),
+                    expected,
+                )
+
+    def test_full_inventory_moves_refreshed_rollback_cards_to_existing(self):
+        class Gateway:
+            @staticmethod
+            def recognize(_title):
+                return (
+                    types.SimpleNamespace(begin_season=1),
+                    types.SimpleNamespace(
+                        title="Demo", year="2026", tmdb_id=42,
+                        season=1, category="欧美剧",
+                    ),
+                )
+
+            @staticmethod
+            def plan_inventory_files(_media, files, **_kwargs):
+                return {
+                    "expected_files": [{
+                        "file_index": file["index"],
+                        "source_name": file["name"],
+                        "relative_path": (
+                            f"Demo (2026) {{tmdbid=42}}/Season 1/"
+                            f"Demo - S01E{index:02d}.mkv"
+                        ),
+                        "inventory_relative_path": (
+                            f"Demo (2026) {{tmdbid=42}}/Season 1/"
+                            f"Demo - S01E{index:02d}.strm"
+                        ),
+                        "size": file["size"],
+                    } for index, file in enumerate(files, 1)],
+                    "expected_directory": "Demo (2026) {tmdbid=42}/Season 1",
+                    "total_files": len(files),
+                    "plan_errors": [],
+                }
+
+            @staticmethod
+            def media_payload(_media):
+                return {"title": "Demo", "tmdb_id": 42}
+
+            @staticmethod
+            def meta_payload(_meta):
+                return {"begin_season": 1}
+
+            @staticmethod
+            def media_type(_media):
+                return "tv"
+
+        for source_kind in ("qb", "local"):
+            for existing_count in (5, 6):
+                with self.subTest(source_kind=source_kind, count=existing_count):
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        source = root / "Demo.S01"
+                        source.mkdir()
+                        files = [source / f"Demo.S01E{i:02d}.mkv" for i in range(1, 7)]
+                        for file in files:
+                            file.write_bytes(b"episode")
+                        library_root = root / "library"
+                        season = (
+                            library_root / "欧美剧"
+                            / "Demo (2026) {tmdbid=42}" / "Season 1"
+                        )
+                        season.mkdir(parents=True)
+                        for index in range(1, existing_count + 1):
+                            (season / f"Demo - S01E{index:02d}.strm").write_text(
+                                "cloud://episode", encoding="utf-8"
+                            )
+                        store = database.SQLiteStore(root / "state.db")
+                        store.initialize()
+                        media_id = "rollback-card"
+                        downloader = "FILE" if source_kind == "local" else "qb-main"
+                        store.upsert_media_item({
+                            "id": media_id,
+                            "state": "rolled_back",
+                            "rolled_back": True,
+                            "source_name": source.name,
+                            "source_path": str(source.resolve()),
+                            "downloader_id": downloader,
+                            "info_hash": "demo",
+                            "details": {
+                                "source_identity": {
+                                    "kind": "local_folder" if source_kind == "local"
+                                    else "qb_download",
+                                },
+                                "rss_source": {"task_id": "rss-task"},
+                            },
+                        })
+                        store.replace_file_mappings(downloader, "demo", [{
+                            "media_id": media_id,
+                            "file_index": index,
+                            "source_relative_path": file.name,
+                            "current_source_path": str(file.resolve()),
+                        } for index, file in enumerate(files)])
+                        library_layout = layout.LibraryLayout.from_config(
+                            str(library_root),
+                            [{
+                                "name": "source", "prefix": str(root),
+                                "link_roots": {"series": str(root / "links")},
+                                "enabled": True,
+                            }],
+                        )
+                        if source_kind == "local":
+                            service = file_manager.LocalFileManagerService(
+                                store, gateway=Gateway(), library_layout=library_layout
+                            )
+                            refreshed = service.recognize_entry(
+                                source, refresh_media_id=media_id
+                            )["item"]
+                        else:
+                            service = qb_sync.QbSyncService(
+                                store=store, gateway=Gateway(),
+                                inventory_checker=inventory.LocalInventoryChecker([]),
+                                library_layout=library_layout,
+                            )
+                            refreshed = service.refresh_media_from_saved_files(media_id)
+                        expected_state = "existing" if existing_count == 6 else "rolled_back"
+                        self.assertEqual(refreshed["state"], expected_state)
+                        self.assertTrue(refreshed["rolled_back"])
+                        self.assertEqual(
+                            refreshed["details"]["inventory"]["exists_count"],
+                            existing_count,
+                        )
+                        self.assertEqual(
+                            store.list_media(state=expected_state)["total"], 1
+                        )
+                        other_state = "rolled_back" if existing_count == 6 else "existing"
+                        self.assertEqual(store.list_media(state=other_state)["total"], 0)
+                        self.assertEqual(
+                            store.list_media()["state_counts"], {expected_state: 1}
+                        )
+                        self.assertEqual(store.hash_candidate_ids(), [])
+
+
 class QbTaskScopeTest(unittest.TestCase):
     def test_missing_history_prefers_rss_over_manual_for_shared_pair(self) -> None:
         scope = qb_sync.RssTaskQbScope.from_tasks([
@@ -388,6 +537,54 @@ class LocalInventoryCheckerTest(unittest.TestCase):
 
 
 class MoviePilotNamingPlanTest(unittest.TestCase):
+    def test_manual_season_overrides_file_parser_but_automatic_multiseason_is_preserved(self):
+        class Meta:
+            def __init__(self, path=None, title=None):
+                self.begin_season = 202 if "bad" in str(path) else 2
+                self.end_season = 203
+                self.begin_episode = 1
+                self.year = 2022
+
+        def recommend_name(meta, media):
+            self.assertIsNone(meta.end_season)
+            return f"{media.title}/Season {meta.begin_season}/S{meta.begin_season}E01.mkv"
+
+        config = types.ModuleType("app.core.config")
+        config.settings = types.SimpleNamespace(RMT_MEDIAEXT=[".mkv"])
+        metainfo = types.ModuleType("app.core.metainfo")
+        metainfo.MetaInfo = metainfo.MetaInfoPath = Meta
+        core = types.ModuleType("app.core")
+        core.metainfo = metainfo
+        filemanager = types.ModuleType("app.modules.filemanager")
+        filemanager.FileManagerModule = types.SimpleNamespace(recommend_name=recommend_name)
+        modules = {
+            "app.core": core, "app.core.config": config,
+            "app.core.metainfo": metainfo, "app.modules.filemanager": filemanager,
+        }
+        media = types.SimpleNamespace(type="电视剧", title="Show", season=4)
+        with mock.patch.dict(sys.modules, modules):
+            for season in (0, 4):
+                with self.subTest(manual_season=season):
+                    plan = qb_sync.MoviePilotQbGateway.plan_inventory_files(
+                        media, [{"name": "bad.mkv"}, {"name": "second.mkv"}],
+                        season_override=season,
+                    )
+                    # Duplicate episodes are still rejected after applying the season.
+                    self.assertEqual(len(plan["expected_files"]), 1)
+                    self.assertIn(f"Season {season}/S{season}E01", plan["target_name"])
+                    self.assertTrue(plan["plan_errors"])
+
+            filemanager.FileManagerModule.recommend_name = (
+                lambda meta, _media: f"Season {meta.begin_season}/E01.mkv"
+            )
+            plan = qb_sync.MoviePilotQbGateway.plan_inventory_files(
+                media, [{"name": "bad.mkv"}, {"name": "second.mkv"}],
+            )
+            self.assertEqual(
+                [row["new_rel"] for row in plan["expected_files"]],
+                ["Season 202/E01.mkv", "Season 2/E01.mkv"],
+            )
+
     def test_preserves_full_mp_name_and_only_derives_strm_suffix(self) -> None:
         calls = []
 
