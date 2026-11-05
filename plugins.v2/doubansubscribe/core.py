@@ -336,7 +336,11 @@ def build_title_hypotheses(title: str) -> List[TitleHypothesis]:
     result: List[TitleHypothesis] = []
     seen = set()
     _append_hypothesis(result, seen, source, None, "exact_title", "exact")
-    if not source or source.isdigit():
+    if (
+        not source
+        or source.isdigit()
+        or re.fullmatch(r"[零〇一二两三四五六七八九十百千万亿]+", source)
+    ):
         return result
 
     arc_match = re.match(
@@ -391,8 +395,12 @@ def build_title_hypotheses(title: str) -> List[TitleHypothesis]:
             "base_and_season", "weak",
         )
 
-    chinese_match = re.match(r"^(?P<base>.+?)(?P<num>[二两三四五六七八九十])$", source)
-    if chinese_match:
+    # Read the whole numeric suffix: 一九七 is part of a title, not season 七.
+    chinese_match = re.match(
+        r"^(?P<base>.+?)(?P<num>[零〇一二两三四五六七八九十百千万亿]+)$",
+        source,
+    )
+    if chinese_match and len(chinese_match.group("num")) == 1:
         season = parse_season_number(chinese_match.group("num"))
         if season is not None and season >= 2:
             _append_hypothesis(

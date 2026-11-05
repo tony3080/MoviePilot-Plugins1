@@ -110,7 +110,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.16"
+    plugin_version = "0.5.17"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1999,8 +1999,9 @@ class DoubanSubscribe(_PluginBase):
             original_title=str(douban_info.get("original_title") or ""),
             aliases=tuple(str(value) for value in (douban_info.get("aka") or []) if value),
         )
+        required_structure = self._required_structure_hypotheses(title, hypotheses)
         parent_season_hypotheses = [
-            hypothesis for hypothesis in hypotheses
+            hypothesis for hypothesis in required_structure
             if hypothesis.mode == "base_and_season"
             and (hypothesis.season or 0) >= 2
         ]
@@ -2245,6 +2246,35 @@ class DoubanSubscribe(_PluginBase):
             search_attempts,
         )
 
+    @staticmethod
+    def _required_structure_hypotheses(
+        title: str,
+        hypotheses: List[Any],
+    ) -> List[Any]:
+        """Only explicit structure or primary-title suffixes constrain all results."""
+        structural = [
+            hypothesis for hypothesis in hypotheses
+            if hypothesis.mode in {"base_and_season", "arc_title"}
+        ]
+        explicit = [
+            hypothesis for hypothesis in structural
+            if hypothesis.strength == "strong"
+        ]
+        if explicit:
+            return explicit
+        primary_keys = {
+            (hypothesis.title, hypothesis.season, hypothesis.mode, hypothesis.arc_title)
+            for hypothesis in build_title_hypotheses(title)
+            if hypothesis.mode in {"base_and_season", "arc_title"}
+        }
+        return [
+            hypothesis for hypothesis in structural
+            if (
+                hypothesis.title, hypothesis.season,
+                hypothesis.mode, hypothesis.arc_title,
+            ) in primary_keys
+        ]
+
     @classmethod
     def _tmdb_query_titles(cls, hypothesis: Any) -> Tuple[str, ...]:
         """Return real TMDB queries while keeping sequel-season intent separate."""
@@ -2333,10 +2363,9 @@ class DoubanSubscribe(_PluginBase):
         if error or not tv_results:
             return None
 
-        structural_hypotheses = [
-            hypothesis for hypothesis in hypotheses
-            if hypothesis.mode in {"base_and_season", "arc_title"}
-        ]
+        structural_hypotheses = self._required_structure_hypotheses(
+            str(source.get("title") or ""), hypotheses,
+        )
         selected_hypotheses = structural_hypotheses or hypotheses[:1]
         scored: List[ScoredCandidate] = []
         media_by_key: Dict[Tuple[int, int], Any] = {}

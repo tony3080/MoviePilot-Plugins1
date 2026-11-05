@@ -1981,6 +1981,85 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertEqual(decision.winner.candidate.season, 2)
         self.assertTrue(any(item["mode"] == "arc_title" for item in attempts))
 
+    def _setup_rebirth_password_candidate(self) -> dict:
+        """A synthetic S01 candidate, without live Douban or TMDB requests."""
+        media = types.SimpleNamespace(
+            tmdb_id=999001,
+            title="重生密码",
+            original_title="重生密碼",
+            names=[],
+            year="2026",
+            seasons={1: [object()] * 12},
+            season_years={1: "2026"},
+            actors=["演员甲", "演员乙"],
+            directors=[],
+        )
+        self.plugin.chain = types.SimpleNamespace(
+            search_medias=lambda meta, **_kwargs: (
+                [types.SimpleNamespace(tmdb_id=999001)]
+                if meta.name == "重生密码" else []
+            ),
+            recognize_media=lambda **_kwargs: media,
+        )
+        return {
+            "title": "重生密码",
+            "original_title": "重生密碼",
+            "year": "2026",
+            "actors": ["演员甲", "演员乙"],
+            "aka": [
+                "197°C", "零下一九七", "永生密码一九七", "The Awakened",
+            ],
+        }
+
+    def test_rebirth_password_numeric_aliases_keep_s01_candidate(self) -> None:
+        source = self._setup_rebirth_password_candidate()
+        decision, media_by_key, attempts = self.plugin._match_tmdb(source, 12)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 1)
+        self.assertIn((999001, 1), media_by_key)
+        self.assertFalse(any(item["mode"] == "base_and_season" for item in attempts))
+        self.assertEqual(attempts[0]["parent_season_rejections"], 0)
+
+    def test_weak_alias_season_does_not_override_primary_title_candidate(self) -> None:
+        source = self._setup_rebirth_password_candidate()
+        source["aka"] = ["备用别名七"]
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb(source, 12)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 1)
+        self.assertIn((999001, 1), media_by_key)
+        self.assertTrue(any(item["season"] == 7 for item in attempts))
+        self.assertEqual(attempts[0]["parent_season_rejections"], 0)
+
+    def test_weak_alias_season_does_not_override_imdb_candidate(self) -> None:
+        source = self._setup_rebirth_password_candidate()
+        source.update({"aka": ["备用别名七"], "imdb_id": "tt9999001"})
+        self.plugin._tmdb_find_by_imdb_id = lambda _imdb_id: {
+            "tv_results": [{"id": 999001}],
+        }
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb(source, 12)
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual(decision.winner.candidate.season, 1)
+        self.assertTrue(decision.winner.candidate.imdb_exact)
+        self.assertIn((999001, 1), media_by_key)
+        self.assertEqual(attempts[0]["parent_season_rejections"], 0)
+        self.assertEqual(len(attempts), 1)
+
+    def test_explicit_alias_season_still_requires_parent_season(self) -> None:
+        source = self._setup_rebirth_password_candidate()
+        source["aka"] = ["重生密码 第七季"]
+
+        decision, media_by_key, attempts = self.plugin._match_tmdb(source, 12)
+
+        self.assertFalse(decision.accepted)
+        self.assertIn("S07", decision.reason)
+        self.assertEqual(media_by_key, {})
+        self.assertGreater(attempts[0]["parent_season_rejections"], 0)
+
     def test_numeric_suffix_finds_parent_through_explicit_season_query(self) -> None:
         parent = types.SimpleNamespace(
             tmdb_id=374627,

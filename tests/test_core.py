@@ -87,6 +87,18 @@ class TitleHypothesisTest(unittest.TestCase):
         self.assertIn(("Punishment 2", None, "original_title"), paths)
         self.assertIn(("罚罪", 2, "base_and_season"), paths)
 
+    def test_contiguous_chinese_numbers_are_not_split_into_seasons(self) -> None:
+        for title in (
+            "零下一九七", "永生密码一九七", "档案二零二六", "故事十三", "二十",
+        ):
+            with self.subTest(title=title):
+                hypotheses = core.build_title_hypotheses(title)
+                self.assertEqual(
+                    [(item.title, item.season, item.mode) for item in hypotheses],
+                    [(title, None, "exact_title")],
+                )
+        self.assert_season_candidate("故事 第十三季", "故事", 13, "strong")
+
     def test_named_arc_is_split_only_with_an_explicit_delimiter(self) -> None:
         hypotheses = core.build_title_hypotheses("鬼灭之刃 无限列车篇")
         self.assertIn(
