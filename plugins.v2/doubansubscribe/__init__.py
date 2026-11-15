@@ -99,6 +99,7 @@ UNKNOWN_TOTAL_EPISODE = 100
 STALE_SUBSCRIPTION_DAYS = 10
 STALE_RECHECK_INTERVAL_DAYS = 1
 STALE_TOTAL_EXEMPT_THRESHOLD = 200
+STALE_SOURCE_DIFF_TOLERANCE = 2
 
 
 class DoubanSubscribe(_PluginBase):
@@ -110,7 +111,7 @@ class DoubanSubscribe(_PluginBase):
         "https://raw.githubusercontent.com/jxxghp/"
         "MoviePilot-Plugins/main/icons/douban.png"
     )
-    plugin_version = "0.5.17"
+    plugin_version = "0.5.18"
     plugin_author = "tony3080"
     author_url = "https://github.com/tony3080"
     plugin_config_prefix = "doubansubscribe_"
@@ -1817,11 +1818,26 @@ class DoubanSubscribe(_PluginBase):
             mediainfo = media_by_key.get((winner.tmdb_id, winner.season))
             if not mediainfo:
                 return self._failed_record(base_record, "tmdb_detail_missing", "TMDB 详情加载失败")
+            tmdb_total = self._safe_int(
+                getattr(winner, "season_episode_count", None),
+                0,
+            ) or 0
+            if not tmdb_total:
+                seasons = getattr(mediainfo, "seasons", {}) or {}
+                episodes = seasons.get(winner.season)
+                if episodes is None:
+                    episodes = seasons.get(str(winner.season))
+                if episodes is not None:
+                    tmdb_total = len(episodes)
+            effective_total = max(total_episode or 0, tmdb_total)
+            if not effective_total:
+                effective_total = UNKNOWN_TOTAL_EPISODE
+            base_record["tmdb_total"] = tmdb_total
             subscription = self._create_subscription(
                 mediainfo=mediainfo,
                 douban_id=douban_id,
                 season=winner.season,
-                total_episode=total_episode or UNKNOWN_TOTAL_EPISODE,
+                total_episode=effective_total,
                 category=category,
                 source_key=item.key,
                 total_pending=not bool(total_episode),
@@ -2753,7 +2769,7 @@ class DoubanSubscribe(_PluginBase):
             "reason": (
                 f"豆瓣尚未提供总集数，已暂按 {total_episode} 集创建并锁定订阅"
                 if total_pending else
-                f"已按豆瓣总集数 {total_episode} 创建并锁定订阅"
+                f"已按 TMDB/豆瓣较大总集数 {total_episode} 创建并锁定订阅"
             ),
             "locked": True,
             "managed": True,
@@ -3118,10 +3134,19 @@ class DoubanSubscribe(_PluginBase):
         now: datetime.datetime,
         inactive_days: int,
     ) -> str:
-        """Finish a stale subscription only when TMDB, Douban and progress agree."""
+        """Reconcile stale subscriptions with both sources before finishing."""
         subscribe_id = int(record.get("subscribe_id"))
         current_total, current_lack, completed = self._subscription_progress(subscribe)
         tmdb_total = self._tmdb_season_total(subscribe)
+        douban_id = str(record.get("douban_id") or "").strip()
+        if not douban_id:
+            raise RuntimeError("订阅缺少豆瓣 ID，无法复核总集数")
+        douban_info = self._call_douban(
+            self.chain.douban_info,
+            doubanid=douban_id,
+            mtype=MediaType.TV,
+        )
+        douban_total = extract_total_episode(douban_info or {})
         next_check = self._format_datetime(
             now + datetime.timedelta(days=STALE_RECHECK_INTERVAL_DAYS)
         )
@@ -3137,6 +3162,7 @@ class DoubanSubscribe(_PluginBase):
             "observed_lack": current_lack,
             "observed_completed": completed,
             "tmdb_season_total": tmdb_total,
+            "douban_rechecked_total": douban_total or 0,
             # Clear fields written by the earlier completion-evidence design.
             "tmdb_season_finished": "",
             "tmdb_status": "",
@@ -3144,55 +3170,72 @@ class DoubanSubscribe(_PluginBase):
             "tmdb_last_air_date": "",
             "last_checked": self._now(),
         }
-        if not tmdb_total:
+        if not tmdb_total or not douban_total:
             snapshot_record["reason"] = (
-                f"连续 {inactive_days} 天未更新；TMDB 未返回当前季明确总集数，"
+                f"连续 {inactive_days} 天未更新；"
+                f"{'TMDB' if not tmdb_total else '豆瓣'} 未返回明确总集数，"
                 f"将在 {STALE_RECHECK_INTERVAL_DAYS} 天后重试"
             )
             self._upsert_managed(snapshot_record)
             return "pending"
-        if tmdb_total != completed:
+
+        source_max = max(tmdb_total, douban_total)
+        source_gap = abs(tmdb_total - douban_total)
+        can_converge = (
+            completed >= douban_total
+            and source_gap <= STALE_SOURCE_DIFF_TOLERANCE
+        )
+        if source_max > current_total and not can_converge:
+            new_lack = max(source_max - completed, 0)
+            SubscribeOper().update(subscribe_id, {
+                "total_episode": source_max,
+                "lack_episode": new_lack,
+                "manual_total_episode": 1,
+                "state": "R",
+            })
+            snapshot_record.update({
+                "expected_total": source_max,
+                "status": "active",
+                "check_after": "",
+                "reason": (
+                    f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                    f"豆瓣为 {douban_total} 集，按较大值 {source_max} 集继续订阅，"
+                    f"搜索缺失的 {new_lack} 集"
+                ),
+            })
+            self._upsert_managed(snapshot_record)
+            try:
+                SubscribeChain().search(sid=subscribe_id, state="R", manual=False)
+            except Exception as error:
+                logger.error(
+                    f"豆瓣订阅助手：订阅 #{subscribe_id} 总集数已更新，"
+                    f"但立即搜索失败：{error}",
+                    exc_info=True,
+                )
+                self._upsert_managed({
+                    **snapshot_record,
+                    "reason": (
+                        f"总集数已按 TMDB/豆瓣较大值更新为 {source_max}；"
+                        "立即搜索失败，订阅保持启用"
+                    ),
+                })
+            return "pending"
+
+        if completed < douban_total:
             snapshot_record["reason"] = (
-                f"连续 {inactive_days} 天未更新；TMDB 当前季总集数为 {tmdb_total}，"
-                f"MoviePilot 当前已获得 {completed} 集，数量不一致，暂不完成"
+                f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                f"豆瓣为 {douban_total} 集，MoviePilot 当前已获得 {completed} 集，"
+                "仍有缺集，暂不完成"
             )
             self._upsert_managed(snapshot_record)
             return "pending"
-
-        self._upsert_managed({
-            **snapshot_record,
-            "reason": (
-                f"连续 {inactive_days} 天未更新；TMDB 当前季总集数为 "
-                f"{tmdb_total} 集，正在复核豆瓣总集数"
-            ),
-        })
-        douban_id = str(record.get("douban_id") or "").strip()
-        if not douban_id:
-            raise RuntimeError("订阅缺少豆瓣 ID，无法复核总集数")
-        douban_info = self._call_douban(
-            self.chain.douban_info,
-            doubanid=douban_id,
-            mtype=MediaType.TV,
-        )
-        douban_total = extract_total_episode(douban_info or {})
-        checked_record = {
-            **snapshot_record,
-            "douban_rechecked_total": douban_total or 0,
-        }
-        if not douban_total:
-            checked_record["reason"] = (
-                f"连续 {inactive_days} 天未更新；TMDB 已确认 {tmdb_total} 集，"
-                "但豆瓣未返回明确总集数，暂不完成"
+        if source_gap > STALE_SOURCE_DIFF_TOLERANCE:
+            snapshot_record["reason"] = (
+                f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                f"豆瓣为 {douban_total} 集，差异 {source_gap} 集超过允许的 "
+                f"{STALE_SOURCE_DIFF_TOLERANCE} 集，暂不完成"
             )
-            self._upsert_managed(checked_record)
-            return "pending"
-        if douban_total != tmdb_total or douban_total != completed:
-            checked_record["reason"] = (
-                f"连续 {inactive_days} 天未更新；当前已获得 {completed} 集，"
-                f"TMDB 为 {tmdb_total} 集，豆瓣为 {douban_total} 集，"
-                "三方数量不一致，暂不完成"
-            )
-            self._upsert_managed(checked_record)
+            self._upsert_managed(snapshot_record)
             return "pending"
 
         latest = SubscribeOper().get(subscribe_id)
@@ -3205,29 +3248,33 @@ class DoubanSubscribe(_PluginBase):
                 or latest_completed != completed:
             raise RuntimeError("复核期间订阅进度已变化，取消自动完成")
 
+        final_total = max(completed, douban_total)
         final_record = {
-            **checked_record,
-            "expected_total": douban_total,
+            **snapshot_record,
+            "expected_total": final_total,
             "stale_check_after": "",
             "status": "confirming",
             "reason": (
-                f"连续 {inactive_days} 天未更新，TMDB、豆瓣与已获得集数"
-                f"均为 {douban_total}，准备由 MoviePilot 完成订阅"
+                f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                f"豆瓣为 {douban_total} 集，已获得 {completed} 集，"
+                "差异在允许范围内，准备由 MoviePilot 完成订阅"
             ),
         }
         self._upsert_managed(final_record)
         return self._finish_after_unchanged_confirmation(
             record=final_record,
             subscribe=latest,
-            expected_total=douban_total,
+            expected_total=final_total,
             douban_total=douban_total,
             finalizing_reason=(
-                f"连续 {inactive_days} 天未更新，TMDB、豆瓣与已获得集数"
-                f"均为 {douban_total}，正在由 MoviePilot 完成订阅"
+                f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                f"豆瓣为 {douban_total} 集，已获得 {completed} 集，"
+                "正在由 MoviePilot 完成订阅"
             ),
             completed_reason=(
-                f"连续 {inactive_days} 天未更新，TMDB、豆瓣与已获得集数"
-                f"均为 {douban_total}，已将总集数修正并完成订阅"
+                f"连续 {inactive_days} 天未更新；TMDB 为 {tmdb_total} 集，"
+                f"豆瓣为 {douban_total} 集，已获得 {completed} 集，"
+                "已收拢总集数并完成订阅"
             ),
         )
 

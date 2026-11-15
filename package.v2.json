@@ -3,7 +3,7 @@
     "name": "豆瓣订阅助手",
     "description": "从 RSS 和猫眼榜单发现剧集，锁定并复核豆瓣总集数，补搜未更新订阅。",
     "labels": "订阅",
-    "version": "0.5.17",
+    "version": "0.5.18",
     "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/douban.png",
     "author": "tony3080",
     "author_url": "https://github.com/tony3080",
@@ -11,6 +11,7 @@
     "v2": true,
     "system_version": ">=2.15.0",
     "history": {
+      "v0.5.18": "初始订阅总集数取 TMDB 与豆瓣较大值；连续 10 天未更新时同时复核两边，TMDB 比豆瓣最多多 2 集且已获得豆瓣集数时允许收拢完成，避免 TMDB 多建一集导致订阅无法结束",
       "v0.5.17": "修复连续中文数字别名被误判为季号导致重生密码等作品匹配失败；弱别名季度不再覆盖主标题和 IMDb 候选，保留明确续季匹配父剧真实分季的限制",
       "v0.5.16": "新增插件创建订阅永久去重记录；即使手动删除订阅卡片或来源条目 key 变化，也不会重复创建相同豆瓣/TMDB 季度订阅；自动迁移已有受管订阅身份",
       "v0.5.15": "猫眼热度榜改用当前接口及上海时区当日日期，在同一 MoviePilot 浏览器会话内获取全网电视剧和网剧榜；修复 HTTP 错误被误报无响应，明确提示网页验证与数据格式异常，并隔离单榜失败",

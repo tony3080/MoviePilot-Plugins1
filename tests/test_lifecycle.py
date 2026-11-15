@@ -1017,6 +1017,164 @@ class ManagedSubscriptionLifecycleTest(unittest.TestCase):
         self.assertTrue(douban_calls)
         self.assertEqual(self.plugin._managed_record(71)["tmdb_season_finished"], "")
 
+    def test_stale_subscription_allows_two_episode_tmdb_surplus_to_converge(self) -> None:
+        subscribe = FakeSubscribe(75)
+        subscribe.total_episode = 31
+        subscribe.lack_episode = 1
+        FakeSubscribeOper.records[75] = subscribe
+        self.plugin._register_managed_subscription(
+            subscribe_id=75,
+            title=subscribe.name,
+            tmdb_id=subscribe.tmdbid,
+            douban_id=subscribe.doubanid,
+            season=subscribe.season,
+            expected_total=31,
+            category="domestic",
+            status="active",
+            reason="订阅中",
+        )
+        FakeTmdbChain.seasons[123] = [types.SimpleNamespace(
+            season_number=1,
+            episode_count=31,
+        )]
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 30},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(
+                type=MediaType.TV,
+                title_year="测试剧 (2026)",
+            ),
+        )
+        now = datetime.datetime(
+            2026, 7, 31, 9, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_stale_subscriptions()
+
+        self.assertEqual(summary["stale_completed"], 1)
+        self.assertIsNone(FakeSubscribeOper().get(75))
+        record = self.plugin._managed_record(75)
+        self.assertEqual(record["expected_total"], 30)
+        self.assertEqual(record["tmdb_season_total"], 31)
+        self.assertEqual(record["douban_rechecked_total"], 30)
+
+    def test_stale_subscription_can_converge_before_raising_legacy_target(self) -> None:
+        subscribe = FakeSubscribe(78)
+        subscribe.total_episode = 30
+        subscribe.lack_episode = 0
+        FakeSubscribeOper.records[78] = subscribe
+        self.plugin._register_managed_subscription(
+            subscribe_id=78,
+            title=subscribe.name,
+            tmdb_id=subscribe.tmdbid,
+            douban_id=subscribe.doubanid,
+            season=subscribe.season,
+            expected_total=30,
+            category="domestic",
+            status="active",
+            reason="订阅中",
+        )
+        FakeTmdbChain.seasons[123] = [types.SimpleNamespace(
+            season_number=1,
+            episode_count=31,
+        )]
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 30},
+            recognize_media=lambda **_kwargs: types.SimpleNamespace(
+                type=MediaType.TV,
+                title_year="测试剧 (2026)",
+            ),
+        )
+        now = datetime.datetime(
+            2026, 7, 31, 9, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_stale_subscriptions()
+
+        self.assertEqual(summary["stale_completed"], 1)
+        self.assertIsNone(FakeSubscribeOper().get(78))
+        self.assertEqual(self.plugin._managed_record(78)["expected_total"], 30)
+
+    def test_stale_subscription_expands_to_larger_source_total_and_searches(self) -> None:
+        subscribe = FakeSubscribe(76)
+        subscribe.total_episode = 10
+        subscribe.lack_episode = 10
+        FakeSubscribeOper.records[76] = subscribe
+        self.plugin._register_managed_subscription(
+            subscribe_id=76,
+            title=subscribe.name,
+            tmdb_id=subscribe.tmdbid,
+            douban_id=subscribe.doubanid,
+            season=subscribe.season,
+            expected_total=10,
+            category="domestic",
+            status="active",
+            reason="订阅中",
+        )
+        FakeTmdbChain.seasons[123] = [types.SimpleNamespace(
+            season_number=1,
+            episode_count=30,
+        )]
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 10},
+        )
+        now = datetime.datetime(
+            2026, 7, 31, 9, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_stale_subscriptions()
+
+        self.assertEqual(summary["stale_pending"], 1)
+        self.assertEqual(subscribe.total_episode, 30)
+        self.assertEqual(subscribe.lack_episode, 30)
+        self.assertEqual(subscribe.state, "R")
+        self.assertEqual(FakeSubscribeChain.search_calls[0]["sid"], 76)
+        record = self.plugin._managed_record(76)
+        self.assertEqual(record["expected_total"], 30)
+        self.assertIn("按较大值 30 集继续订阅", record["reason"])
+
+    def test_stale_subscription_rejects_source_gap_over_two_episodes(self) -> None:
+        subscribe = FakeSubscribe(77)
+        subscribe.total_episode = 33
+        subscribe.lack_episode = 3
+        FakeSubscribeOper.records[77] = subscribe
+        self.plugin._register_managed_subscription(
+            subscribe_id=77,
+            title=subscribe.name,
+            tmdb_id=subscribe.tmdbid,
+            douban_id=subscribe.doubanid,
+            season=subscribe.season,
+            expected_total=33,
+            category="domestic",
+            status="active",
+            reason="订阅中",
+        )
+        FakeTmdbChain.seasons[123] = [types.SimpleNamespace(
+            season_number=1,
+            episode_count=33,
+        )]
+        self.plugin.chain = types.SimpleNamespace(
+            douban_info=lambda **_kwargs: {"episodes_count": 30},
+        )
+        now = datetime.datetime(
+            2026, 7, 31, 9, 0,
+            tzinfo=datetime.timezone(datetime.timedelta(hours=8)),
+        )
+
+        with patch.object(self.plugin, "_now_datetime", return_value=now):
+            summary = self.plugin._process_stale_subscriptions()
+
+        self.assertEqual(summary["stale_pending"], 1)
+        self.assertIsNotNone(FakeSubscribeOper().get(77))
+        self.assertEqual(subscribe.total_episode, 33)
+        self.assertFalse(FakeSubscribeChain.search_calls)
+        self.assertIn("超过允许的 2 集", self.plugin._managed_record(77)["reason"])
+
     def test_stale_subscription_over_200_total_is_exempt(self) -> None:
         subscribe = FakeSubscribe(72)
         subscribe.total_episode = 201
