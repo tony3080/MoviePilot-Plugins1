@@ -1,6 +1,6 @@
 # RSS一条龙 iOS
 
-原生 SwiftUI 客户端，最低 iOS 17，当前版本 0.2.3。通过 MoviePilot 的现有 HTTP API 操作 RSS一条龙，无需增加服务器接口。服务端需要包含本地插件的最新接口，例如 `qb/check-presence` 和 `media/mark-unidentified`；强制入库需要服务端 v1.1.11 或更新版本。
+原生 SwiftUI 客户端，最低 iOS 17，当前版本 0.2.4。通过 MoviePilot 的现有 HTTP API 操作 RSS一条龙，无需增加服务器接口。服务端需要包含本地插件的最新接口，例如 `qb/check-presence` 和 `media/mark-unidentified`；强制入库需要服务端 v1.1.11 或更新版本。
 
 ## 功能
 
@@ -21,7 +21,10 @@ App 中的详情使用真实服务器数据；连接失败会显示错误，不�
 支持已识别、待入库和已回退卡片，确认后调用 `media/action` 的 `force_upload`，
 优先尝试秒传，无法秒传时继续真实上传。未选择或所选状态不兼容时
 对应按钮禁用，切换筛选或页面时清空选择。选中仅显示蓝色边框；
-源文件名直接显示一行，超出部分省略，通过独立的信息按钮查看完整名称与详情。
+源文件名直接显示一行，超出部分省略，点击信息按钮在按钮旁显示仅含完整文件名的小浮层，点外部收起，卡片高度不变；iPhone 上也保持浮层形式。
+入库和 qB 卡片均在库存提示上方显示服务器规划的媒体文件夹名称，使用 MP 的信息蓝色。
+目录名沿用插件的字段顺序：`card_summary.expected_directory`、`details.inventory_plan.expected_directory`、`target_name`，不在客户端拼接；没有规划名称时隐藏该行。
+长按卡片选择“详情与编辑”可使用原有识别、标签和 P/T 链接功能。
 状态筛选位于工具栏删除按钮右侧，入库和 qB 页分别保存所选状态，重启 App 后自动恢复。
 `preview.html` 可直接打开，使用演示数据验证选择、筛选及批量操作，不连接真实 NAS。
 

@@ -4,6 +4,28 @@ import Testing
 
 @Suite("Client contracts", .serialized)
 struct ClientTests {
+    @Test func directoryNameUsesServerPlanAndKeepsTitleSeparate() {
+        var value: JSONValue = .object([
+            "title": .string("茜茜皇后"),
+            "details": .object(["inventory_plan": .object([
+                "expected_directory": .string("茜茜皇后 (2022) - {tmdbid=131488}")
+            ])])
+        ])
+        #expect(Record(value: value).directoryName == "茜茜皇后 (2022) - {tmdbid=131488}")
+        #expect(Record(value: value).title == "茜茜皇后")
+        value["card_summary"] = .object(["expected_directory": .string("服务器自定义目录")])
+        #expect(Record(value: value).directoryName == "服务器自定义目录")
+        value["card_summary"] = .object(["expected_directory": .string("")])
+        #expect(Record(value: value).directoryName == "茜茜皇后 (2022) - {tmdbid=131488}")
+        value["details"] = .object([:])
+        value["target_name"] = .string("旧版服务器目录")
+        #expect(Record(value: value).directoryName == "旧版服务器目录")
+        value["recognition_state"] = .string("identified")
+        value["card_summary"] = .object(["expected_directory": .string("茜茜皇后 (2022) - {tmdbid=131488}")])
+        #expect(Record(value: value).directoryName == "茜茜皇后 (2022) - {tmdbid=131488}")
+        #expect(Record(value: .object(["title": .string("未识别")])).directoryName.isEmpty)
+    }
+
     @Test func batchActionsRequireASelectionAndCompatibleStates() {
         func record(_ state: String) -> Record {
             Record(value: .object(["id": .string(state), "state": .string(state)]))

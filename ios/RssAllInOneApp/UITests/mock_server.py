@@ -21,7 +21,7 @@ MEDIA = {
     "comment_url": "https://pt.example/details.php?id=123",
     "details": {
         "site_labels": {"mandarin": True, "effects": False},
-        "inventory_plan": {"expected_files": [
+        "inventory_plan": {"expected_directory": "测试电影 (2026) - {tmdbid=42}", "expected_files": [
             {"recognition": {"resource_tokens": ["1080p"], "customization": "REMUX@U版"}}
         ]},
         "inventory": {"folder_status": "exists", "total_files": 12, "exists_count": 0},
@@ -40,7 +40,7 @@ TORRENT = {
     "media_type": "movie", "tmdb_id": 42, "category": "REMUX",
     "details": {
         "site_labels": {"mandarin": True, "effects": True},
-        "inventory_plan": {"expected_files": [
+        "inventory_plan": {"expected_directory": "测试下载任务 (2026) - {tmdbid=42}", "expected_files": [
             {"recognition": {"resource_tokens": ["1080p"], "customization": "REMUX@U版"}}
         ]},
     },

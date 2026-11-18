@@ -92,6 +92,12 @@ struct Record: Identifiable, Equatable, Sendable {
                    details["qb_source_path"].text].first { !$0.isEmpty } ?? ""
         return URL(fileURLWithPath: raw).lastPathComponent.nonempty ?? raw
     }
+    var directoryName: String {
+        [value["card_summary"]["expected_directory"].text,
+         details["inventory_plan"]["expected_directory"].text,
+         value["target_name"].text]
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+    }
     var poster: String {
         let path = [value["poster"].text, details["media"]["poster_path"].text, details["media"]["poster"].text]
             .first { !$0.isEmpty } ?? ""

@@ -51,6 +51,7 @@
     .poster img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
     .media-copy { grid-column:2; grid-row:1; min-width:0; padding:12px 12px 6px; display:flex; flex-direction:column; gap:6px; pointer-events:none; }
     .media-title { font-size:16px; line-height:1.35; font-weight:650; overflow-wrap:anywhere; }
+    .directory-name { color:rgb(22,177,255); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
     .tag-row { display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px; }
     .tag { font-size:11px; font-weight:500; line-height:1.25; border-radius:5px; padding:4px 6px; max-width:100%; overflow-wrap:anywhere; color:#696c77; background:#7e829312; border:1px solid #7e82931c; }
     .tag.blue { color:#286fc5; background:#2878e515; border-color:#2878e522; }
@@ -68,6 +69,8 @@
     .source-button svg { width:15px; height:15px; }
     .detail-button { margin-left:auto; margin-right:-8px; }
     .source-name { min-width:0; flex:1; font-size:12px; color:var(--muted); line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .filename-popover { position:fixed; inset:auto; margin:0; padding:12px; border:0; border-radius:8px; background:var(--surface); color:var(--text); box-shadow:0 5px 24px #0003; font-size:13px; line-height:1.5; overflow-wrap:anywhere; white-space:normal; max-height:min(60dvh,400px); overflow-y:auto; overscroll-behavior:contain; }
+    .filename-popover::backdrop { background:transparent; pointer-events:none; }
     .empty { padding:60px 12px; text-align:center; color:var(--muted); }
     .nav { display:grid; grid-template-columns:repeat(4,1fr); padding:5px 8px calc(6px + env(safe-area-inset-bottom,0px)); flex:none; border-top:1px solid var(--line); background:var(--bar); backdrop-filter:blur(20px); }
     .nav button { background:none; color:var(--muted); min-height:50px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; font-size:10px; border-radius:8px; }
@@ -122,21 +125,23 @@
     </nav>
   </section>
   <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <div id="filename-popover" class="filename-popover" popover="manual" role="tooltip"></div>
   <div class="toast" id="toast" role="status" hidden></div>
   <script src="preview-assets/lucide.min.js"></script>
   <script>
     const media = [
-      { id:"media-1", title:"黑狱断肠歌之砌生猪肉", state:"已识别", tone:"blue", tags:["1080p","华语电影","REMUX@U版","4.7 GB","国配"], source:"Chinese.Midnight.Express.1997.1080p.BluRay.REMUX.mkv", poster:"preview-assets/movie.jpg", existing:0, total:1, folder:true },
-      { id:"media-2", title:"火影忍者：疾风传", state:"已识别", tone:"blue", tags:["第一季","1080p","日韩动漫","WEB-DL","128.4 GB","特效"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg", existing:4, total:14, folder:true },
-      { id:"media-3", title:"凡人修仙传", state:"待入库", tone:"purple", tags:["第四季","2160p","国产动漫","WEB-DL","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.Complete.2160p.mkv", poster:"preview-assets/series.jpg", existing:0, total:12, folder:false },
-      { id:"media-4", title:"抓特务", state:"已入库", tone:"green", tags:["2160p","华语电影","WEB-DL","6.2 GB"], source:"Catch.the.Spy.2026.2160p.WEB-DL.mkv", poster:"preview-assets/spy.jpg", existing:1, total:1, folder:true }
+      { id:"media-1", title:"黑狱断肠歌之砌生猪肉", card_summary:{expected_directory:"黑狱断肠歌之砌生猪肉 (1997) - {tmdbid=247999}"}, state:"已识别", tone:"blue", tags:["1080p","华语电影","REMUX@U版","4.7 GB","国配"], source:"Chinese.Midnight.Express.1997.1080p.BluRay.REMUX.mkv", poster:"preview-assets/movie.jpg", existing:0, total:1, folder:true },
+      { id:"media-2", title:"火影忍者：疾风传", details:{inventory_plan:{expected_directory:"火影忍者：疾风传 (2007) - {tmdbid=31910}"}}, state:"已识别", tone:"blue", tags:["第一季","1080p","日韩动漫","WEB-DL","128.4 GB","特效"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg", existing:4, total:14, folder:true },
+      { id:"media-3", title:"凡人修仙传", card_summary:{expected_directory:"凡人修仙传 (2020) - {tmdbid=102952}"}, state:"待入库", tone:"purple", tags:["第四季","2160p","国产动漫","WEB-DL","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.Complete.2160p.mkv", poster:"preview-assets/series.jpg", existing:0, total:12, folder:false },
+      { id:"media-4", title:"抓特务", target_name:"抓特务 (2026)", state:"已入库", tone:"green", tags:["2160p","华语电影","WEB-DL","6.2 GB"], source:"Catch.the.Spy.2026.2160p.WEB-DL.mkv", poster:"preview-assets/spy.jpg", existing:1, total:1, folder:true }
     ];
     const torrents = [
-      { id:"qb-1", title:"凡人修仙传", state:"已识别", tone:"blue", tags:["下载中","68%","2160p","国产动漫","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.2160p.mkv", poster:"preview-assets/series.jpg" },
-      { id:"qb-2", title:"火影忍者：疾风传", state:"已识别", tone:"blue", tags:["已完成","100%","1080p","日韩动漫","128.4 GB"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg" }
+      { id:"qb-1", title:"凡人修仙传", details:{inventory_plan:{expected_directory:"凡人修仙传 (2020) - {tmdbid=102952}"}}, state:"已识别", tone:"blue", tags:["下载中","68%","2160p","国产动漫","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.2160p.mkv", poster:"preview-assets/series.jpg",existing:0,total:8,folder:false },
+      { id:"qb-2", title:"火影忍者：疾风传", card_summary:{expected_directory:"火影忍者：疾风传 (2007) - {tmdbid=31910}"}, state:"已识别", tone:"blue", tags:["已完成","100%","1080p","日韩动漫","128.4 GB"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg",existing:4,total:14,folder:true }
     ];
     let tab="media", state="", search="", toastTimer;
     const selected=new Set();
+    let filenameAnchor=null;
     const $=selector=>document.querySelector(selector);
     const icons=()=>window.lucide?.createIcons();
     const escapeText=text=>String(text).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -148,6 +153,7 @@
       try { localStorage.setItem(stateKey(),state); } catch {}
     }
     const records=()=>tab==="qb"?torrents:media;
+    const directoryName=item=>[item.card_summary?.expected_directory,item.details?.inventory_plan?.expected_directory,item.target_name].find(value=>typeof value==="string"&&value.trim())||"";
     const visible=()=>records().filter(item=>(!state||item.state===state) && (!search||`${item.title} ${item.source}`.toLowerCase().includes(search.toLowerCase())));
     const selectedRows=()=>visible().filter(item=>selected.has(item.id));
     function iconButton(action,label,icon,danger=false) {
@@ -186,25 +192,29 @@
     }
     function mediaRow(item) {
       const picked=selected.has(item.id);
+      const directory=directoryName(item);
       return `<article class="media-row ${picked?"selected":""}" data-id="${item.id}">
         <button class="card-select" data-select="${item.id}" aria-label="选择：${escapeText(item.title)}" aria-pressed="${picked}"></button>
         <div class="poster"><img src="${item.poster}" alt="" loading="eager"></div>
         <div class="media-copy">
           <h2 class="media-title">${escapeText(item.title)}</h2>
           <div class="tag-row"><span class="tag ${item.tone}">${item.state}</span>${item.tags.map(tag=>`<span class="tag ${tagTone(tag)}">${escapeText(tag)}</span>`).join("")}</div>
+          ${directory?`<p class="directory-name">${escapeText(directory)}</p>`:""}
           ${item.total?`<div class="inventory-line ${item.existing>=item.total?"complete":""}">${item.folder?"目录已存在":"目录未建立"}（${item.existing}/${item.total}）</div>`:""}
-          <div class="card-controls"><p class="source-name">${escapeText(item.source)}</p>
-            <button class="icon-button detail-button" data-detail="${item.id}" aria-label="详情：${escapeText(item.title)}" title="查看详情"><i data-lucide="info"></i></button></div>
+          <div class="card-controls"><p id="source-${item.id}" class="source-name">${escapeText(item.source)}</p>
+            <button class="icon-button detail-button" data-filename="${item.id}" aria-label="完整文件名：${escapeText(item.title)}" aria-expanded="false" aria-controls="filename-popover" aria-describedby="filename-popover"><i data-lucide="info"></i></button></div>
         </div>
       </article>`;
     }
     function renderList() {
+      closeFilename();
       const scroll=$("#content").scrollTop;
       $("#content").innerHTML=visible().map(mediaRow).join("")||'<p class="empty">暂无记录</p>';
       $("#content").scrollTop=scroll;
       toolbar();
     }
     function page(next) {
+      closeFilename();
       tab=next; state=savedState(); search=""; selected.clear();
       $("#state").innerHTML=["",...(tab==="qb"?["已识别","未识别"]:["已识别","未识别","待入库","已入库","已存在","已回退"])].map(value=>`<option value="${value}">${value||"全部"}</option>`).join("");
       if (![...$("#state").options].some(option=>option.value===state)) state="";
@@ -225,7 +235,32 @@
       clearTimeout(toastTimer); $("#toast").textContent=text; $("#toast").hidden=false;
       toastTimer=setTimeout(()=>$("#toast").hidden=true,2200);
     }
+    function closeFilename() {
+      const popover=$("#filename-popover");
+      if(popover.matches(":popover-open")) popover.hidePopover();
+      filenameAnchor?.setAttribute("aria-expanded","false");
+      filenameAnchor=null;
+    }
+    function showFilename(button,item) {
+      if(filenameAnchor===button) return closeFilename();
+      closeFilename();
+      const popover=$("#filename-popover");
+      filenameAnchor=button;
+      button.setAttribute("aria-expanded","true");
+      popover.textContent=item.source;
+      const phone=$(".phone").getBoundingClientRect();
+      const anchor=button.getBoundingClientRect();
+      const width=Math.min(300,phone.width-24,innerWidth-24);
+      popover.style.width=`${width}px`;
+      popover.showPopover();
+      const height=popover.getBoundingClientRect().height;
+      const left=Math.max(phone.left+12,Math.min(anchor.right-width,phone.right-width-12));
+      const top=anchor.top-height-8>=12?anchor.top-height-8:Math.min(anchor.bottom+8,innerHeight-height-12);
+      popover.style.left=`${left}px`;
+      popover.style.top=`${Math.max(12,top)}px`;
+    }
     function dialog(title,body,buttons) {
+      closeFilename();
       $("#dialog").innerHTML=`<h2 id="dialog-title">${escapeText(title)}</h2>${body}<div class="dialog-actions">${buttons}</div>`;
       icons(); $("#dialog").showModal();
     }
@@ -254,9 +289,9 @@
       if(button.dataset.select) {
         const key=button.dataset.select; selected.has(key)?selected.delete(key):selected.add(key); return renderList();
       }
-      if(button.dataset.detail) {
-        const item=records().find(row=>row.id===button.dataset.detail);
-        return dialog(item.title,`<div class="tag-row">${item.tags.map(tag=>`<span class="tag ${tagTone(tag)}">${escapeText(tag)}</span>`).join("")}</div><p style="margin-top:12px">${escapeText(item.source)}</p>`, '<button data-close>完成</button>');
+      if(button.dataset.filename) {
+        const item=records().find(row=>row.id===button.dataset.filename);
+        return showFilename(button,item);
       }
       if(button.dataset.action) return batchAction(button.dataset.action);
       if(button.dataset.execute) return execute(button.dataset.execute);
@@ -272,6 +307,14 @@
     });
     $("#state").addEventListener("change",event=>{state=event.target.value;saveState();selected.clear();renderList();});
     $("#search").addEventListener("input",event=>{search=event.target.value;selected.clear();renderList();});
+    document.addEventListener("pointerdown",event=>{
+      if(filenameAnchor&&!filenameAnchor.contains(event.target)&&!$("#filename-popover").contains(event.target)) closeFilename();
+    });
+    document.addEventListener("keydown",event=>{
+      if(event.key==="Escape"&&filenameAnchor) {const anchor=filenameAnchor;closeFilename();anchor.focus();}
+    });
+    $("#content").addEventListener("scroll",closeFilename,{passive:true});
+    window.addEventListener("resize",closeFilename);
     page("media");
   </script>
 </body>

@@ -43,12 +43,15 @@ struct RecordsView: View {
                 Section {
                     ForEach(visible) { item in
                         RecordRow(
-                            item: item, qb: qb, onShowDetails: { detail = item },
+                            item: item, qb: qb,
                             selected: selected.contains(item.id),
                             onSelect: {
                                 if !selected.insert(item.id).inserted { selected.remove(item.id) }
                             }
                         )
+                        .contextMenu {
+                            Button("详情与编辑", systemImage: "pencil") { detail = item }
+                        }
                         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
                         .listRowSeparator(.hidden)
                         .listRowBackground(Color.clear)

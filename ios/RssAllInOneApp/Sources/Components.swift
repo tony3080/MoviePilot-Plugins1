@@ -88,9 +88,9 @@ struct Poster: View {
 struct RecordRow: View {
     let item: Record
     let qb: Bool
-    var onShowDetails: (() -> Void)? = nil
     var selected = false
     var onSelect: (() -> Void)? = nil
+    @State private var showFilename = false
     @ScaledMetric(relativeTo: .body) private var scaledPosterWidth = 112
     private var posterWidth: CGFloat { min(128, scaledPosterWidth) }
 
@@ -103,18 +103,29 @@ struct RecordRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("source-\(item.id)")
                     .allowsHitTesting(false)
-                if let onShowDetails {
-                    Button(action: onShowDetails) {
+                if !item.sourceFileName.isEmpty {
+                    Button { showFilename = true } label: {
                         Image(systemName: "info.circle").frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
-                    .accessibilityLabel("详情：\(item.title)")
+                    .accessibilityLabel("完整文件名：\(item.title)")
                     .accessibilityIdentifier("detail-\(item.id)")
+                    .popover(isPresented: $showFilename, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                        Text(item.sourceFileName)
+                            .font(.footnote)
+                            .textSelection(.enabled)
+                            .padding(12)
+                            .frame(width: 300, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("filename-popover-\(item.id)")
+                            .presentationCompactAdaptation(.popover)
+                    }
                 }
             }
         }
@@ -155,6 +166,13 @@ struct RecordRow: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.title).font(.headline).lineLimit(2)
             BadgeFlowLayout { rowLabels }
+            if !item.directoryName.isEmpty {
+                Text(item.directoryName)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Color(red: 22.0 / 255, green: 177.0 / 255, blue: 1))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("directory-\(item.id)")
+            }
             if !item.inventorySummary.isEmpty {
                 Text(item.inventorySummary)
                     .font(.caption2.weight(.medium))
