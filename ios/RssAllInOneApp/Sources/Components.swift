@@ -6,7 +6,7 @@ struct StatusBadge: View {
         if ["failed", "error", "unidentified", "rolled_back"].contains(state) { return .red }
         if ["completed", "succeeded", "imported", "exists", "existing"].contains(state) { return .green }
         if ["pending", "pending_import"].contains(state) { return .purple }
-        if ["running", "importing", "queued"].contains(state) { return .orange }
+        if ["running", "importing", "queued", "download_only"].contains(state) { return .orange }
         return .blue
     }
     var body: some View {
@@ -90,9 +90,11 @@ struct RecordRow: View {
     let qb: Bool
     var selected = false
     var onSelect: (() -> Void)? = nil
+    var onAction: ((String) -> Void)? = nil
+    var analysisTask: JSONValue = .null
     @State private var showFilename = false
-    @ScaledMetric(relativeTo: .body) private var scaledPosterWidth = 112
-    private var posterWidth: CGFloat { min(128, scaledPosterWidth) }
+    @ScaledMetric(relativeTo: .body) private var scaledPosterWidth = 140
+    private var posterWidth: CGFloat { min(156, scaledPosterWidth) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -136,9 +138,10 @@ struct RecordRow: View {
         .background(alignment: .leading) {
             GeometryReader { geometry in
                 Poster(path: item.poster, width: posterWidth, height: geometry.size.height)
+                    .allowsHitTesting(false)
+                    .overlay { posterControls }
             }
             .frame(width: posterWidth)
-            .allowsHitTesting(false)
         }
         .background {
             if let onSelect {
@@ -156,10 +159,95 @@ struct RecordRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(selected ? Color.accentColor : .clear, lineWidth: 2)
+                .stroke(selected ? Color.accentColor : item.inventoryIncomplete ? .red : .clear, lineWidth: 2)
                 .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var analysisRunning: Bool { ["queued", "running"].contains(analysisTask["state"].text) }
+    private var posterControls: some View {
+        VStack(spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 0) {
+                        posterLink("P", color: Color(red: 242/255, green: 154/255, blue: 46/255), url: item.sourceURL)
+                        posterLink("T", color: Color(red: 32/255, green: 183/255, blue: 207/255), url: item.tmdbURL)
+                    }
+                    if item.rolledBack {
+                        PosterBadge(letter: "R", color: Color(red: 132/255, green: 86/255, blue: 232/255),
+                                    message: "已回退" + (item.failure.isEmpty ? "" : "：\(item.failure)"))
+                    } else if !item.failure.isEmpty {
+                        PosterBadge(letter: "!", color: .red, message: item.failure)
+                    }
+                }
+                Spacer(minLength: 0)
+                VStack(spacing: 4) {
+                    if !qb && item.state == "pending" { posterAction("xmark", title: "删除插件记录", action: "delete") }
+                    posterAction("arrow.clockwise", title: "刷新", action: "refresh")
+                    if item.canEdit(qb: qb) { posterAction("pencil", title: "人工识别", action: "edit") }
+                    if item.canMarkUnidentified(qb: qb) {
+                        posterAction("questionmark.circle", title: "移入未识别", action: "unidentify")
+                    }
+                }
+            }
+            Spacer(minLength: 12)
+            if item.details["version_count"].int > 1 {
+                Text("\(item.details["version_count"].int)in1")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                    .padding(3).background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .allowsHitTesting(false)
+            }
+            HStack(spacing: 0) {
+                statusBadge("S", kind: "sha1")
+                statusBadge("M", kind: "metadata")
+                statusBadge("I", kind: "intro")
+                Spacer(minLength: 0)
+                statusBadge("Y", kind: "year")
+            }
+        }
+        .padding(6)
+    }
+
+    private func posterLink(_ letter: String, color: Color, url: URL?) -> some View {
+        Group {
+            if let url {
+                Link(destination: url) { PosterBadgeFace(letter: letter, color: color) }
+            } else {
+                PosterBadge(letter: letter, color: .posterNeutral,
+                            message: letter == "P" ? "未获取到来源链接" : "未获取到 TMDB 链接")
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(letter == "P" ? "来源页面" : "TMDB 页面")
+        .accessibilityIdentifier("poster-\(letter)-\(item.id)")
+    }
+
+    private func posterAction(_ symbol: String, title: String, action: String) -> some View {
+        Button { onAction?(action) } label: {
+            Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white).frame(width: 28, height: 28)
+                .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 5))
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(onAction == nil || (action == "refresh" && item.state == "importing"))
+        .help(title).accessibilityLabel(title)
+        .accessibilityIdentifier("poster-\(action)-\(item.id)")
+    }
+
+    private func statusBadge(_ letter: String, kind: String) -> some View {
+        let status = item.posterStatus(kind)
+        let canRun = ["metadata", "intro"].contains(kind) && onAction != nil
+            && item.canAnalyze(kind, qb: qb) && !analysisRunning
+        let running = analysisRunning && analysisTask["result"]["media_id"].text == item.analysisID(qb: qb)
+            && analysisTask["result"]["kind"].text == kind
+        return PosterBadge(letter: letter, color: status.color,
+                           message: running ? "正在逐文件提取" : status.message,
+                           running: running,
+                           retry: canRun ? { onAction?("analyze-\(kind)") } : nil)
+            .accessibilityIdentifier("poster-\(letter)-\(item.id)")
     }
 
     @ViewBuilder private var summary: some View {
@@ -192,7 +280,10 @@ struct RecordRow: View {
     }
 
     @ViewBuilder private var rowLabels: some View {
-        StatusBadge(state: qb ? item["recognition_state"].text : item.state)
+        StatusBadge(state: qb ? (item["inventory_state"].text == "exists" ? "existing" :
+            item["recognition_state"].text == "unidentified" ? "unidentified" :
+            item.details["import_control"]["import_enabled"] == .bool(false) ? "download_only" : "pending_import") :
+            item.state == "rolled_back" ? "identified" : item.state)
         if qb { InfoBadge(text: "\(Int(min(1, max(0, item["progress"].double)) * 100))%", color: .blue) }
         if !item.seasonLabel.isEmpty { InfoBadge(text: item.seasonLabel, color: .purple) }
         if !item.resolution.isEmpty { InfoBadge(text: item.resolution, color: .cyan) }
@@ -202,6 +293,7 @@ struct RecordRow: View {
         if bytes > 0 { InfoBadge(text: sizeText(bytes), color: .secondary) }
         if item.labels["mandarin"].flag { InfoBadge(text: "国配", color: .red) }
         if item.labels["effects"].flag { InfoBadge(text: "特效", color: .teal) }
+        if item.inventoryIncomplete { InfoBadge(text: "库存不完整", color: .red) }
     }
 
     private var inventoryColor: Color {
@@ -211,6 +303,61 @@ struct RecordRow: View {
         case "complete": return .green
         default: return .red
         }
+    }
+}
+
+extension Color {
+    static let posterNeutral = Color(red: 107/255, green: 114/255, blue: 128/255)
+}
+
+extension PosterStatus {
+    var color: Color {
+        switch tone {
+        case .success: return Color(red: 21/255, green: 128/255, blue: 61/255)
+        case .failure: return Color(red: 220/255, green: 38/255, blue: 38/255)
+        case .neutral: return .posterNeutral
+        }
+    }
+}
+
+struct PosterBadgeFace: View {
+    let letter: String
+    let color: Color
+    var running = false
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5).fill(color)
+            if running { ProgressView().tint(.white).scaleEffect(0.65) }
+            else { Text(letter).font(.system(size: 15, weight: .heavy)).foregroundStyle(.white) }
+        }
+        .frame(width: 28, height: 28)
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+        .frame(width: 32, height: 32).contentShape(Rectangle())
+    }
+}
+
+struct PosterBadge: View {
+    let letter: String
+    let color: Color
+    let message: String
+    var running = false
+    var retry: (() -> Void)? = nil
+    @State private var showing = false
+    var body: some View {
+        Button { showing.toggle() } label: { PosterBadgeFace(letter: letter, color: color, running: running) }
+            .buttonStyle(.plain).help(message).accessibilityLabel("\(letter) · \(message)")
+            .popover(isPresented: $showing, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(message).font(.footnote).textSelection(.enabled)
+                    if let retry {
+                        Button("重新提取", systemImage: "arrow.clockwise") { showing = false; retry() }
+                            .frame(minHeight: 44)
+                    }
+                }
+                .padding(12).frame(width: 260, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .presentationCompactAdaptation(.popover)
+            }
     }
 }
 

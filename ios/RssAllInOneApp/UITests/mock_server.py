@@ -20,6 +20,10 @@ MEDIA = {
     "source_path": "/media/Test.Movie.2026.1080p.mkv",
     "comment_url": "https://pt.example/details.php?id=123",
     "details": {
+        "sha1_status": {"state": "ready", "completed": 1, "total": 1},
+        "media_analysis": {"enabled": True, "intro_enabled": True,
+                           "metadata": {"state": "ready", "completed": 1, "total": 1},
+                           "intro": {"state": "not_applicable"}},
         "site_labels": {"mandarin": True, "effects": False},
         "inventory_plan": {"expected_directory": "测试电影 (2026) - {tmdbid=42}", "expected_files": [
             {"recognition": {"resource_tokens": ["1080p"], "customization": "REMUX@U版"}}
@@ -55,6 +59,7 @@ BACKGROUND = {
     "id": "background-1", "task_type": "rss_run", "task_name": "测试 RSS 任务",
     "state": "succeeded", "total": 1, "processed": 1, "updated_at": "2026-10-27T03:00:00Z",
 }
+ANALYSIS_TASK = None
 
 
 def page(items, query):
@@ -86,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({
                 "success": True, "plugin": {"version": "1.1.9", "enabled": True, "rss_enabled": True},
                 "counts": {"media": 1, "torrents": 1, "rss_tasks": 1},
-                "qb_task": None, "manual_task": None, "rss_tasks": [],
+                "qb_task": None, "manual_task": None, "rss_tasks": [], "analysis_task": None,
                 "pending_import": {"running": False, "pending": 1},
             })
         if path == "media":
@@ -116,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "tasks":
             return self.reply(page([], query))
         if path.startswith("tasks/"):
+            if path == "tasks/analysis-1" and ANALYSIS_TASK:
+                return self.reply({"success": True, "task": ANALYSIS_TASK})
             return self.reply({"success": True, "task": BACKGROUND})
         if path == "rss/history":
             return self.reply(page([{"id": "history-1", "title": "测试电影", "status": "added",
@@ -125,9 +132,16 @@ class Handler(BaseHTTPRequestHandler):
         self.reply({"success": False, "message": "未提供的测试接口: " + path}, 404)
 
     def do_POST(self):
+        global ANALYSIS_TASK
         count = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(count) or b"{}")
         path = urlsplit(self.path).path.removeprefix("/api/v1/plugin/RssAllInOne/").strip("/")
+        if path == "media/analysis/run":
+            if payload != {"media_id": "media-1", "kind": "metadata"}:
+                return self.reply({"success": False, "message": "提取参数错误"}, 400)
+            ANALYSIS_TASK = {"id": "analysis-1", "state": "succeeded",
+                             "result": {"media_id": "media-1", "kind": "metadata"}}
+            return self.reply({"success": True, "task_id": "analysis-1", "message": "提取已启动"})
         if path == "qb/item/identify":
             if payload.get("media_id") != "media-1" or payload.get("tmdb_id") != 42:
                 return self.reply({"success": False, "message": "识别参数错误"}, 400)

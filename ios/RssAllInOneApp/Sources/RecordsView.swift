@@ -15,6 +15,8 @@ struct RecordsView: View {
     @State private var confirming = false
     @State private var showFilters = false
     @State private var detail: Record?
+    @State private var editing: Record?
+    @State private var deleting: Record?
 
     init(qb: Bool) {
         self.qb = qb
@@ -47,7 +49,9 @@ struct RecordsView: View {
                             selected: selected.contains(item.id),
                             onSelect: {
                                 if !selected.insert(item.id).inserted { selected.remove(item.id) }
-                            }
+                            },
+                            onAction: { action in posterAction(action, item: item) },
+                            analysisTask: store.analysisTask
                         )
                         .contextMenu {
                             Button("详情与编辑", systemImage: "pencil") { detail = item }
@@ -95,6 +99,20 @@ struct RecordsView: View {
                 }
             }
             .sheet(isPresented: $showFilters) { filters }
+            .sheet(item: $editing) { item in IdentifyView(item: item) { Task { await load() } } }
+            .confirmationDialog("只删除此插件记录，保留文件？", isPresented: Binding(
+                get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+            ), titleVisibility: .visible) {
+                Button("删除插件记录", role: .destructive) {
+                    if let item = deleting {
+                        deleting = nil
+                        Task {
+                            await store.perform("media/delete", body: .object(["media_id": .string(item.id)]))
+                            await load()
+                        }
+                    }
+                }
+            }
             .navigationDestination(isPresented: Binding(
                 get: { detail != nil },
                 set: { if !$0 { detail = nil } }
@@ -234,6 +252,23 @@ struct RecordsView: View {
     private func load(more: Bool = false) async {
         do { try await page.load(store.client, path: qb ? "torrents" : "media", query: query, more: more) }
         catch { store.report(error) }
+    }
+    private func posterAction(_ action: String, item: Record) {
+        if action == "edit" { editing = item; return }
+        if action == "delete" { deleting = item; return }
+        Task {
+            switch action {
+            case "analyze-metadata", "analyze-intro":
+                await store.analyze(item, kind: String(action.dropFirst(8)), qb: qb)
+            case "unidentify":
+                await store.perform("media/mark-unidentified", body: qb ? item.identityPayload : .object(["media_id": .string(item.id)]))
+            case "refresh":
+                await store.perform(qb ? "qb/item/refresh" : "media/refresh",
+                                    body: qb ? item.identityPayload : .object(["media_id": .string(item.id)]))
+            default: return
+            }
+            await load()
+        }
     }
     private func loadOptions() async {
         do {

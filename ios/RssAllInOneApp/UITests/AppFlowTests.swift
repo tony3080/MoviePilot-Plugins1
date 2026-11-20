@@ -42,6 +42,25 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["识别已更新"].waitForExistence(timeout: 5))
     }
 
+    func testPosterBadgesAndManualMetadataExtraction() {
+        XCTAssertTrue(app.buttons["poster-S-media-1"].waitForExistence(timeout: 10))
+        for letter in ["S", "M", "I", "Y"] {
+            XCTAssertTrue(app.buttons["poster-\(letter)-media-1"].exists)
+        }
+        XCTAssertTrue(app.buttons["poster-refresh-media-1"].exists)
+        XCTAssertTrue(app.buttons["poster-edit-media-1"].exists)
+        XCTAssertTrue(app.buttons["poster-unidentify-media-1"].exists)
+        app.buttons["poster-S-media-1"].tap()
+        XCTAssertTrue(app.staticTexts["SHA1：计算完成（1/1 个文件）"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["batch-queue_import"].isEnabled)
+        app.navigationBars["入库管理"].tap()
+        app.buttons["poster-M-media-1"].tap()
+        XCTAssertTrue(app.buttons["重新提取"].waitForExistence(timeout: 5))
+        app.buttons["重新提取"].tap()
+        XCTAssertTrue(app.staticTexts["提取完成，卡片状态已更新"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["batch-queue_import"].isEnabled)
+    }
+
     func testMediaAndQBLabelsWrapAcrossRows() {
         XCTAssertTrue(app.staticTexts["测试电影"].waitForExistence(timeout: 10))
         assertWrappedLabels()
@@ -49,7 +68,7 @@ final class AppFlowTests: XCTestCase {
         let source = app.staticTexts["source-media-1"]
         XCTAssertTrue(source.exists)
         XCTAssertLessThan(source.frame.height, 30)
-        XCTAssertLessThan(source.frame.maxY - app.staticTexts["测试电影"].frame.minY, 230)
+        XCTAssertLessThan(source.frame.maxY - app.staticTexts["测试电影"].frame.minY, 320)
         XCTAssertEqual(app.staticTexts["directory-media-1"].label, "测试电影 (2026) - {tmdbid=42}")
         XCTAssertFalse(app.buttons["源文件名"].exists)
         capture("08-media-wrapped-labels")
@@ -69,7 +88,7 @@ final class AppFlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["batch-delete_qb"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["测试下载任务"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH 'directory-'")).firstMatch.exists)
-        assertWrappedLabels()
+        assertWrappedLabels(qb: true)
         XCTAssertTrue(app.buttons["batch-delete_qb"].exists)
         XCTAssertFalse(app.buttons["batch-delete_qb"].isEnabled)
         capture("09-qb-wrapped-labels")
@@ -106,8 +125,8 @@ final class AppFlowTests: XCTestCase {
         capture("11-qb-selected")
     }
 
-    private func assertWrappedLabels() {
-        let status = app.staticTexts["已识别"].firstMatch
+    private func assertWrappedLabels(qb: Bool = false) {
+        let status = app.staticTexts[qb ? "待入库" : "已识别"].firstMatch
         let resolution = app.staticTexts["1080p"].firstMatch
         let customization = app.staticTexts["REMUX@U版"].firstMatch
         let mandarin = app.staticTexts["国配"].firstMatch

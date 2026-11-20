@@ -10,6 +10,7 @@ final class AppStore: ObservableObject {
     @Published var notice: String?
     @Published private(set) var busy = false
     @Published private(set) var generation = 0
+    @Published private(set) var analysisTask: JSONValue = .null
     var client: APIClient { APIClient(config: config) }
     private var uiTesting: Bool {
         #if DEBUG
@@ -55,6 +56,7 @@ final class AppStore: ObservableObject {
             }
             config = next
             overview = snapshot
+            analysisTask = snapshot["analysis_task"]
             generation += 1
             connected = true
         } catch { self.error = error.localizedDescription }
@@ -71,6 +73,7 @@ final class AppStore: ObservableObject {
             let snapshot = try await client.get("overview")
             guard current == config else { return }
             overview = snapshot
+            analysisTask = snapshot["analysis_task"]
         } catch { report(error) }
     }
 
@@ -99,6 +102,44 @@ final class AppStore: ObservableObject {
         if case APIError.unauthorized = failure { connected = false }
     }
 
+    func analyze(_ item: Record, kind: String, qb: Bool) async {
+        guard item.canAnalyze(kind, qb: qb),
+              !["queued", "running"].contains(analysisTask["state"].text) else { return }
+        let body: JSONValue = .object(["media_id": .string(item.analysisID(qb: qb)), "kind": .string(kind)])
+        analysisTask = .object(["state": .string("queued"), "result": body])
+        if let result = await perform("media/analysis/run", body: body) {
+            analysisTask = .object(["id": result["task_id"], "state": .string("queued"), "result": body])
+        } else {
+            await refreshOverview()
+        }
+    }
+
+    func monitorAnalysis() async {
+        let id = analysisTask["id"].text
+        let current = config
+        guard connected, !id.isEmpty else { return }
+        while !Task.isCancelled && connected && config == current && analysisTask["id"].text == id {
+            do {
+                let result = try await client.get("tasks/\(id)")
+                try Task.checkCancellation()
+                guard config == current, analysisTask["id"].text == id else { return }
+                let task = result["task"]
+                guard !task.object.isEmpty else { throw APIError.server("读取提取进度失败") }
+                analysisTask = task
+                if !["queued", "running"].contains(task["state"].text) {
+                    generation += 1
+                    if task["state"].text == "succeeded" { notice = "提取完成，卡片状态已更新" }
+                    else { error = task["error_message"].text.nonempty ?? "提取失败，请查看后台任务" }
+                    return
+                }
+            } catch {
+                if Task.isCancelled || config != current { return }
+                report(error)
+            }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+        }
+    }
+
     func disconnect() {
         if !uiTesting {
             try? Credentials.save("")
@@ -106,6 +147,7 @@ final class AppStore: ObservableObject {
         }
         config = ServerConfig()
         overview = .object([:])
+        analysisTask = .null
         connected = false
         generation += 1
     }

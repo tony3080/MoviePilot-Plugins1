@@ -28,6 +28,9 @@ struct ContentView: View {
             }
         }
         .task { await store.resume() }
+        .task(id: "\(store.connected)|\(store.config.baseURL)|\(store.analysisTask["id"].text)") {
+            await store.monitorAnalysis()
+        }
     }
 }
 

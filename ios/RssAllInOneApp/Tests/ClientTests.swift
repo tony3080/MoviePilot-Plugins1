@@ -4,6 +4,50 @@ import Testing
 
 @Suite("Client contracts", .serialized)
 struct ClientTests {
+    @Test func posterStatusesKeepUnknownPartialAndNotApplicableNeutral() throws {
+        let value = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"id":"media-a","media_type":"tv","details":{"sha1_status":{"state":"ready","completed":10,"total":10,"skipped":4},
+        "media_analysis":{"enabled":true,"intro_enabled":true,"metadata":{"state":"failed","error":"读取失败"},
+        "intro":{"state":"no_intro","completed":8,"total":8,"matched":7,"unmatched":1}}},
+        "year_check":{"state":"mismatch","source_years":[2023],"expected_year":2022,"season":2}}
+        """#.utf8))
+        var record = Record(value: value)
+        #expect(record.posterStatus("sha1").tone == .success)
+        #expect(record.posterStatus("sha1").message.contains("跳过 4"))
+        #expect(record.posterStatus("metadata").tone == .failure)
+        #expect(record.posterStatus("metadata").message.contains("读取失败"))
+        #expect(record.posterStatus("intro").tone == .neutral)
+        #expect(record.posterStatus("intro").message == "片头：已检测 8/8 · 匹配 7 · 未匹配 1")
+        #expect(record.posterStatus("year").tone == .failure)
+        #expect(record.canAnalyze("intro", qb: false))
+        #expect(!record.canAnalyze("intro", qb: true))
+        record.value["media_id"] = .string("media-a")
+        #expect(record.canAnalyze("intro", qb: true))
+        record.value["media_type"] = .string("movie")
+        #expect(record.posterStatus("intro").message == "片头：电影无需提取片头")
+        #expect(!record.canAnalyze("intro", qb: false))
+        let unknown = Record(value: .object([:]))
+        for kind in ["sha1", "metadata", "intro", "year"] {
+            #expect(unknown.posterStatus(kind).tone == .neutral)
+        }
+    }
+
+    @Test func compactCardFieldsAndImportedInventoryUseServerMeaning() throws {
+        var record = Record(value: try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"id":"a","state":"imported","card_summary":{"resource_tokens":["2160p"],"customizations":["加长版@REMUX@U版"],"media_category":"外语电影"},
+        "details":{"inventory":{"folder_status":"exists","total_files":8,"exists_count":2}}}
+        """#.utf8)))
+        #expect(record.resolution == "2160p")
+        #expect(record.customization == "加长版@REMUX@U版")
+        #expect(record.mediaCategory == "外语电影")
+        #expect(record.inventorySummary.isEmpty)
+        #expect(!record.inventoryIncomplete)
+        record.value["details"]["inventory"]["refresh_mode"] = .string("saved_file_mappings")
+        record.value["details"]["inventory"]["refreshed_at"] = .string("2026-11-20")
+        #expect(record.inventorySummary == "目录已存在（2/8）")
+        #expect(record.inventoryIncomplete)
+    }
+
     @Test func directoryNameUsesServerPlanAndKeepsTitleSeparate() {
         var value: JSONValue = .object([
             "title": .string("茜茜皇后"),

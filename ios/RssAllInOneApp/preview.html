@@ -43,12 +43,26 @@
       #state { width:76px; }
     }
     main { overflow:auto; overscroll-behavior:contain; min-height:0; flex:1; padding:8px 12px 16px; }
-    .media-row { position:relative; min-height:168px; display:grid; grid-template-columns:112px minmax(0,1fr); border-radius:8px; background:var(--surface); overflow:hidden; margin-bottom:10px; }
+    .media-row { position:relative; min-height:210px; display:grid; grid-template-columns:140px minmax(0,1fr); border-radius:8px; background:var(--surface); overflow:hidden; margin-bottom:10px; }
     .media-row.selected { outline:2px solid var(--blue); outline-offset:-2px; }
     .card-select { position:absolute; inset:0; background:transparent; z-index:1; border-radius:8px; width:100%; }
     .card-select:active { background:rgba(50,120,230,.06) !important; }
-    .poster { position:relative; grid-column:1; grid-row:1; min-height:168px; background:#ccc; pointer-events:none; }
+    .poster { position:relative; grid-column:1; grid-row:1; min-height:210px; background:#ccc; pointer-events:none; }
     .poster img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+    .poster-top { position:absolute; top:6px; left:6px; display:flex; flex-wrap:wrap; width:64px; z-index:2; }
+    .poster-actions { position:absolute; right:6px; top:6px; display:flex; flex-direction:column; gap:4px; z-index:2; }
+    .poster-bottom { position:absolute; left:6px; right:6px; bottom:6px; display:flex; z-index:2; }
+    .poster-button { pointer-events:auto; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; padding:2px; background:none; border-radius:5px; flex:none; }
+    .poster-button span { display:grid; place-items:center; width:28px; height:28px; border-radius:5px; background:var(--badge,#6b7280); color:white; font-size:15px; line-height:1; font-weight:800; box-shadow:0 2px 5px #0004; }
+    .poster-button svg { width:16px; height:16px; }
+    .poster-button:active:not(:disabled) { transform:scale(.95); background:none; }
+    .poster-button:disabled { opacity:1; color:white; }
+    .poster-button.busy span { animation:badge-pulse 1s ease-in-out infinite alternate; }
+    .poster-bottom [data-poster="year"] { margin-left:auto; }
+    .status-run { display:block; min-height:44px; margin-top:8px; padding:0 8px; background:none; color:var(--blue); }
+    .filename-popover p { white-space:pre-wrap; }
+    @keyframes badge-pulse { to { opacity:.55; } }
+    @media(prefers-reduced-motion:reduce) { .poster-button.busy span { animation:none; } }
     .media-copy { grid-column:2; grid-row:1; min-width:0; padding:12px 12px 6px; display:flex; flex-direction:column; gap:6px; pointer-events:none; }
     .media-title { font-size:16px; line-height:1.35; font-weight:650; overflow-wrap:anywhere; }
     .directory-name { color:rgb(22,177,255); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
@@ -95,6 +109,7 @@
     .toast { position:fixed; bottom:calc(82px + env(safe-area-inset-bottom,0px)); left:50%; transform:translateX(-50%); background:#262630; color:#fff; border-radius:8px; padding:11px 16px; font-size:13px; z-index:10; max-width:calc(100% - 32px); pointer-events:none; }
     [hidden] { display:none !important; }
     @media(hover:hover) and (pointer:fine) { button:not(:disabled):hover { background:#7e829310; } }
+    @media(hover:hover) and (pointer:fine) { .poster-button:not(:disabled):hover { background:#ffffff26; } }
     @media(prefers-reduced-transparency:reduce) { .controls,.nav { backdrop-filter:none; background:var(--bg); } }
   </style>
 </head>
@@ -130,7 +145,7 @@
   <script src="preview-assets/lucide.min.js"></script>
   <script>
     const media = [
-      { id:"media-1", title:"黑狱断肠歌之砌生猪肉", card_summary:{expected_directory:"黑狱断肠歌之砌生猪肉 (1997) - {tmdbid=247999}"}, state:"已识别", tone:"blue", tags:["1080p","华语电影","REMUX@U版","4.7 GB","国配"], source:"Chinese.Midnight.Express.1997.1080p.BluRay.REMUX.mkv", poster:"preview-assets/movie.jpg", existing:0, total:1, folder:true },
+      { id:"media-1", title:"黑狱断肠歌之砌生猪肉", card_summary:{expected_directory:"黑狱断肠歌之砌生猪肉 (1997) - {tmdbid=247999}"}, state:"已识别", tone:"blue", tags:["1080p","华语电影","REMUX@U版","4.7 GB"], source:"Chinese.Midnight.Express.1997.1080p.BluRay.REMUX.mkv", poster:"preview-assets/movie.jpg", existing:0, total:1, folder:true },
       { id:"media-2", title:"火影忍者：疾风传", details:{inventory_plan:{expected_directory:"火影忍者：疾风传 (2007) - {tmdbid=31910}"}}, state:"已识别", tone:"blue", tags:["第一季","1080p","日韩动漫","WEB-DL","128.4 GB","特效"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg", existing:4, total:14, folder:true },
       { id:"media-3", title:"凡人修仙传", card_summary:{expected_directory:"凡人修仙传 (2020) - {tmdbid=102952}"}, state:"待入库", tone:"purple", tags:["第四季","2160p","国产动漫","WEB-DL","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.Complete.2160p.mkv", poster:"preview-assets/series.jpg", existing:0, total:12, folder:false },
       { id:"media-4", title:"抓特务", target_name:"抓特务 (2026)", state:"已入库", tone:"green", tags:["2160p","华语电影","WEB-DL","6.2 GB"], source:"Catch.the.Spy.2026.2160p.WEB-DL.mkv", poster:"preview-assets/spy.jpg", existing:1, total:1, folder:true }
@@ -139,7 +154,31 @@
       { id:"qb-1", title:"凡人修仙传", details:{inventory_plan:{expected_directory:"凡人修仙传 (2020) - {tmdbid=102952}"}}, state:"已识别", tone:"blue", tags:["下载中","68%","2160p","国产动漫","32.4 GB"], source:"A.Record.of.a.Mortals.Journey.to.Immortality.2025.S04.2160p.mkv", poster:"preview-assets/series.jpg",existing:0,total:8,folder:false },
       { id:"qb-2", title:"火影忍者：疾风传", card_summary:{expected_directory:"火影忍者：疾风传 (2007) - {tmdbid=31910}"}, state:"已识别", tone:"blue", tags:["已完成","100%","1080p","日韩动漫","128.4 GB"], source:"Naruto.Shippuden.2007.S01.Complete.1080p.WEB-DL.H264.AAC-UBWEB", poster:"preview-assets/naruto.jpg",existing:4,total:14,folder:true }
     ];
+    const analysis=(state,completed,total,extra={})=>({state,completed,total,...extra});
+    Object.assign(media[0],{media_type:"movie",source_url:"https://example.com/details/247999",tmdb_id:247999,
+      details:{sha1_status:analysis("ready",1,1),media_analysis:{enabled:true,metadata:analysis("ready",1,1),intro:analysis("not_applicable",0,0)}},
+      year_check:{state:"match",source_years:[1997],expected_year:1997}});
+    Object.assign(media[1],{media_type:"tv",source_url:"https://example.com/details/31910",tmdb_id:31910,
+      details:{...media[1].details,sha1_status:analysis("ready",10,10,{skipped:4}),
+        media_analysis:{enabled:true,intro_enabled:true,metadata:analysis("ready",10,10),intro:analysis("no_intro",10,10,{matched:9,unmatched:1})}},
+      year_check:{state:"match",source_years:[2007],expected_year:2007,season:1}});
+    Object.assign(media[2],{media_type:"tv",tmdb_id:102952,failure:"有一个源文件暂时无法读取",
+      details:{sha1_status:analysis("failed",11,12,{failed:1,error:"有一个源文件暂时无法读取"}),
+        media_analysis:{enabled:true,intro_enabled:true,metadata:analysis("failed",11,12,{error:"有一个文件读取失败"}),intro:analysis("pending",0,12)}},
+      year_check:{state:"mismatch",source_years:[2025],expected_year:2024,season:4}});
+    Object.assign(media[3],{media_type:"movie",tmdb_id:123456,
+      details:{sha1_status:analysis("ready",1,1),media_analysis:{enabled:true,metadata:analysis("ready",1,1)}}});
+    media.push({id:"media-5",title:"茜茜皇后",media_type:"tv",tmdb_id:131488,state:"已回退",tone:"blue",
+      failure:"CD2 连续 60 秒无响应",tags:["第二季","1080p","欧美剧","WEB-DL","9.8 GB"],
+      card_summary:{expected_directory:"茜茜皇后 (2022) - {tmdbid=131488}"},source:"The.Empress.2024.S02.1080p.WEB-DL.mkv",
+      poster:"preview-assets/series.jpg",existing:0,total:6,folder:false,details:{sha1_status:analysis("ready",6,6),
+        media_analysis:{enabled:true,intro_enabled:true,metadata:analysis("ready",6,6),intro:analysis("ready",6,6,{matched:6,unmatched:0})}},
+      year_check:{state:"match",source_years:[2024],expected_year:2024,season:2}});
+    Object.assign(torrents[0],{media_type:"tv",tmdb_id:102952,year_check:{state:"unknown"},details:{...torrents[0].details}});
+    Object.assign(torrents[1],{media_type:"tv",tmdb_id:31910,media_id:"media-2",source_url:"https://example.com/details/31910",
+      details:{...media[1].details}});
     let tab="media", state="", search="", toastTimer;
+    let runningAnalysis=null;
     const selected=new Set();
     let filenameAnchor=null;
     const $=selector=>document.querySelector(selector);
@@ -190,17 +229,62 @@
       if (tag==="已完成") return "green";
       return "";
     }
+    function statusInfo(item,kind) {
+      if(kind==="year") {
+        const check=item.year_check||{};
+        return {color:check.state==="match"?"#15803d":check.state==="mismatch"?"#dc2626":"#6b7280",
+          message:`年份${({match:"一致",mismatch:"不一致"})[check.state]||"无法核对"}：文件 ${(check.source_years||[]).join("、")||"未识别"} / ${check.season!=null?`第 ${check.season} 季 `:""}识别 ${check.expected_year||"未识别"}`};
+      }
+      const stage=(kind==="sha1"?item.details?.sha1_status:item.details?.media_analysis?.[kind])||{};
+      const state=kind==="intro"&&item.media_type==="movie"?"not_applicable":stage.state;
+      const name=({sha1:"SHA1",metadata:"媒体信息",intro:"片头"})[kind];
+      const message=kind==="sha1"?({ready:"计算完成",failed:"计算失败"})[state]||"尚未计算完成"
+        :({ready:"提取成功",failed:"提取失败",not_applicable:"电影无需提取片头",disabled:"未启用片头检测"})[state]||"等待提取或尚未全部完成";
+      let progress=stage.total&&!["not_applicable","disabled"].includes(state)
+        ?kind==="intro"?`已检测 ${stage.completed||0}/${stage.total} · 匹配 ${stage.matched||0} · 未匹配 ${stage.unmatched||0}`
+        :`${message}（${stage.completed||0}/${stage.total} 个文件）`:message;
+      if(stage.skipped) progress+=`；库存已存在，跳过 ${stage.skipped}`;
+      if(stage.error) progress+=`；${stage.error}`;
+      return {color:state==="ready"?"#15803d":state==="failed"?"#dc2626":"#6b7280",message:`${name}：${progress}`};
+    }
+    function canAnalyze(item,kind) {
+      return ["metadata","intro"].includes(kind)&&!runningAnalysis&&(tab!=="qb"||item.media_id)
+        &&item.state!=="入库中"&&item.details?.media_analysis?.enabled!==false
+        &&(kind!=="intro"||(item.media_type!=="movie"&&item.details?.media_analysis?.intro_enabled!==false
+          &&!["not_applicable","disabled"].includes(item.details?.media_analysis?.intro?.state)));
+    }
+    function posterButton(item,action,letter,label,color="#6b7280",disabled=false,icon="") {
+      const running=runningAnalysis?.id===item.id&&runningAnalysis?.kind===action;
+      return `<button class="poster-button ${running?"busy":""}" style="--badge:${color}" data-poster="${action}" data-record="${item.id}"
+        title="${escapeText(label)}" aria-label="${escapeText(label)}" ${running?'aria-busy="true"':""} ${disabled?"disabled":""}>
+        <span>${icon?`<i data-lucide="${icon}"></i>`:letter}</span></button>`;
+    }
+    function posterControls(item) {
+      const top=posterButton(item,"source","P",item.source_url?"打开来源页面":"未获取到来源链接",item.source_url?"#f29a2e":"#6b7280")
+        +posterButton(item,"tmdb","T",item.tmdb_id?"打开 TMDB":"未获取到 TMDB 链接",item.tmdb_id?"#20b7cf":"#6b7280")
+        +(item.state==="已回退"?posterButton(item,"failure","R",item.failure||"已回退","#8456e8")
+          :item.failure?posterButton(item,"failure","!",item.failure,"#df3c4f"):"");
+      const controls=(tab!=="qb"&&item.state==="待入库"?posterButton(item,"delete","","删除插件记录","#050a0fc7",false,"x"):"")
+        +posterButton(item,"refresh","","刷新","#050a0fc7",item.state==="入库中","refresh-cw")
+        +(item.state!=="已入库"?posterButton(item,"edit","","人工识别","#050a0fc7",false,"pencil"):"")
+        +(["已识别","已存在","已回退"].includes(item.state)?posterButton(item,"unidentify","","移入未识别","#050a0fc7",false,"circle-help"):"");
+      const bottom=[["sha1","S"],["metadata","M"],["intro","I"],["year","Y"]].map(([kind,letter])=>{
+        const info=statusInfo(item,kind);
+        return posterButton(item,kind,letter,info.message,info.color);
+      }).join("");
+      return `<div class="poster-top">${top}</div><div class="poster-actions">${controls}</div><div class="poster-bottom">${bottom}</div>`;
+    }
     function mediaRow(item) {
       const picked=selected.has(item.id);
       const directory=directoryName(item);
       return `<article class="media-row ${picked?"selected":""}" data-id="${item.id}">
         <button class="card-select" data-select="${item.id}" aria-label="选择：${escapeText(item.title)}" aria-pressed="${picked}"></button>
-        <div class="poster"><img src="${item.poster}" alt="" loading="eager"></div>
+        <div class="poster"><img src="${item.poster}" alt="" loading="eager">${posterControls(item)}</div>
         <div class="media-copy">
           <h2 class="media-title">${escapeText(item.title)}</h2>
-          <div class="tag-row"><span class="tag ${item.tone}">${item.state}</span>${item.tags.map(tag=>`<span class="tag ${tagTone(tag)}">${escapeText(tag)}</span>`).join("")}</div>
+          <div class="tag-row"><span class="tag ${item.tone}">${item.state==="已回退"?"已识别":item.state}</span>${item.tags.map(tag=>`<span class="tag ${tagTone(tag)}">${escapeText(tag)}</span>`).join("")}</div>
           ${directory?`<p class="directory-name">${escapeText(directory)}</p>`:""}
-          ${item.total?`<div class="inventory-line ${item.existing>=item.total?"complete":""}">${item.folder?"目录已存在":"目录未建立"}（${item.existing}/${item.total}）</div>`:""}
+          ${item.total&&item.state!=="已入库"?`<div class="inventory-line ${item.folder?"complete":""}">${item.folder?"目录已存在":"目录未建立"}（${item.existing}/${item.total}）</div>`:""}
           <div class="card-controls"><p id="source-${item.id}" class="source-name">${escapeText(item.source)}</p>
             <button class="icon-button detail-button" data-filename="${item.id}" aria-label="完整文件名：${escapeText(item.title)}" aria-expanded="false" aria-controls="filename-popover" aria-describedby="filename-popover"><i data-lucide="info"></i></button></div>
         </div>
@@ -241,13 +325,14 @@
       filenameAnchor?.setAttribute("aria-expanded","false");
       filenameAnchor=null;
     }
-    function showFilename(button,item) {
+    function showFilename(button,item,content=null) {
       if(filenameAnchor===button) return closeFilename();
       closeFilename();
       const popover=$("#filename-popover");
       filenameAnchor=button;
       button.setAttribute("aria-expanded","true");
-      popover.textContent=item.source;
+      if(content===null) popover.textContent=item.source;
+      else popover.innerHTML=content;
       const phone=$(".phone").getBoundingClientRect();
       const anchor=button.getBoundingClientRect();
       const width=Math.min(300,phone.width-24,innerWidth-24);
@@ -258,6 +343,38 @@
       const top=anchor.top-height-8>=12?anchor.top-height-8:Math.min(anchor.bottom+8,innerHeight-height-12);
       popover.style.left=`${left}px`;
       popover.style.top=`${Math.max(12,top)}px`;
+    }
+    function posterClick(button,item,action) {
+      if(["sha1","metadata","intro","year"].includes(action)) {
+        const info=statusInfo(item,action);
+        return showFilename(button,item,`<p>${escapeText(info.message)}</p>${canAnalyze(item,action)
+          ?`<button class="status-run" data-run-analysis="${action}" data-record="${item.id}">重新提取</button>`:""}`);
+      }
+      if(action==="source"||action==="tmdb") {
+        const url=action==="source"?item.source_url:item.tmdb_id?`https://www.themoviedb.org/${item.media_type==="movie"?"movie":"tv"}/${item.tmdb_id}`:"";
+        if(url) return showFilename(button,item,`<p>${action==="source"?"来源页面":"TMDB 页面"}</p><p>${escapeText(url)}</p>`);
+        return showFilename(button,item,`<p>${action==="source"?"未获取到来源链接":"未获取到 TMDB 链接"}</p>`);
+      }
+      if(action==="failure") return showFilename(button,item,`<p>${escapeText(item.failure||"已回退")}</p>`);
+      if(action==="refresh") return showToast("已刷新演示卡片");
+      if(action==="edit") return dialog("人工识别",`<p>${escapeText(item.title)}</p>
+        <p style="margin-top:12px"><label>分类 <select id="edit-category">${["外语电影","华语电影","欧美剧","日韩动漫","国产动漫"].map(category=>`<option ${item.tags.includes(category)?"selected":""}>${category}</option>`).join("")}</select></label></p>
+        <p><label><input type="checkbox" id="edit-mandarin" ${item.tags.includes("国配")?"checked":""}> 国配</label>
+        <label><input type="checkbox" id="edit-effects" ${item.tags.includes("特效")?"checked":""}> 特效</label></p>`,
+        `<button data-close>取消</button><button class="confirm" data-poster-confirm="edit" data-record="${item.id}">确认</button>`);
+      dialog(action==="delete"?"删除插件记录":"移入未识别",`<p>${escapeText(item.title)}${action==="delete"?"：仅移除记录，保留文件。":""}</p>`,
+        `<button data-close>取消</button><button class="confirm ${action==="delete"?"danger":""}" data-poster-confirm="${action}" data-record="${item.id}">确认</button>`);
+    }
+    async function runAnalysis(item,kind) {
+      if(!canAnalyze(item,kind)) return;
+      closeFilename();
+      runningAnalysis={id:item.id,kind};renderList();showToast("正在逐文件提取（演示）");
+      await new Promise(resolve=>setTimeout(resolve,1200));
+      item.details??={};item.details.media_analysis??={enabled:true,intro_enabled:true};
+      item.details.media_analysis[kind]=analysis("ready",item.total,item.total,kind==="intro"?{matched:item.total,unmatched:0}:{});
+      runningAnalysis=null;
+      if(["media","qb"].includes(tab)) renderList();
+      showToast("提取完成（演示）");
     }
     function dialog(title,body,buttons) {
       closeFilename();
@@ -285,6 +402,28 @@
     }
     document.addEventListener("click",event=>{
       const button=event.target.closest("button"); if(!button||button.disabled) return;
+      if(button.dataset.poster) {
+        const item=records().find(row=>row.id===button.dataset.record);
+        if(item) return posterClick(button,item,button.dataset.poster);
+      }
+      if(button.dataset.runAnalysis) {
+        const item=records().find(row=>row.id===button.dataset.record);
+        if(item) return runAnalysis(item,button.dataset.runAnalysis);
+      }
+      if(button.dataset.posterConfirm) {
+        const item=records().find(row=>row.id===button.dataset.record);
+        if(!item) return;
+        const action=button.dataset.posterConfirm;
+        if(action==="delete") {records().splice(records().indexOf(item),1);selected.delete(item.id);}
+        if(action==="unidentify") {item.state="未识别";item.tone="red";selected.delete(item.id);}
+        if(action==="edit") {
+          item.tags=item.tags.filter(tag=>!["国配","特效"].includes(tag)&&!(/电影|剧|动漫/.test(tag)));
+          item.tags.splice(1,0,$("#edit-category").value);
+          if($("#edit-mandarin").checked) item.tags.push("国配");
+          if($("#edit-effects").checked) item.tags.push("特效");
+        }
+        $("#dialog").close();renderList();return showToast("已更新演示记录");
+      }
       if(button.dataset.tab) return page(button.dataset.tab);
       if(button.dataset.select) {
         const key=button.dataset.select; selected.has(key)?selected.delete(key):selected.add(key); return renderList();
